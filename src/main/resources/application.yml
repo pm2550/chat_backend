@@ -1,0 +1,64 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: chat-app-backend
+  
+  datasource:
+    url: jdbc:mysql://localhost:3306/chatapp?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=UTC
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+    
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 50MB
+      max-request-size: 100MB
+      
+  jackson:
+    time-zone: Asia/Shanghai
+    date-format: yyyy-MM-dd HH:mm:ss
+
+# JWT配置
+jwt:
+  secret: Y2hhdEFwcFNlY3JldEtleUZvckpXVFRva2VuU2lnbmluZw==
+  expiration: 86400000  # 24小时
+
+# 文件上传配置
+file:
+  upload:
+    path: ./uploads/
+    avatar-path: ./uploads/avatars/
+    message-path: ./uploads/messages/
+
+# WebSocket配置
+websocket:
+  allowed-origins: "*"
+  endpoint: /ws
+  
+# CORS配置
+cors:
+  allowed-origins: "*"
+  allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+  allowed-headers: "*"
+  
+# 日志配置
+logging:
+  level:
+    com.chatapp: DEBUG
+    org.springframework.security: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n" 
