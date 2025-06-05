@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.*;
  * 认证控制器
  */
 @RestController
-@RequestMapping("/auth")
+@RequestMapping("/api/auth")
 @RequiredArgsConstructor
 @CrossOrigin(origins = "*", maxAge = 3600)
 public class AuthController {
@@ -91,9 +91,9 @@ public class AuthController {
             // 清除安全上下文
             SecurityContextHolder.clearContext();
 
-            return ResponseEntity.ok(ApiResponse.success("登出成功"));
+            return ResponseEntity.ok(ApiResponse.<Void>success("登出成功", null));
         } catch (Exception e) {
-            return ResponseEntity.ok(ApiResponse.success("登出成功"));
+            return ResponseEntity.ok(ApiResponse.<Void>success("登出成功", null));
         }
     }
 

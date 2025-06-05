@@ -83,22 +83,69 @@ git clone <repository-url>
 cd chat_app_backend
 ```
 
-### 2. 配置数据库
-修改 `src/main/resources/application.yml` 中的数据库配置：
+### 2. 数据库初始化
+
+#### 方法一：使用初始化脚本（推荐）
+**Windows:**
+```bash
+# 确保MySQL服务器正在运行
+init_database.bat
+```
+
+**Linux/Mac:**
+```bash
+# 确保MySQL服务器正在运行
+chmod +x init_database.sh
+./init_database.sh
+```
+
+#### 方法二：使用Docker Compose（开发环境）
+```bash
+# 启动MySQL容器（会自动初始化数据库）
+docker-compose up -d mysql
+
+# 查看日志确认启动成功
+docker-compose logs -f mysql
+
+# 可选：启动phpMyAdmin管理界面
+docker-compose up -d phpmyadmin
+# 访问: http://localhost:8081
+```
+
+#### 方法三：手动执行SQL脚本
+```bash
+# 登录MySQL
+mysql -u root -ppimao1011
+
+# 执行创建脚本
+source src/main/resources/sql/create_database.sql;
+
+# 可选：插入测试数据
+source src/main/resources/sql/insert_test_data.sql;
+```
+
+#### 默认账户信息
+- **管理员账户**: admin / admin123
+- **测试用户**: zhangsan, lisi, wangwu, zhaoliu / 123456
+
+### 3. 配置数据库
+数据库配置已在 `src/main/resources/application.yml` 中预设置：
 ```yaml
 spring:
   datasource:
     url: jdbc:mysql://localhost:3306/chatapp?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=UTC
-    username: your_username
-    password: your_password
+    username: root
+    password: pimao1011
 ```
 
-### 3. 安装依赖
+如需修改，请相应调整配置文件。
+
+### 4. 安装依赖
 ```bash
 mvn clean install
 ```
 
-### 4. 运行应用
+### 5. 运行应用
 ```bash
 mvn spring-boot:run
 ```
@@ -225,4 +272,4 @@ MIT License
 
 如有问题或建议，请通过以下方式联系：
 - 邮箱：[your-email@example.com]
-- GitHub Issues：[项目Issues页面] 
+- GitHub Issues：[项目Issues页面]

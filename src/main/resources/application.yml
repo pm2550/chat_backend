@@ -6,11 +6,10 @@ server:
 spring:
   application:
     name: chat-app-backend
-  
-  datasource:
+    datasource:
     url: jdbc:mysql://localhost:3306/chatapp?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=UTC
     username: root
-    password: root
+    password: pimao1011
     driver-class-name: com.mysql.cj.jdbc.Driver
     
   jpa:
