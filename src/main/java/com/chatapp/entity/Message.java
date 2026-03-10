@@ -87,6 +87,25 @@ public class Message {
     @Column(name = "read_count")
     private Integer readCount = 0;
 
+    @Column(name = "is_anonymous")
+    private Boolean isAnonymous = false;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "anonymous_identity_id")
+    private AnonymousIdentity anonymousIdentity;
+
+    @Column(name = "self_destruct_seconds")
+    private Integer selfDestructSeconds;
+
+    @Column(name = "self_destruct_at")
+    private LocalDateTime selfDestructAt;
+
+    @Column(name = "encrypted_content", columnDefinition = "BLOB")
+    private byte[] encryptedContent;
+
+    @Column(name = "encryption_version")
+    private Integer encryptionVersion;
+
     /**
      * 消息类型枚举
      */

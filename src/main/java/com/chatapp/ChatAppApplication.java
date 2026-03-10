@@ -6,12 +6,14 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 聊天应用主启动类
  */
 @SpringBootApplication
 @EnableAsync
+@EnableScheduling
 public class ChatAppApplication implements CommandLineRunner {
 
     @Autowired

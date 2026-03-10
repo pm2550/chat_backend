@@ -4,6 +4,7 @@ import com.chatapp.entity.Message;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -83,4 +84,8 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
      * 统计聊天室消息总数
      */
     long countByChatRoomIdAndIsDeletedFalse(Long chatRoomId);
+
+    @Modifying
+    @Query("DELETE FROM Message m WHERE m.selfDestructAt IS NOT NULL AND m.selfDestructAt <= :now")
+    int deleteExpiredSelfDestructMessages(@Param("now") LocalDateTime now);
 } 
