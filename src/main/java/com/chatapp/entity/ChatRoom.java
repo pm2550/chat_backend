@@ -51,6 +51,12 @@ public class ChatRoom {
     @Column(name = "max_members")
     private Integer maxMembers = 500;
 
+    @Column(name = "anonymous_enabled")
+    private Boolean anonymousEnabled = false;
+
+    @Column(name = "anonymous_theme", length = 50)
+    private String anonymousTheme = "default";
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
