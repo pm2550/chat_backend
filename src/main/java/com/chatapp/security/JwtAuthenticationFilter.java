@@ -1,5 +1,6 @@
 package com.chatapp.security;
 
+import com.chatapp.service.TokenBlacklistService;
 import com.chatapp.service.UserService;
 import com.chatapp.util.JwtUtils;
 import jakarta.servlet.FilterChain;
@@ -19,9 +20,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 
-/**
- * JWT认证过滤器
- */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
@@ -33,20 +31,36 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Autowired
     private UserService userService;
 
+    @Autowired
+    private TokenBlacklistService tokenBlacklistService;
+
     @Override
-    protected void doFilterInternal(HttpServletRequest request, 
-                                    HttpServletResponse response, 
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         try {
             String jwt = parseJwt(request);
             if (jwt != null && jwtUtils.validateJwtToken(jwt)) {
-                String username = jwtUtils.getUserNameFromJwtToken(jwt);
+                // Check if token is blacklisted
+                String tokenId = jwtUtils.getTokenId(jwt);
+                if (tokenBlacklistService.isBlacklisted(tokenId)) {
+                    logger.debug("Token {} is blacklisted", tokenId);
+                    filterChain.doFilter(request, response);
+                    return;
+                }
 
+                // Only allow access tokens for API access
+                String tokenType = jwtUtils.getTokenType(jwt);
+                if (!"access".equals(tokenType)) {
+                    filterChain.doFilter(request, response);
+                    return;
+                }
+
+                String username = jwtUtils.getUserNameFromJwtToken(jwt);
                 UserDetails userDetails = userService.loadUserByUsername(username);
-                UsernamePasswordAuthenticationToken authentication = 
+                UsernamePasswordAuthenticationToken authentication =
                     new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
                 authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-
                 SecurityContextHolder.getContext().setAuthentication(authentication);
             }
         } catch (Exception e) {
@@ -56,29 +70,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    /**
-     * 从请求头中解析JWT令牌
-     */
     private String parseJwt(HttpServletRequest request) {
         String headerAuth = request.getHeader("Authorization");
-
         if (StringUtils.hasText(headerAuth) && headerAuth.startsWith("Bearer ")) {
             return headerAuth.substring(7);
         }
-
         return null;
     }
 
-    /**
-     * 检查是否应该跳过此过滤器
-     */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        // 跳过认证相关的路径
-        return path.startsWith("/api/auth/") || 
-               path.startsWith("/api/public/") || 
+        return path.startsWith("/api/auth/login") ||
+               path.startsWith("/api/auth/register") ||
+               path.startsWith("/api/auth/check-username") ||
+               path.startsWith("/api/public/") ||
                path.equals("/api/") ||
                path.startsWith("/ws");
     }
-} 
+}

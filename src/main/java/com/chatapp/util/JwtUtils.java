@@ -10,10 +10,8 @@ import org.springframework.stereotype.Component;
 import javax.crypto.SecretKey;
 import java.util.Base64;
 import java.util.Date;
+import java.util.UUID;
 
-/**
- * JWT工具类
- */
 @Component
 public class JwtUtils {
 
@@ -22,50 +20,60 @@ public class JwtUtils {
     @Value("${jwt.secret}")
     private String jwtSecret;
 
-    @Value("${jwt.expiration}")
-    private int jwtExpirationMs;
+    @Value("${jwt.access-token-expiration}")
+    private long accessTokenExpirationMs;
 
-    /**
-     * 获取签名密钥
-     */
+    @Value("${jwt.refresh-token-expiration}")
+    private long refreshTokenExpirationMs;
+
     private SecretKey getSigningKey() {
         byte[] keyBytes = Base64.getDecoder().decode(jwtSecret);
         return Keys.hmacShaKeyFor(keyBytes);
     }
 
-    /**
-     * 生成JWT令牌
-     */
-    public String generateJwtToken(String username) {
+    public String generateAccessToken(String username) {
+        return buildToken(username, accessTokenExpirationMs, "access");
+    }
+
+    public String generateRefreshToken(String username) {
+        return buildToken(username, refreshTokenExpirationMs, "refresh");
+    }
+
+    private String buildToken(String username, long expirationMs, String tokenType) {
         return Jwts.builder()
                 .setSubject(username)
+                .setId(UUID.randomUUID().toString())
+                .claim("type", tokenType)
                 .setIssuedAt(new Date())
-                .setExpiration(new Date(System.currentTimeMillis() + jwtExpirationMs))
+                .setExpiration(new Date(System.currentTimeMillis() + expirationMs))
                 .signWith(getSigningKey())
                 .compact();
     }
 
-    /**
-     * 从JWT令牌中获取用户名
-     */
     public String getUserNameFromJwtToken(String token) {
-        return Jwts.parserBuilder()
-                .setSigningKey(getSigningKey())
-                .build()
-                .parseClaimsJws(token)
-                .getBody()
-                .getSubject();
+        return parseClaims(token).getSubject();
     }
 
-    /**
-     * 验证JWT令牌
-     */
+    public String getTokenId(String token) {
+        return parseClaims(token).getId();
+    }
+
+    public String getTokenType(String token) {
+        return parseClaims(token).get("type", String.class);
+    }
+
+    public Date getExpirationDateFromJwtToken(String token) {
+        return parseClaims(token).getExpiration();
+    }
+
+    public long getRemainingExpirationMs(String token) {
+        Date expiration = getExpirationDateFromJwtToken(token);
+        return Math.max(0, expiration.getTime() - System.currentTimeMillis());
+    }
+
     public boolean validateJwtToken(String authToken) {
         try {
-            Jwts.parserBuilder()
-                .setSigningKey(getSigningKey())
-                .build()
-                .parseClaimsJws(authToken);
+            parseClaims(authToken);
             return true;
         } catch (MalformedJwtException e) {
             logger.error("JWT令牌格式无效: {}", e.getMessage());
@@ -79,33 +87,34 @@ public class JwtUtils {
         return false;
     }
 
-    /**
-     * 从JWT令牌中获取过期时间
-     */
-    public Date getExpirationDateFromJwtToken(String token) {
+    public boolean isTokenExpiringSoon(String token) {
+        Date expiration = getExpirationDateFromJwtToken(token);
+        long timeUntilExpiration = expiration.getTime() - System.currentTimeMillis();
+        return timeUntilExpiration < 300000; // 5 minutes
+    }
+
+    public String refreshAccessToken(String refreshToken) {
+        if (!validateJwtToken(refreshToken)) {
+            throw new RuntimeException("无效的刷新令牌");
+        }
+        String tokenType = getTokenType(refreshToken);
+        if (!"refresh".equals(tokenType)) {
+            throw new RuntimeException("提供的不是刷新令牌");
+        }
+        String username = getUserNameFromJwtToken(refreshToken);
+        return generateAccessToken(username);
+    }
+
+    // Legacy compatibility
+    public String generateJwtToken(String username) {
+        return generateAccessToken(username);
+    }
+
+    private Claims parseClaims(String token) {
         return Jwts.parserBuilder()
                 .setSigningKey(getSigningKey())
                 .build()
                 .parseClaimsJws(token)
-                .getBody()
-                .getExpiration();
+                .getBody();
     }
-
-    /**
-     * 检查JWT令牌是否即将过期
-     */
-    public boolean isTokenExpiringSoon(String token) {
-        Date expiration = getExpirationDateFromJwtToken(token);
-        long timeUntilExpiration = expiration.getTime() - System.currentTimeMillis();
-        // 如果令牌在10分钟内过期，则认为即将过期
-        return timeUntilExpiration < 600000;
-    }
-
-    /**
-     * 刷新JWT令牌
-     */
-    public String refreshToken(String token) {
-        String username = getUserNameFromJwtToken(token);
-        return generateJwtToken(username);
-    }
-} 
+}
