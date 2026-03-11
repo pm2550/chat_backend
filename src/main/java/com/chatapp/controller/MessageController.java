@@ -36,7 +36,7 @@ public class MessageController {
     @PostMapping
     public ResponseEntity<?> sendMessage(@RequestBody SendMessageRequest request, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             Message message = messageService.sendMessage(
                 currentUser.getId(),
                 request.getChatRoomId(),
@@ -61,7 +61,7 @@ public class MessageController {
     @PostMapping("/file")
     public ResponseEntity<?> sendFileMessage(@RequestBody SendFileMessageRequest request, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             
             Message.MessageType messageType = Message.MessageType.FILE;
             if (request.getFileType() != null) {
@@ -101,7 +101,7 @@ public class MessageController {
     @PostMapping("/reply")
     public ResponseEntity<?> replyToMessage(@RequestBody ReplyMessageRequest request, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             Message message = messageService.replyToMessage(
                 currentUser.getId(),
                 request.getChatRoomId(),
@@ -131,7 +131,7 @@ public class MessageController {
             @RequestParam(defaultValue = "50") int size,
             Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             
             Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
             Page<Message> messages = messageService.getChatRoomMessages(chatRoomId, currentUser.getId(), pageable);
@@ -160,7 +160,7 @@ public class MessageController {
             @RequestParam(defaultValue = "20") int limit,
             Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             List<Message> messages = messageService.getRecentMessages(chatRoomId, currentUser.getId(), limit);
             
             Map<String, Object> response = new HashMap<>();
@@ -180,7 +180,7 @@ public class MessageController {
     @PostMapping("/{messageId}/read")
     public ResponseEntity<?> markMessageAsRead(@PathVariable Long messageId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             messageService.markMessageAsRead(messageId, currentUser.getId());
             
             return ResponseEntity.ok(Map.of("message", "消息已标记为已读"));
@@ -196,7 +196,7 @@ public class MessageController {
     @PostMapping("/chat-room/{chatRoomId}/read-all")
     public ResponseEntity<?> markAllMessagesAsRead(@PathVariable Long chatRoomId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             messageService.markAllMessagesAsRead(chatRoomId, currentUser.getId());
             
             return ResponseEntity.ok(Map.of("message", "所有消息已标记为已读"));
@@ -212,7 +212,7 @@ public class MessageController {
     @PostMapping("/{messageId}/recall")
     public ResponseEntity<?> recallMessage(@PathVariable Long messageId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             messageService.recallMessage(messageId, currentUser.getId());
             
             return ResponseEntity.ok(Map.of("message", "消息已撤回"));
@@ -228,7 +228,7 @@ public class MessageController {
     @DeleteMapping("/{messageId}")
     public ResponseEntity<?> deleteMessage(@PathVariable Long messageId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             messageService.deleteMessage(messageId, currentUser.getId());
             
             return ResponseEntity.ok(Map.of("message", "消息已删除"));
@@ -249,7 +249,7 @@ public class MessageController {
             @RequestParam(defaultValue = "20") int size,
             Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             
             Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
             Page<Message> messages = messageService.searchMessages(chatRoomId, currentUser.getId(), keyword, pageable);
@@ -276,7 +276,7 @@ public class MessageController {
             @RequestParam(required = false) Long chatRoomId,
             Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             
             Map<String, Object> response = new HashMap<>();
             
@@ -304,7 +304,7 @@ public class MessageController {
     @GetMapping("/stats/{chatRoomId}")
     public ResponseEntity<?> getMessageStats(@PathVariable Long chatRoomId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             MessageService.MessageStats stats = messageService.getMessageStats(chatRoomId, currentUser.getId());
             
             Map<String, Object> response = new HashMap<>();

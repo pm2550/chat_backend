@@ -37,7 +37,7 @@ public class ChatRoomController {
     @PostMapping("/private/{friendId}")
     public ResponseEntity<?> createPrivateChat(@PathVariable Long friendId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             ChatRoom chatRoom = chatRoomService.createPrivateChat(currentUser.getId(), friendId);
             
             Map<String, Object> response = new HashMap<>();
@@ -57,7 +57,7 @@ public class ChatRoomController {
     @PostMapping("/group")
     public ResponseEntity<?> createGroupChat(@RequestBody CreateGroupRequest request, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             ChatRoom chatRoom = chatRoomService.createGroupChat(
                 currentUser.getId(), 
                 request.getName(), 
@@ -82,7 +82,7 @@ public class ChatRoomController {
     @PostMapping("/{roomId}/join")
     public ResponseEntity<?> joinChatRoom(@PathVariable Long roomId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             chatRoomService.joinChatRoom(roomId, currentUser.getId());
             
             return ResponseEntity.ok(Map.of("message", "成功加入聊天室"));
@@ -98,7 +98,7 @@ public class ChatRoomController {
     @PostMapping("/{roomId}/leave")
     public ResponseEntity<?> leaveChatRoom(@PathVariable Long roomId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             chatRoomService.leaveChatRoom(roomId, currentUser.getId());
             
             return ResponseEntity.ok(Map.of("message", "成功退出聊天室"));
@@ -119,7 +119,7 @@ public class ChatRoomController {
             @RequestParam(defaultValue = "desc") String sortDir,
             Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             
             Sort sort = sortDir.equalsIgnoreCase("desc") ? 
                 Sort.by(sortBy).descending() : Sort.by(sortBy).ascending();
@@ -148,7 +148,7 @@ public class ChatRoomController {
     @GetMapping("/{roomId}")
     public ResponseEntity<?> getChatRoomDetails(@PathVariable Long roomId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             ChatRoom chatRoom = chatRoomService.getChatRoomDetails(roomId, currentUser.getId());
             
             Map<String, Object> response = new HashMap<>();
@@ -167,7 +167,7 @@ public class ChatRoomController {
     @GetMapping("/{roomId}/members")
     public ResponseEntity<?> getChatRoomMembers(@PathVariable Long roomId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             
             // 验证用户权限
             chatRoomService.getChatRoomDetails(roomId, currentUser.getId());
@@ -220,7 +220,7 @@ public class ChatRoomController {
             @RequestBody UpdateChatRoomRequest request,
             Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             ChatRoom chatRoom = chatRoomService.updateChatRoom(
                 roomId, 
                 currentUser.getId(), 
@@ -249,7 +249,7 @@ public class ChatRoomController {
             @PathVariable Long userId,
             Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             chatRoomService.toggleAdmin(roomId, currentUser.getId(), userId);
             
             return ResponseEntity.ok(Map.of("message", "管理员状态更新成功"));
@@ -268,7 +268,7 @@ public class ChatRoomController {
             @PathVariable Long userId,
             Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             chatRoomService.kickMember(roomId, currentUser.getId(), userId);
             
             return ResponseEntity.ok(Map.of("message", "成员已被踢出"));
@@ -287,7 +287,7 @@ public class ChatRoomController {
             @PathVariable Long userId,
             Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             chatRoomService.toggleMuteStatus(roomId, currentUser.getId(), userId);
             
             return ResponseEntity.ok(Map.of("message", "禁言状态更新成功"));
@@ -303,7 +303,7 @@ public class ChatRoomController {
     @DeleteMapping("/{roomId}")
     public ResponseEntity<?> deleteChatRoom(@PathVariable Long roomId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             chatRoomService.deleteChatRoom(roomId, currentUser.getId());
             
             return ResponseEntity.ok(Map.of("message", "聊天室删除成功"));

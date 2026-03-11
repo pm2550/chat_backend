@@ -1,15 +1,16 @@
 package com.chatapp.controller;
 
+import com.chatapp.dto.UserDto;
 import com.chatapp.dto.UserProfileUpdateRequest;
 import com.chatapp.entity.User;
 import com.chatapp.service.UserProfileService;
-import com.chatapp.util.JwtUtil;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.chatapp.service.UserService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.io.IOException;
 import java.util.HashMap;
@@ -21,24 +22,22 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/profile")
-@CrossOrigin(origins = "*")
+@RequiredArgsConstructor
 public class UserProfileController {
 
-    @Autowired
-    private UserProfileService userProfileService;
-
-    @Autowired
-    private JwtUtil jwtUtil;
+    private final UserProfileService userProfileService;
+    private final UserService userService;
 
     /**
      * 获取当前用户资料
      */
     @GetMapping
-    public ResponseEntity<?> getProfile(HttpServletRequest request) {
+    public ResponseEntity<?> getProfile(Authentication auth) {
         try {
-            Long userId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long userId = currentUser.getId();
             User user = userProfileService.getProfile(userId);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", user);
@@ -57,11 +56,12 @@ public class UserProfileController {
     @PutMapping
     public ResponseEntity<?> updateProfile(
             @Valid @RequestBody UserProfileUpdateRequest request,
-            HttpServletRequest httpRequest) {
+            Authentication auth) {
         try {
-            Long userId = getCurrentUserId(httpRequest);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long userId = currentUser.getId();
             User updatedUser = userProfileService.updateProfile(userId, request);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "资料更新成功");
@@ -81,11 +81,12 @@ public class UserProfileController {
     @PostMapping("/avatar")
     public ResponseEntity<?> uploadAvatar(
             @RequestParam("avatar") MultipartFile avatarFile,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long userId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long userId = currentUser.getId();
             User updatedUser = userProfileService.updateAvatar(userId, avatarFile);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "头像上传成功");
@@ -108,11 +109,12 @@ public class UserProfileController {
      * 删除头像
      */
     @DeleteMapping("/avatar")
-    public ResponseEntity<?> deleteAvatar(HttpServletRequest request) {
+    public ResponseEntity<?> deleteAvatar(Authentication auth) {
         try {
-            Long userId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long userId = currentUser.getId();
             userProfileService.deleteAvatar(userId);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "头像删除成功");
@@ -131,12 +133,13 @@ public class UserProfileController {
     @PutMapping("/status")
     public ResponseEntity<?> updateOnlineStatus(
             @RequestParam("status") String status,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long userId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long userId = currentUser.getId();
             User.OnlineStatus onlineStatus = User.OnlineStatus.valueOf(status.toUpperCase());
             User updatedUser = userProfileService.updateOnlineStatus(userId, onlineStatus);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "状态更新成功");
@@ -164,7 +167,7 @@ public class UserProfileController {
             @RequestParam(value = "limit", defaultValue = "10") int limit) {
         try {
             List<User> users = userProfileService.searchUsers(keyword, limit);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", users);
@@ -178,29 +181,15 @@ public class UserProfileController {
     }
 
     /**
-     * 获取当前用户ID
-     */
-    private Long getCurrentUserId(HttpServletRequest request) {
-        String token = request.getHeader("Authorization");
-        if (token != null && token.startsWith("Bearer ")) {
-            token = token.substring(7);
-            String username = jwtUtil.getUsernameFromToken(token);
-            // 这里需要通过用户名获取用户ID，暂时返回硬编码值
-            // TODO: 实现通过用户名获取用户ID的逻辑
-            return 1L;
-        }
-        throw new RuntimeException("未找到有效的认证信息");
-    }
-
-    /**
      * 更新最后在线时间
      */
     @PostMapping("/heartbeat")
-    public ResponseEntity<?> updateHeartbeat(HttpServletRequest request) {
+    public ResponseEntity<?> updateHeartbeat(Authentication auth) {
         try {
-            Long userId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long userId = currentUser.getId();
             userProfileService.updateLastSeen(userId);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "心跳更新成功");
@@ -212,4 +201,4 @@ public class UserProfileController {
             return ResponseEntity.badRequest().body(response);
         }
     }
-} 
+}

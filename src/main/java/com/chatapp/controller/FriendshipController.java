@@ -32,7 +32,7 @@ public class FriendshipController {
     @PostMapping("/request/{friendId}")
     public ResponseEntity<?> sendFriendRequest(@PathVariable Long friendId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             Friendship friendship = friendshipService.sendFriendRequest(currentUser.getId(), friendId);
             
             Map<String, Object> response = new HashMap<>();
@@ -52,7 +52,7 @@ public class FriendshipController {
     @PostMapping("/accept/{friendId}")
     public ResponseEntity<?> acceptFriendRequest(@PathVariable Long friendId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             Friendship friendship = friendshipService.acceptFriendRequest(currentUser.getId(), friendId);
             
             Map<String, Object> response = new HashMap<>();
@@ -72,7 +72,7 @@ public class FriendshipController {
     @PostMapping("/decline/{friendId}")
     public ResponseEntity<?> declineFriendRequest(@PathVariable Long friendId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             friendshipService.declineFriendRequest(currentUser.getId(), friendId);
             
             return ResponseEntity.ok(Map.of("message", "已拒绝好友请求"));
@@ -88,7 +88,7 @@ public class FriendshipController {
     @DeleteMapping("/{friendId}")
     public ResponseEntity<?> removeFriend(@PathVariable Long friendId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             friendshipService.removeFriend(currentUser.getId(), friendId);
             
             return ResponseEntity.ok(Map.of("message", "已删除好友"));
@@ -104,7 +104,7 @@ public class FriendshipController {
     @PostMapping("/block/{userId}")
     public ResponseEntity<?> blockUser(@PathVariable Long userId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             friendshipService.blockUser(currentUser.getId(), userId);
             
             return ResponseEntity.ok(Map.of("message", "已屏蔽用户"));
@@ -120,7 +120,7 @@ public class FriendshipController {
     @PostMapping("/unblock/{userId}")
     public ResponseEntity<?> unblockUser(@PathVariable Long userId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             friendshipService.unblockUser(currentUser.getId(), userId);
             
             return ResponseEntity.ok(Map.of("message", "已取消屏蔽"));
@@ -139,7 +139,7 @@ public class FriendshipController {
             @RequestBody Map<String, String> request,
             Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             String alias = request.get("alias");
             friendshipService.setFriendAlias(currentUser.getId(), friendId, alias);
             
@@ -156,7 +156,7 @@ public class FriendshipController {
     @PostMapping("/{friendId}/pin")
     public ResponseEntity<?> togglePinFriend(@PathVariable Long friendId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             friendshipService.togglePinFriend(currentUser.getId(), friendId);
             
             return ResponseEntity.ok(Map.of("message", "置顶状态已更新"));
@@ -172,7 +172,7 @@ public class FriendshipController {
     @GetMapping
     public ResponseEntity<?> getFriends(Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             List<User> friends = friendshipService.getFriends(currentUser.getId());
             
             Map<String, Object> response = new HashMap<>();
@@ -192,7 +192,7 @@ public class FriendshipController {
     @GetMapping("/requests/received")
     public ResponseEntity<?> getPendingFriendRequests(Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             List<Friendship> requests = friendshipService.getPendingFriendRequests(currentUser.getId());
             
             Map<String, Object> response = new HashMap<>();
@@ -212,7 +212,7 @@ public class FriendshipController {
     @GetMapping("/requests/sent")
     public ResponseEntity<?> getSentFriendRequests(Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             List<Friendship> requests = friendshipService.getSentFriendRequests(currentUser.getId());
             
             Map<String, Object> response = new HashMap<>();
@@ -232,7 +232,7 @@ public class FriendshipController {
     @GetMapping("/search")
     public ResponseEntity<?> searchFriends(@RequestParam String keyword, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             List<User> friends = friendshipService.searchFriends(currentUser.getId(), keyword);
             
             Map<String, Object> response = new HashMap<>();
@@ -253,7 +253,7 @@ public class FriendshipController {
     @GetMapping("/pinned")
     public ResponseEntity<?> getPinnedFriends(Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             List<User> friends = friendshipService.getPinnedFriends(currentUser.getId());
             
             Map<String, Object> response = new HashMap<>();
@@ -273,7 +273,7 @@ public class FriendshipController {
     @GetMapping("/check/{userId}")
     public ResponseEntity<?> checkFriendship(@PathVariable Long userId, Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             boolean areFriends = friendshipService.areFriends(currentUser.getId(), userId);
             
             Map<String, Object> response = new HashMap<>();
@@ -293,7 +293,7 @@ public class FriendshipController {
     @GetMapping("/stats")
     public ResponseEntity<?> getFriendStats(Authentication auth) {
         try {
-            User currentUser = userService.findByUsername(auth.getName());
+            User currentUser = userService.findUserByUsername(auth.getName());
             Long friendCount = friendshipService.getFriendCount(currentUser.getId());
             List<Friendship> pendingRequests = friendshipService.getPendingFriendRequests(currentUser.getId());
             List<Friendship> sentRequests = friendshipService.getSentFriendRequests(currentUser.getId());

@@ -90,6 +90,14 @@ public class UserService implements UserDetailsService {
     }
 
     /**
+     * 根据用户名查找用户实体
+     */
+    public User findUserByUsername(String username) {
+        return userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("用户不存在"));
+    }
+
+    /**
      * 根据ID查找用户
      */
     public UserDto findById(Long id) {

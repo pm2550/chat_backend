@@ -1,5 +1,6 @@
 package com.chatapp.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -34,6 +35,7 @@ public class Message {
     @JoinColumn(name = "sender_id", nullable = false)
     private User sender;
 
+    @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "chat_room_id", nullable = false)
     private ChatRoom chatRoom;
@@ -115,6 +117,7 @@ public class Message {
         FILE("文件"),
         VOICE("语音"),
         VIDEO("视频"),
+        AUDIO("音频"),
         LOCATION("位置"),
         SYSTEM("系统消息");
 

@@ -1,16 +1,17 @@
 package com.chatapp.controller;
 
+import com.chatapp.dto.UserDto;
 import com.chatapp.entity.ChatHistory;
 import com.chatapp.service.ChatHistoryService;
-import com.chatapp.util.JwtUtil;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.chatapp.service.UserService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -23,14 +24,11 @@ import java.util.Optional;
  */
 @RestController
 @RequestMapping("/api/chat-history")
-@CrossOrigin(origins = "*")
+@RequiredArgsConstructor
 public class ChatHistoryController {
 
-    @Autowired
-    private ChatHistoryService chatHistoryService;
-
-    @Autowired
-    private JwtUtil jwtUtil;
+    private final ChatHistoryService chatHistoryService;
+    private final UserService userService;
 
     /**
      * 发送私聊文本消息
@@ -39,11 +37,12 @@ public class ChatHistoryController {
     public ResponseEntity<?> sendPrivateTextMessage(
             @RequestParam("receiverId") Long receiverId,
             @RequestParam("content") String content,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long senderId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long senderId = currentUser.getId();
             ChatHistory message = chatHistoryService.sendPrivateMessage(senderId, receiverId, content);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "消息发送成功");
@@ -61,11 +60,12 @@ public class ChatHistoryController {
     public ResponseEntity<?> sendGroupTextMessage(
             @RequestParam("chatRoomId") Long chatRoomId,
             @RequestParam("content") String content,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long senderId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long senderId = currentUser.getId();
             ChatHistory message = chatHistoryService.sendGroupMessage(senderId, chatRoomId, content);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "消息发送成功");
@@ -84,12 +84,13 @@ public class ChatHistoryController {
             @RequestParam("receiverId") Long receiverId,
             @RequestParam("file") MultipartFile file,
             @RequestParam("messageType") String messageType,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long senderId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long senderId = currentUser.getId();
             ChatHistory.MessageType type = ChatHistory.MessageType.valueOf(messageType.toUpperCase());
             ChatHistory message = chatHistoryService.sendPrivateFileMessage(senderId, receiverId, file, type);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "文件发送成功");
@@ -110,12 +111,13 @@ public class ChatHistoryController {
             @RequestParam("chatRoomId") Long chatRoomId,
             @RequestParam("file") MultipartFile file,
             @RequestParam("messageType") String messageType,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long senderId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long senderId = currentUser.getId();
             ChatHistory.MessageType type = ChatHistory.MessageType.valueOf(messageType.toUpperCase());
             ChatHistory message = chatHistoryService.sendGroupFileMessage(senderId, chatRoomId, file, type);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "文件发送成功");
@@ -136,11 +138,12 @@ public class ChatHistoryController {
             @RequestParam("receiverId") Long receiverId,
             @RequestParam("content") String content,
             @RequestParam("replyToId") Long replyToId,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long senderId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long senderId = currentUser.getId();
             ChatHistory message = chatHistoryService.replyToPrivateMessage(senderId, receiverId, content, replyToId);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "回复发送成功");
@@ -159,11 +162,12 @@ public class ChatHistoryController {
             @RequestParam("chatRoomId") Long chatRoomId,
             @RequestParam("content") String content,
             @RequestParam("replyToId") Long replyToId,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long senderId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long senderId = currentUser.getId();
             ChatHistory message = chatHistoryService.replyToGroupMessage(senderId, chatRoomId, content, replyToId);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "回复发送成功");
@@ -182,11 +186,12 @@ public class ChatHistoryController {
             @RequestParam("userId") Long userId,
             @RequestParam(value = "page", defaultValue = "0") int page,
             @RequestParam(value = "size", defaultValue = "20") int size,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long currentUserId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long currentUserId = currentUser.getId();
             Page<ChatHistory> messages = chatHistoryService.getPrivateChatHistory(currentUserId, userId, page, size);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", messages.getContent());
@@ -208,11 +213,11 @@ public class ChatHistoryController {
             @RequestParam("chatRoomId") Long chatRoomId,
             @RequestParam(value = "page", defaultValue = "0") int page,
             @RequestParam(value = "size", defaultValue = "20") int size,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            getCurrentUserId(request); // 验证登录状态
+            userService.findByUsername(auth.getName()); // 验证登录状态
             Page<ChatHistory> messages = chatHistoryService.getGroupChatHistory(chatRoomId, page, size);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", messages.getContent());
@@ -233,11 +238,12 @@ public class ChatHistoryController {
     public ResponseEntity<?> getLatestPrivateMessages(
             @RequestParam("userId") Long userId,
             @RequestParam(value = "limit", defaultValue = "10") int limit,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long currentUserId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long currentUserId = currentUser.getId();
             List<ChatHistory> messages = chatHistoryService.getLatestPrivateMessages(currentUserId, userId, limit);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", messages);
@@ -254,11 +260,11 @@ public class ChatHistoryController {
     public ResponseEntity<?> getLatestGroupMessages(
             @RequestParam("chatRoomId") Long chatRoomId,
             @RequestParam(value = "limit", defaultValue = "10") int limit,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            getCurrentUserId(request); // 验证登录状态
+            userService.findByUsername(auth.getName()); // 验证登录状态
             List<ChatHistory> messages = chatHistoryService.getLatestGroupMessages(chatRoomId, limit);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", messages);
@@ -277,11 +283,12 @@ public class ChatHistoryController {
             @RequestParam("keyword") String keyword,
             @RequestParam(value = "page", defaultValue = "0") int page,
             @RequestParam(value = "size", defaultValue = "20") int size,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long currentUserId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long currentUserId = currentUser.getId();
             Page<ChatHistory> messages = chatHistoryService.searchPrivateMessages(currentUserId, userId, keyword, page, size);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", messages.getContent());
@@ -304,11 +311,11 @@ public class ChatHistoryController {
             @RequestParam("keyword") String keyword,
             @RequestParam(value = "page", defaultValue = "0") int page,
             @RequestParam(value = "size", defaultValue = "20") int size,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            getCurrentUserId(request); // 验证登录状态
+            userService.findByUsername(auth.getName()); // 验证登录状态
             Page<ChatHistory> messages = chatHistoryService.searchGroupMessages(chatRoomId, keyword, page, size);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", messages.getContent());
@@ -328,11 +335,12 @@ public class ChatHistoryController {
     @PutMapping("/recall/{messageId}")
     public ResponseEntity<?> recallMessage(
             @PathVariable("messageId") Long messageId,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long userId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long userId = currentUser.getId();
             ChatHistory message = chatHistoryService.recallMessage(messageId, userId);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "消息撤回成功");
@@ -349,11 +357,12 @@ public class ChatHistoryController {
     @DeleteMapping("/{messageId}")
     public ResponseEntity<?> deleteMessage(
             @PathVariable("messageId") Long messageId,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long userId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long userId = currentUser.getId();
             chatHistoryService.deleteMessage(messageId, userId);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "消息删除成功");
@@ -369,11 +378,11 @@ public class ChatHistoryController {
     @GetMapping("/{messageId}")
     public ResponseEntity<?> getMessageById(
             @PathVariable("messageId") Long messageId,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            getCurrentUserId(request); // 验证登录状态
+            userService.findByUsername(auth.getName()); // 验证登录状态
             Optional<ChatHistory> message = chatHistoryService.getMessageById(messageId);
-            
+
             if (message.isPresent()) {
                 Map<String, Object> response = new HashMap<>();
                 response.put("success", true);
@@ -393,11 +402,12 @@ public class ChatHistoryController {
     @GetMapping("/private/count")
     public ResponseEntity<?> countPrivateMessages(
             @RequestParam("userId") Long userId,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long currentUserId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long currentUserId = currentUser.getId();
             long count = chatHistoryService.countPrivateMessages(currentUserId, userId);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", Map.of("count", count));
@@ -413,11 +423,11 @@ public class ChatHistoryController {
     @GetMapping("/group/count")
     public ResponseEntity<?> countGroupMessages(
             @RequestParam("chatRoomId") Long chatRoomId,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            getCurrentUserId(request); // 验证登录状态
+            userService.findByUsername(auth.getName()); // 验证登录状态
             long count = chatHistoryService.countGroupMessages(chatRoomId);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", Map.of("count", count));
@@ -435,11 +445,12 @@ public class ChatHistoryController {
             @RequestParam("userId") Long userId,
             @RequestParam("startTime") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startTime,
             @RequestParam("endTime") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endTime,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            Long currentUserId = getCurrentUserId(request);
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            Long currentUserId = currentUser.getId();
             List<ChatHistory> messages = chatHistoryService.getPrivateMessagesInTimeRange(currentUserId, userId, startTime, endTime);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", messages);
@@ -457,11 +468,11 @@ public class ChatHistoryController {
             @RequestParam("chatRoomId") Long chatRoomId,
             @RequestParam("startTime") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startTime,
             @RequestParam("endTime") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endTime,
-            HttpServletRequest request) {
+            Authentication auth) {
         try {
-            getCurrentUserId(request); // 验证登录状态
+            userService.findByUsername(auth.getName()); // 验证登录状态
             List<ChatHistory> messages = chatHistoryService.getGroupMessagesInTimeRange(chatRoomId, startTime, endTime);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("data", messages);
@@ -469,20 +480,6 @@ public class ChatHistoryController {
         } catch (Exception e) {
             return createErrorResponse(e.getMessage());
         }
-    }
-
-    /**
-     * 获取当前用户ID
-     */
-    private Long getCurrentUserId(HttpServletRequest request) {
-        String token = request.getHeader("Authorization");
-        if (token != null && token.startsWith("Bearer ")) {
-            token = token.substring(7);
-            String username = jwtUtil.getUsernameFromToken(token);
-            // TODO: 实现通过用户名获取用户ID的逻辑
-            return 1L; // 暂时返回硬编码值
-        }
-        throw new RuntimeException("未找到有效的认证信息");
     }
 
     /**
@@ -494,4 +491,4 @@ public class ChatHistoryController {
         response.put("message", message);
         return ResponseEntity.badRequest().body(response);
     }
-} 
+}

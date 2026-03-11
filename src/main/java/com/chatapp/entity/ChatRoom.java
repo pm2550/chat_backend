@@ -1,9 +1,12 @@
 package com.chatapp.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
@@ -19,6 +22,8 @@ import java.util.Set;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@EqualsAndHashCode(exclude = {"members", "messages", "createdBy"})
+@ToString(exclude = {"members", "messages"})
 public class ChatRoom {
 
     @Id
@@ -66,10 +71,12 @@ public class ChatRoom {
     private LocalDateTime updatedAt;
 
     // 聊天室成员
+    @JsonIgnore
     @OneToMany(mappedBy = "chatRoom", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private Set<ChatRoomMember> members = new HashSet<>();
 
     // 聊天消息
+    @JsonIgnore
     @OneToMany(mappedBy = "chatRoom", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private Set<Message> messages = new HashSet<>();
 

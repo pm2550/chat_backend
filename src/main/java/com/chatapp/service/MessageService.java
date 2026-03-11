@@ -244,7 +244,7 @@ public class MessageService {
             return 0L;
         }
 
-        return messageRepository.countUnreadMessages(chatRoomId, userId);
+        return messageRepository.countByChatRoomId(chatRoomId);
     }
 
     /**
