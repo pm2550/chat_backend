@@ -1,224 +1,214 @@
--- Initial schema migration
--- This baseline migration captures the existing schema
+-- Generated from Hibernate-derived schema (entity sources of truth)
+-- Re-generate via: mysqldump -d chatapp | sed 's/AUTO_INCREMENT=[0-9]*//g'
 
-CREATE TABLE IF NOT EXISTS users (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    username VARCHAR(50) NOT NULL UNIQUE,
-    password VARCHAR(255) NOT NULL,
-    email VARCHAR(100) NOT NULL UNIQUE,
-    phone VARCHAR(20),
-    display_name VARCHAR(100),
-    avatar_url VARCHAR(500),
-    bio TEXT,
-    online_status ENUM('ONLINE', 'AWAY', 'BUSY', 'OFFLINE') DEFAULT 'OFFLINE',
-    last_seen DATETIME,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_username (username),
-    INDEX idx_email (email),
-    INDEX idx_online_status (online_status)
+SET FOREIGN_KEY_CHECKS=0;
+
+CREATE TABLE `anonymous_identities` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `anonymous_avatar` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `anonymous_name` varchar(50) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `assigned_date` date NOT NULL,
+  `custom_name_used` bit(1) DEFAULT NULL,
+  `chat_room_id` bigint NOT NULL,
+  `user_id` bigint NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `UK7q2gkqh79lgb7kjuovislq5us` (`user_id`,`chat_room_id`,`assigned_date`),
+  KEY `FKrnbqn29qxsft7n3hksmcsr8rt` (`chat_room_id`),
+  CONSTRAINT `FKloaan8el1hg4m9lhqttcjntbx` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
+  CONSTRAINT `FKrnbqn29qxsft7n3hksmcsr8rt` FOREIGN KEY (`chat_room_id`) REFERENCES `chat_rooms` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `bot_configs` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `api_key_encrypted` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `bot_avatar` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `bot_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `created_at` datetime(6) DEFAULT NULL,
+  `is_active` bit(1) DEFAULT NULL,
+  `llm_provider` enum('OPENAI','CLAUDE','DEEPSEEK','OLLAMA') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `max_tokens` int DEFAULT NULL,
+  `model_name` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `system_prompt` text COLLATE utf8mb4_unicode_ci,
+  `temperature` double DEFAULT NULL,
+  `updated_at` datetime(6) DEFAULT NULL,
+  `created_by` bigint DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `FK1jugvn0cfjiv6ikdccq5wcysu` (`created_by`),
+  CONSTRAINT `FK1jugvn0cfjiv6ikdccq5wcysu` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `chat_history` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `chat_room_id` bigint DEFAULT NULL,
+  `content` text COLLATE utf8mb4_unicode_ci,
+  `deleted_at` datetime(6) DEFAULT NULL,
+  `file_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `file_size` bigint DEFAULT NULL,
+  `file_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `is_deleted` bit(1) DEFAULT NULL,
+  `is_recalled` bit(1) DEFAULT NULL,
+  `message_type` enum('TEXT','IMAGE','FILE','AUDIO','VIDEO','SYSTEM') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `recalled_at` datetime(6) DEFAULT NULL,
+  `receiver_id` bigint DEFAULT NULL,
+  `reply_to_id` bigint DEFAULT NULL,
+  `sender_avatar` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `sender_id` bigint NOT NULL,
+  `sender_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `sent_at` datetime(6) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `chat_room_bots` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `added_at` datetime(6) DEFAULT NULL,
+  `is_active` bit(1) DEFAULT NULL,
+  `trigger_keywords` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `trigger_mode` enum('MENTION','KEYWORD','ALL') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `bot_config_id` bigint NOT NULL,
+  `chat_room_id` bigint NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `UKpqbsnw4wb1kc7up9pyfm4rl8j` (`chat_room_id`,`bot_config_id`),
+  KEY `FKlm3wd78l4fwysxpsgk76vg5pd` (`bot_config_id`),
+  CONSTRAINT `FKlm3wd78l4fwysxpsgk76vg5pd` FOREIGN KEY (`bot_config_id`) REFERENCES `bot_configs` (`id`),
+  CONSTRAINT `FKooupf631elpyskwyu99gpfy4s` FOREIGN KEY (`chat_room_id`) REFERENCES `chat_rooms` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `chat_room_members` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `is_admin` bit(1) DEFAULT NULL,
+  `is_muted` bit(1) DEFAULT NULL,
+  `joined_at` datetime(6) DEFAULT NULL,
+  `last_read_message_id` bigint DEFAULT NULL,
+  `member_role` enum('OWNER','ADMIN','MODERATOR','MEMBER') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `nickname` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `unread_count` int DEFAULT NULL,
+  `chat_room_id` bigint NOT NULL,
+  `user_id` bigint NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `UKpal8hkw0sfg71i5v05l0ojhq1` (`user_id`,`chat_room_id`),
+  KEY `FK6x7kwk21yt5odfxv5ubbrmo0h` (`chat_room_id`),
+  CONSTRAINT `FK6x7kwk21yt5odfxv5ubbrmo0h` FOREIGN KEY (`chat_room_id`) REFERENCES `chat_rooms` (`id`),
+  CONSTRAINT `FKbemsjj4g0iny4xpkvj5rwj6ab` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `chat_rooms` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `anonymous_enabled` bit(1) DEFAULT NULL,
+  `anonymous_theme` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `avatar_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at` datetime(6) DEFAULT NULL,
+  `description` text COLLATE utf8mb4_unicode_ci,
+  `is_active` bit(1) DEFAULT NULL,
+  `is_private` bit(1) DEFAULT NULL,
+  `max_members` int DEFAULT NULL,
+  `name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `room_type` enum('PRIVATE','GROUP','CHANNEL','PUBLIC') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `updated_at` datetime(6) DEFAULT NULL,
+  `created_by` bigint DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `FKin9277aywbjursj2b4e3bmw3s` (`created_by`),
+  CONSTRAINT `FKin9277aywbjursj2b4e3bmw3s` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `device_tokens` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `created_at` datetime(6) DEFAULT NULL,
+  `device_info` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `is_active` bit(1) DEFAULT NULL,
+  `platform` enum('ANDROID','IOS','WEB','WINDOWS','MACOS','HARMONY') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `token` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `updated_at` datetime(6) DEFAULT NULL,
+  `user_id` bigint NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `UK8se1i37nto56x9252rmrit8ib` (`token`),
+  KEY `FKhc7d11bnr8x9gs5biohdhnx1c` (`user_id`),
+  CONSTRAINT `FKhc7d11bnr8x9gs5biohdhnx1c` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `friendships` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `accepted_at` datetime(6) DEFAULT NULL,
+  `created_at` datetime(6) DEFAULT NULL,
+  `friend_alias` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `is_blocked` bit(1) DEFAULT NULL,
+  `is_pinned` bit(1) DEFAULT NULL,
+  `status` enum('PENDING','ACCEPTED','DECLINED','BLOCKED') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `updated_at` datetime(6) DEFAULT NULL,
+  `friend_id` bigint NOT NULL,
+  `user_id` bigint NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `UKjwaac0iw9d1fu58mx7afwf9f4` (`user_id`,`friend_id`),
+  KEY `FKt0mh1j446gu5rqba17rnknuil` (`friend_id`),
+  CONSTRAINT `FK4mcscxflf13uk72aupf6uwbgn` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
+  CONSTRAINT `FKt0mh1j446gu5rqba17rnknuil` FOREIGN KEY (`friend_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `messages` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `content` text COLLATE utf8mb4_unicode_ci,
+  `created_at` datetime(6) DEFAULT NULL,
+  `duration` int DEFAULT NULL,
+  `encrypted_content` blob,
+  `encryption_version` int DEFAULT NULL,
+  `file_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `file_size` bigint DEFAULT NULL,
+  `file_type` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `file_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `height` int DEFAULT NULL,
+  `is_anonymous` bit(1) DEFAULT NULL,
+  `is_deleted` bit(1) DEFAULT NULL,
+  `is_edited` bit(1) DEFAULT NULL,
+  `message_status` enum('SENDING','SENT','DELIVERED','READ','FAILED') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `message_type` enum('TEXT','IMAGE','FILE','VOICE','VIDEO','AUDIO','LOCATION','SYSTEM') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `read_count` int DEFAULT NULL,
+  `self_destruct_at` datetime(6) DEFAULT NULL,
+  `self_destruct_seconds` int DEFAULT NULL,
+  `thumbnail_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `updated_at` datetime(6) DEFAULT NULL,
+  `width` int DEFAULT NULL,
+  `anonymous_identity_id` bigint DEFAULT NULL,
+  `chat_room_id` bigint NOT NULL,
+  `reply_to_message_id` bigint DEFAULT NULL,
+  `sender_id` bigint NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `FK9qya9nttrdk67ibwpu1qbq3so` (`anonymous_identity_id`),
+  KEY `FK67lyatc9udvn9fgepx08ckmbt` (`chat_room_id`),
+  KEY `FKa0efscl1qaot4lml4w4gpydo2` (`reply_to_message_id`),
+  KEY `FK4ui4nnwntodh6wjvck53dbk9m` (`sender_id`),
+  CONSTRAINT `FK4ui4nnwntodh6wjvck53dbk9m` FOREIGN KEY (`sender_id`) REFERENCES `users` (`id`),
+  CONSTRAINT `FK67lyatc9udvn9fgepx08ckmbt` FOREIGN KEY (`chat_room_id`) REFERENCES `chat_rooms` (`id`),
+  CONSTRAINT `FK9qya9nttrdk67ibwpu1qbq3so` FOREIGN KEY (`anonymous_identity_id`) REFERENCES `anonymous_identities` (`id`),
+  CONSTRAINT `FKa0efscl1qaot4lml4w4gpydo2` FOREIGN KEY (`reply_to_message_id`) REFERENCES `messages` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `user_key_bundles` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `created_at` datetime(6) DEFAULT NULL,
+  `identity_public_key` text COLLATE utf8mb4_unicode_ci NOT NULL,
+  `key_version` int DEFAULT NULL,
+  `one_time_pre_keys` text COLLATE utf8mb4_unicode_ci,
+  `signed_pre_key` text COLLATE utf8mb4_unicode_ci NOT NULL,
+  `signed_pre_key_signature` text COLLATE utf8mb4_unicode_ci NOT NULL,
+  `updated_at` datetime(6) DEFAULT NULL,
+  `user_id` bigint NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `UK_cp7h90997c1h81amtlfj6edgj` (`user_id`),
+  CONSTRAINT `FKk0oe2xeii7nrvb5k8682hbyfx` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `user_roles` (
+  `user_id` bigint NOT NULL,
+  `role` enum('USER','ADMIN','MODERATOR') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  KEY `FKhfh9dx7w3ubf1co1vdev94g3f` (`user_id`),
+  CONSTRAINT `FKhfh9dx7w3ubf1co1vdev94g3f` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `users` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `avatar_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `bio` text COLLATE utf8mb4_unicode_ci,
+  `created_at` datetime(6) DEFAULT NULL,
+  `display_name` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `email` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `is_active` bit(1) DEFAULT NULL,
+  `last_seen` datetime(6) DEFAULT NULL,
+  `online_status` enum('ONLINE','AWAY','BUSY','OFFLINE') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `password` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `updated_at` datetime(6) DEFAULT NULL,
+  `username` varchar(50) COLLATE utf8mb4_unicode_ci NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `UK_6dotkott2kjsp8vw4d0m25fb7` (`email`),
+  UNIQUE KEY `UK_r43af9ap4edm43mmtq01oddj6` (`username`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS user_roles (
-    user_id BIGINT NOT NULL,
-    role ENUM('USER', 'ADMIN', 'MODERATOR') NOT NULL,
-    PRIMARY KEY (user_id, role),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS friendships (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    friend_id BIGINT NOT NULL,
-    status ENUM('PENDING', 'ACCEPTED', 'DECLINED', 'BLOCKED') DEFAULT 'PENDING',
-    friend_alias VARCHAR(100),
-    is_blocked BOOLEAN DEFAULT FALSE,
-    is_pinned BOOLEAN DEFAULT FALSE,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    accepted_at DATETIME,
-    UNIQUE KEY uk_friendship (user_id, friend_id),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (friend_id) REFERENCES users(id) ON DELETE CASCADE,
-    INDEX idx_user_status (user_id, status),
-    INDEX idx_friend_status (friend_id, status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS chat_rooms (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    description TEXT,
-    room_type ENUM('PRIVATE', 'GROUP', 'CHANNEL', 'PUBLIC') NOT NULL,
-    avatar_url VARCHAR(500),
-    created_by BIGINT,
-    is_active BOOLEAN DEFAULT TRUE,
-    is_private BOOLEAN DEFAULT FALSE,
-    max_members INT DEFAULT 500,
-    anonymous_enabled BOOLEAN DEFAULT FALSE,
-    anonymous_theme VARCHAR(50) DEFAULT 'default',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-    INDEX idx_room_type (room_type),
-    INDEX idx_created_by (created_by)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS chat_room_members (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    chat_room_id BIGINT NOT NULL,
-    member_role ENUM('MEMBER', 'ADMIN', 'OWNER') DEFAULT 'MEMBER',
-    nickname VARCHAR(100),
-    is_muted BOOLEAN DEFAULT FALSE,
-    is_admin BOOLEAN DEFAULT FALSE,
-    joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_read_message_id BIGINT,
-    unread_count INT DEFAULT 0,
-    UNIQUE KEY uk_room_member (user_id, chat_room_id),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (chat_room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE,
-    INDEX idx_chat_room (chat_room_id),
-    INDEX idx_user (user_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS messages (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    content TEXT,
-    message_type ENUM('TEXT', 'IMAGE', 'FILE', 'VOICE', 'VIDEO', 'LOCATION', 'SYSTEM') NOT NULL DEFAULT 'TEXT',
-    sender_id BIGINT NOT NULL,
-    chat_room_id BIGINT NOT NULL,
-    reply_to_message_id BIGINT,
-    file_url VARCHAR(500),
-    file_name VARCHAR(255),
-    file_size BIGINT,
-    file_type VARCHAR(100),
-    thumbnail_url VARCHAR(500),
-    duration INT,
-    width INT,
-    height INT,
-    message_status ENUM('SENDING', 'SENT', 'DELIVERED', 'READ', 'FAILED') DEFAULT 'SENT',
-    is_deleted BOOLEAN DEFAULT FALSE,
-    is_edited BOOLEAN DEFAULT FALSE,
-    is_anonymous BOOLEAN DEFAULT FALSE,
-    anonymous_identity_id BIGINT,
-    self_destruct_seconds INT,
-    self_destruct_at DATETIME,
-    encrypted_content BLOB,
-    encryption_version INT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    read_count INT DEFAULT 0,
-    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (chat_room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE,
-    FOREIGN KEY (reply_to_message_id) REFERENCES messages(id) ON DELETE SET NULL,
-    INDEX idx_chat_room_created (chat_room_id, created_at),
-    INDEX idx_sender (sender_id),
-    INDEX idx_self_destruct (self_destruct_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS message_read_status (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    message_id BIGINT NOT NULL,
-    user_id BIGINT NOT NULL,
-    read_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_message_user (message_id, user_id),
-    FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    INDEX idx_user_read (user_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS chat_history (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    chat_room_id BIGINT NOT NULL,
-    sender_id BIGINT,
-    receiver_id BIGINT,
-    content TEXT,
-    message_type ENUM('TEXT', 'IMAGE', 'FILE', 'VOICE', 'VIDEO', 'LOCATION', 'SYSTEM') DEFAULT 'TEXT',
-    file_url VARCHAR(500),
-    file_name VARCHAR(255),
-    reply_to_id BIGINT,
-    is_recalled BOOLEAN DEFAULT FALSE,
-    is_deleted BOOLEAN DEFAULT FALSE,
-    sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    sender_name VARCHAR(100),
-    sender_avatar VARCHAR(500),
-    INDEX idx_chat_room_sent (chat_room_id, sent_at),
-    INDEX idx_sender (sender_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Anonymous identities table
-CREATE TABLE IF NOT EXISTS anonymous_identities (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    chat_room_id BIGINT NOT NULL,
-    anonymous_name VARCHAR(50) NOT NULL,
-    anonymous_avatar VARCHAR(500),
-    assigned_date DATE NOT NULL,
-    custom_name_used BOOLEAN DEFAULT FALSE,
-    UNIQUE KEY uk_user_room_date (user_id, chat_room_id, assigned_date),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (chat_room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE,
-    INDEX idx_room_date (chat_room_id, assigned_date)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- User encryption keys table
-CREATE TABLE IF NOT EXISTS user_key_bundles (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    user_id BIGINT NOT NULL UNIQUE,
-    identity_public_key TEXT NOT NULL,
-    signed_pre_key TEXT NOT NULL,
-    signed_pre_key_signature TEXT NOT NULL,
-    one_time_pre_keys TEXT,
-    key_version INT DEFAULT 1,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Bot configurations table
-CREATE TABLE IF NOT EXISTS bot_configs (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    bot_name VARCHAR(100) NOT NULL,
-    bot_avatar VARCHAR(500),
-    llm_provider ENUM('OPENAI', 'CLAUDE', 'DEEPSEEK', 'OLLAMA') NOT NULL,
-    api_key_encrypted VARCHAR(500),
-    model_name VARCHAR(100),
-    system_prompt TEXT,
-    temperature DOUBLE DEFAULT 0.7,
-    max_tokens INT DEFAULT 2048,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_by BIGINT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Bot-ChatRoom association table
-CREATE TABLE IF NOT EXISTS chat_room_bots (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    chat_room_id BIGINT NOT NULL,
-    bot_config_id BIGINT NOT NULL,
-    trigger_mode ENUM('MENTION', 'KEYWORD', 'ALL') DEFAULT 'MENTION',
-    trigger_keywords VARCHAR(500),
-    is_active BOOLEAN DEFAULT TRUE,
-    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_room_bot (chat_room_id, bot_config_id),
-    FOREIGN KEY (chat_room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE,
-    FOREIGN KEY (bot_config_id) REFERENCES bot_configs(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Device tokens for push notifications
-CREATE TABLE IF NOT EXISTS device_tokens (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    token VARCHAR(500) NOT NULL,
-    platform ENUM('ANDROID', 'IOS', 'WEB', 'WINDOWS', 'MACOS', 'HARMONY') NOT NULL,
-    device_info VARCHAR(255),
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_token (token),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    INDEX idx_user_platform (user_id, platform)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+SET FOREIGN_KEY_CHECKS=1;

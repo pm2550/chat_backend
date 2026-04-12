@@ -51,8 +51,8 @@ public class FriendshipService {
 
         // 检查对方是否已向自己发送请求
         if (friendshipRepository.hasPendingRequest(friendId, userId)) {
-            // 直接接受对方的请求
-            return acceptFriendRequest(friendId, userId);
+            // 对方已向我发起请求，当前用户是接收者 → 直接接受
+            return acceptFriendRequest(userId, friendId);
         }
 
         // 创建新的好友请求
