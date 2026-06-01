@@ -22,6 +22,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -325,5 +326,100 @@ class BotServiceTest {
 
         // should not propagate
         assertDoesNotThrow(() -> service.processMessageForBots(100L, "anything", 1L));
+    }
+
+    @Test
+    @DisplayName("importCharacterCard stores SillyTavern v2 fields")
+    void import_character_card_stores_fields() {
+        when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));
+        when(botConfigRepository.save(any(BotConfig.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BotDto dto = service.importCharacterCard(10L, 1L, sampleCard());
+
+        assertEquals("Kirara", dto.getBotName());
+        assertTrue(dto.getHasCharacterCard());
+        assertTrue(dto.getCharacterPersona().contains("fox courier"));
+        assertEquals(2, dto.getCharacterAlternateGreetings().size());
+        assertEquals(1, dto.getCharacterBookEntryCount());
+        assertNotNull(bot.getCharacterCardJson());
+        assertNotNull(bot.getCharacterBookJson());
+    }
+
+    @Test
+    @DisplayName("exportCharacterCard returns stored card JSON")
+    void export_character_card_returns_stored_json() {
+        when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));
+        bot.setCharacterCardJson("{\"spec\":\"chara_card_v2\",\"spec_version\":\"2.0\",\"data\":{\"name\":\"Kirara\"}}");
+
+        Map<String, Object> exported = service.exportCharacterCard(10L, 1L);
+
+        assertEquals("chara_card_v2", exported.get("spec"));
+        assertTrue(exported.get("data") instanceof Map);
+    }
+
+    @Test
+    @DisplayName("processMessageForBots injects persona matched lore and post history in order")
+    void process_character_context_order() {
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.ALL);
+        bot.setCharacterPersona("Persona: fox courier");
+        bot.setCharacterScenario("Scenario: delivery guild");
+        bot.setCharacterSystemPrompt("Character system");
+        bot.setCharacterPostHistoryInstructions("Post history instruction");
+        bot.setCharacterBookJson("{\"entries\":[{\"keys\":[\"parcel\"],\"content\":\"Lore: parcels are sacred\",\"enabled\":true}]}");
+
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(llmService.chat(any(), any())).thenReturn(new BotDto.LLMResponse("ack", 1, "m"));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.processMessageForBots(100L, "the parcel is late", 1L);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BotDto.ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
+        verify(llmService).chat(eq(bot), captor.capture());
+        List<BotDto.ChatMessage> messages = captor.getValue();
+        assertEquals("system", messages.get(0).getRole());
+        assertTrue(messages.get(0).getContent().contains("Character system"));
+        assertTrue(messages.get(0).getContent().contains("Persona: fox courier"));
+        assertTrue(messages.get(0).getContent().contains("Lore: parcels are sacred"));
+        assertEquals("user", messages.get(1).getRole());
+        assertEquals("system", messages.get(2).getRole());
+        assertEquals("Post history instruction", messages.get(2).getContent());
+    }
+
+    @Test
+    @DisplayName("importCharacterCard rejects non-v2 cards")
+    void import_character_card_rejects_wrong_spec() {
+        when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));
+        Map<String, Object> card = Map.of("spec", "legacy", "data", Map.of("name", "Old"));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.importCharacterCard(10L, 1L, card));
+        verify(botConfigRepository, never()).save(any());
+    }
+
+    private Map<String, Object> sampleCard() {
+        return Map.of(
+                "spec", "chara_card_v2",
+                "spec_version", "2.0",
+                "data", Map.ofEntries(
+                        Map.entry("name", "Kirara"),
+                        Map.entry("description", "A fox courier."),
+                        Map.entry("personality", "Warm and energetic."),
+                        Map.entry("scenario", "Guild delivery work."),
+                        Map.entry("first_mes", "Package delivered!"),
+                        Map.entry("mes_example", "<START>"),
+                        Map.entry("creator_notes", "Test card"),
+                        Map.entry("system_prompt", "Stay in character."),
+                        Map.entry("post_history_instructions", "End with a question."),
+                        Map.entry("alternate_greetings", List.of("Hi!", "Ready to run.")),
+                        Map.entry("character_book", Map.of(
+                                "entries", List.of(Map.of(
+                                        "keys", List.of("parcel"),
+                                        "content", "Parcels are sacred.",
+                                        "enabled", true))))));
     }
 }

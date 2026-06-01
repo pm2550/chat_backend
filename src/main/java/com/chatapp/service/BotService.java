@@ -7,6 +7,9 @@ import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.UserRepository;
 import com.chatapp.repository.MessageRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
@@ -14,8 +17,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -26,6 +33,9 @@ import java.util.regex.Pattern;
 public class BotService {
 
     private static final Pattern URL_PATTERN = Pattern.compile("(https?://[^\\s)\\]\"'<>]+)");
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
+    private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
 
     private final BotConfigRepository botConfigRepository;
     private final ChatRoomBotRepository chatRoomBotRepository;
@@ -92,6 +102,66 @@ public class BotService {
             throw new AccessDeniedException("无权限查看该机器人");
         }
         return toDto(bot, true);
+    }
+
+    @Transactional
+    public BotDto importCharacterCard(Long botId, Long operatorId, Map<String, Object> card) {
+        BotConfig bot = botConfigRepository.findById(botId)
+                .orElseThrow(() -> new RuntimeException("机器人不存在"));
+        ensureBotOwner(bot, operatorId);
+
+        Map<String, Object> data = extractCharacterData(card);
+        String name = stringValue(data.get("name"));
+        if (!name.isBlank()) {
+            bot.setBotName(name);
+        }
+        bot.setCharacterCardJson(writeJson(card));
+        bot.setCharacterPersona(joinSections(
+                stringValue(data.get("description")),
+                stringValue(data.get("personality"))));
+        bot.setCharacterScenario(blankToNull(stringValue(data.get("scenario"))));
+        bot.setCharacterFirstMes(blankToNull(stringValue(data.get("first_mes"))));
+        bot.setCharacterMesExample(blankToNull(stringValue(data.get("mes_example"))));
+        bot.setCharacterCreatorNotes(blankToNull(stringValue(data.get("creator_notes"))));
+        bot.setCharacterSystemPrompt(blankToNull(stringValue(data.get("system_prompt"))));
+        bot.setCharacterPostHistoryInstructions(blankToNull(stringValue(data.get("post_history_instructions"))));
+        bot.setCharacterAlternateGreetings(writeJson(readStringList(data.get("alternate_greetings"))));
+        Object characterBook = data.get("character_book");
+        bot.setCharacterBookJson(characterBook == null ? null : writeJson(characterBook));
+
+        bot = botConfigRepository.save(bot);
+        return toDto(bot, true);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> exportCharacterCard(Long botId, Long operatorId) {
+        BotConfig bot = botConfigRepository.findById(botId)
+                .orElseThrow(() -> new RuntimeException("机器人不存在"));
+        ensureBotOwner(bot, operatorId);
+        if (bot.getCharacterCardJson() != null && !bot.getCharacterCardJson().isBlank()) {
+            return readJsonMap(bot.getCharacterCardJson());
+        }
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("name", bot.getBotName());
+        data.put("description", nullToEmpty(bot.getCharacterPersona()));
+        data.put("personality", "");
+        data.put("scenario", nullToEmpty(bot.getCharacterScenario()));
+        data.put("first_mes", nullToEmpty(bot.getCharacterFirstMes()));
+        data.put("mes_example", nullToEmpty(bot.getCharacterMesExample()));
+        data.put("creator_notes", nullToEmpty(bot.getCharacterCreatorNotes()));
+        data.put("system_prompt", nullToEmpty(bot.getCharacterSystemPrompt()));
+        data.put("post_history_instructions", nullToEmpty(bot.getCharacterPostHistoryInstructions()));
+        data.put("alternate_greetings", readStringList(bot.getCharacterAlternateGreetings()));
+        if (bot.getCharacterBookJson() != null && !bot.getCharacterBookJson().isBlank()) {
+            data.put("character_book", readJsonMap(bot.getCharacterBookJson()));
+        }
+
+        Map<String, Object> card = new HashMap<>();
+        card.put("spec", "chara_card_v2");
+        card.put("spec_version", "2.0");
+        card.put("data", data);
+        return card;
     }
 
     @Transactional
@@ -227,7 +297,12 @@ public class BotService {
         BotConfig config = crb.getBotConfig();
         List<BotDto.ChatMessage> messages = new ArrayList<>();
 
-        String systemPrompt = config.getSystemPrompt();
+        String systemPrompt = joinSections(
+                config.getSystemPrompt(),
+                config.getCharacterSystemPrompt(),
+                config.getCharacterPersona(),
+                config.getCharacterScenario(),
+                matchedLore(config, userMessage));
         if (crb.getRoomPromptSuffix() != null && !crb.getRoomPromptSuffix().isBlank()) {
             systemPrompt = (systemPrompt == null ? "" : systemPrompt + "\n\n") + crb.getRoomPromptSuffix();
         }
@@ -244,6 +319,10 @@ public class BotService {
             cleanMessage = "你好";
         }
         messages.add(new BotDto.ChatMessage("user", cleanMessage));
+        if (config.getCharacterPostHistoryInstructions() != null
+                && !config.getCharacterPostHistoryInstructions().isBlank()) {
+            messages.add(new BotDto.ChatMessage("system", config.getCharacterPostHistoryInstructions().trim()));
+        }
 
         return messages;
     }
@@ -388,6 +467,12 @@ public class BotService {
         }
         dto.setHasCredential(entity.getProviderCredential() != null
                 || (entity.getApiKeyEncrypted() != null && !entity.getApiKeyEncrypted().isBlank()));
+        dto.setHasCharacterCard(entity.getCharacterCardJson() != null && !entity.getCharacterCardJson().isBlank());
+        dto.setCharacterPersona(entity.getCharacterPersona());
+        dto.setCharacterScenario(entity.getCharacterScenario());
+        dto.setCharacterFirstMes(entity.getCharacterFirstMes());
+        dto.setCharacterAlternateGreetings(readStringList(entity.getCharacterAlternateGreetings()));
+        dto.setCharacterBookEntryCount(countCharacterBookEntries(entity.getCharacterBookJson()));
         dto.setCreatedAt(entity.getCreatedAt());
         return dto;
     }
@@ -432,6 +517,122 @@ public class BotService {
         dto.setRoomPromptSuffix(entity.getRoomPromptSuffix());
         dto.setEnabledInRoom(entity.getEnabledInRoom());
         return dto;
+    }
+
+    private void ensureBotOwner(BotConfig bot, Long operatorId) {
+        if (bot.getCreatedBy() == null || !bot.getCreatedBy().getId().equals(operatorId)) {
+            throw new AccessDeniedException("无权限管理该机器人");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> extractCharacterData(Map<String, Object> card) {
+        if (card == null || card.isEmpty()) {
+            throw new IllegalArgumentException("角色卡不能为空");
+        }
+        Object spec = card.get("spec");
+        if (spec != null && !"chara_card_v2".equalsIgnoreCase(spec.toString())) {
+            throw new IllegalArgumentException("仅支持 SillyTavern v2 角色卡");
+        }
+        Object data = card.get("data");
+        if (!(data instanceof Map<?, ?> rawData)) {
+            throw new IllegalArgumentException("角色卡缺少 data");
+        }
+        Map<String, Object> result = new HashMap<>();
+        rawData.forEach((key, value) -> {
+            if (key != null) result.put(key.toString(), value);
+        });
+        return result;
+    }
+
+    private String matchedLore(BotConfig config, String userMessage) {
+        if (config.getCharacterBookJson() == null || config.getCharacterBookJson().isBlank()) {
+            return null;
+        }
+        Map<String, Object> book = readJsonMap(config.getCharacterBookJson());
+        Object rawEntries = book.get("entries");
+        if (!(rawEntries instanceof List<?> entries)) {
+            return null;
+        }
+        String text = userMessage == null ? "" : userMessage.toLowerCase(Locale.ROOT);
+        List<String> matched = new ArrayList<>();
+        for (Object rawEntry : entries) {
+            if (!(rawEntry instanceof Map<?, ?> entry)) continue;
+            if (Boolean.FALSE.equals(entry.get("enabled"))) continue;
+            String content = stringValue(entry.get("content"));
+            if (content.isBlank()) continue;
+            for (String key : readStringList(entry.get("keys"))) {
+                if (!key.isBlank() && text.contains(key.toLowerCase(Locale.ROOT))) {
+                    matched.add(content);
+                    break;
+                }
+            }
+        }
+        return matched.isEmpty() ? null : "Relevant lore:\n" + String.join("\n\n", matched);
+    }
+
+    private String writeJson(Object value) {
+        try {
+            return JSON.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("角色卡 JSON 无法序列化", e);
+        }
+    }
+
+    private Map<String, Object> readJsonMap(String json) {
+        try {
+            return JSON.readValue(json, MAP_TYPE);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("角色卡 JSON 无法解析", e);
+        }
+    }
+
+    private List<String> readStringList(Object value) {
+        if (value == null) return Collections.emptyList();
+        if (value instanceof List<?> list) {
+            return list.stream().map(this::stringValue).filter(item -> !item.isBlank()).toList();
+        }
+        if (value instanceof String text) {
+            if (text.isBlank()) return Collections.emptyList();
+            String trimmed = text.trim();
+            if (trimmed.startsWith("[")) {
+                try {
+                    return JSON.readValue(trimmed, STRING_LIST_TYPE);
+                } catch (JsonProcessingException ignored) {
+                    return Collections.emptyList();
+                }
+            }
+            return List.of(trimmed);
+        }
+        return Collections.emptyList();
+    }
+
+    private String joinSections(String... sections) {
+        List<String> values = new ArrayList<>();
+        for (String section : sections) {
+            if (section != null && !section.isBlank()) {
+                values.add(section.trim());
+            }
+        }
+        return values.isEmpty() ? null : String.join("\n\n", values);
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? "" : value.toString().trim();
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private int countCharacterBookEntries(String json) {
+        if (json == null || json.isBlank()) return 0;
+        Object entries = readJsonMap(json).get("entries");
+        return entries instanceof List<?> list ? list.size() : 0;
     }
 
     private String roomDisplayName(ChatRoomBot crb) {

@@ -10,6 +10,7 @@ import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 @Data
 @NoArgsConstructor
@@ -35,6 +36,20 @@ public class BotDto {
     private String roomNickname;
     private String roomPromptSuffix;
     private Boolean enabledInRoom;
+    private Boolean hasCharacterCard;
+    private String characterPersona;
+    private String characterScenario;
+    private String characterFirstMes;
+    private List<String> characterAlternateGreetings;
+    private Integer characterBookEntryCount;
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class CharacterCardImportRequest {
+        @NotNull(message = "角色卡不能为空")
+        private Map<String, Object> card;
+    }
 
     @Data
     @NoArgsConstructor

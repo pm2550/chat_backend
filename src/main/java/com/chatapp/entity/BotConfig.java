@@ -45,6 +45,36 @@ public class BotConfig {
     @Column(name = "system_prompt", columnDefinition = "TEXT")
     private String systemPrompt;
 
+    @Column(name = "character_card_json", columnDefinition = "JSON")
+    private String characterCardJson;
+
+    @Column(name = "character_persona", columnDefinition = "TEXT")
+    private String characterPersona;
+
+    @Column(name = "character_scenario", columnDefinition = "TEXT")
+    private String characterScenario;
+
+    @Column(name = "character_first_mes", columnDefinition = "TEXT")
+    private String characterFirstMes;
+
+    @Column(name = "character_mes_example", columnDefinition = "TEXT")
+    private String characterMesExample;
+
+    @Column(name = "character_creator_notes", columnDefinition = "TEXT")
+    private String characterCreatorNotes;
+
+    @Column(name = "character_system_prompt", columnDefinition = "TEXT")
+    private String characterSystemPrompt;
+
+    @Column(name = "character_post_history_instructions", columnDefinition = "TEXT")
+    private String characterPostHistoryInstructions;
+
+    @Column(name = "character_alternate_greetings", columnDefinition = "JSON")
+    private String characterAlternateGreetings;
+
+    @Column(name = "character_book_json", columnDefinition = "JSON")
+    private String characterBookJson;
+
     @Column(name = "temperature")
     private Double temperature = 0.7;
 

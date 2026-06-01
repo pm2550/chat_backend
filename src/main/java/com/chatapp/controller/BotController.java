@@ -12,6 +12,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/bots")
@@ -53,6 +54,25 @@ public class BotController {
             Authentication auth) {
         UserDto currentUser = userService.findByUsername(auth.getName());
         BotDto result = botService.getBot(botId, currentUser.getId());
+        return ResponseEntity.ok(ApiResponse.success(result));
+    }
+
+    @PostMapping("/{botId}/character-card/import")
+    public ResponseEntity<ApiResponse<BotDto>> importCharacterCard(
+            @PathVariable Long botId,
+            @Valid @RequestBody BotDto.CharacterCardImportRequest request,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        BotDto result = botService.importCharacterCard(botId, currentUser.getId(), request.getCard());
+        return ResponseEntity.ok(ApiResponse.success("角色卡已导入", result));
+    }
+
+    @GetMapping("/{botId}/character-card/export")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> exportCharacterCard(
+            @PathVariable Long botId,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        Map<String, Object> result = botService.exportCharacterCard(botId, currentUser.getId());
         return ResponseEntity.ok(ApiResponse.success(result));
     }
 
