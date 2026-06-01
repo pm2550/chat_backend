@@ -2,6 +2,7 @@ package com.chatapp.service;
 
 import com.chatapp.dto.BotDto;
 import com.chatapp.entity.BotConfig;
+import com.chatapp.service.tool.Tool;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -12,6 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -67,36 +69,40 @@ public class LLMService {
     }
 
     public BotDto.LLMResponse chat(BotConfig botConfig, List<BotDto.ChatMessage> messages) {
+        return chat(botConfig, messages, List.of());
+    }
+
+    public BotDto.LLMResponse chat(BotConfig botConfig, List<BotDto.ChatMessage> messages, List<Tool> tools) {
         return switch (botConfig.getLlmProvider()) {
             case OPENAI -> callOpenAICompatible(
                     requireApiKey(resolveApiKey(botConfig, openaiApiKey), "OpenAI"),
                     openaiBaseUrl,
                     resolveModel(botConfig, openaiModel),
-                    messages, botConfig);
+                    messages, botConfig, tools);
             case CLAUDE -> callClaude(
                     requireApiKey(resolveApiKey(botConfig, claudeApiKey), "Claude"),
                     claudeBaseUrl,
                     resolveModel(botConfig, claudeModel),
-                    messages, botConfig);
+                    messages, botConfig, tools);
             case DEEPSEEK -> callOpenAICompatible(
                     requireApiKey(resolveApiKey(botConfig, deepseekApiKey), "DeepSeek"),
                     deepseekBaseUrl,
                     resolveModel(botConfig, deepseekModel),
-                    messages, botConfig);
+                    messages, botConfig, tools);
             case OLLAMA -> callOllama(
                     resolveModel(botConfig, ollamaModel),
-                    messages, botConfig);
+                    messages, botConfig, tools);
             case HERMES -> callOpenAICompatible(
                     requireApiKey(resolveApiKey(botConfig, hermesApiKey), "Hermes"),
                     hermesBaseUrl,
                     resolveModel(botConfig, hermesModel),
-                    messages, botConfig);
+                    messages, botConfig, tools);
             case DASHSCOPE -> throw new IllegalArgumentException("DashScope 当前仅用于图片生成凭据");
         };
     }
 
     private BotDto.LLMResponse callOpenAICompatible(String apiKey, String baseUrl, String model,
-                                                     List<BotDto.ChatMessage> messages, BotConfig config) {
+                                                     List<BotDto.ChatMessage> messages, BotConfig config, List<Tool> tools) {
         try {
             ObjectNode requestBody = objectMapper.createObjectNode();
             requestBody.put("model", model);
@@ -107,7 +113,36 @@ public class LLMService {
             for (BotDto.ChatMessage msg : messages) {
                 ObjectNode msgNode = messagesArray.addObject();
                 msgNode.put("role", msg.getRole());
-                msgNode.put("content", msg.getContent());
+                if (msg.getContent() != null) {
+                    msgNode.put("content", msg.getContent());
+                } else {
+                    msgNode.putNull("content");
+                }
+                if (msg.getToolCallId() != null) {
+                    msgNode.put("tool_call_id", msg.getToolCallId());
+                }
+                if (msg.getName() != null) {
+                    msgNode.put("name", msg.getName());
+                }
+                if (msg.getToolCalls() != null && !msg.getToolCalls().isEmpty()) {
+                    ArrayNode toolCalls = msgNode.putArray("tool_calls");
+                    for (BotDto.ToolCall toolCall : msg.getToolCalls()) {
+                        toolCalls.add(openAiToolCall(toolCall));
+                    }
+                }
+            }
+
+            if (tools != null && !tools.isEmpty()) {
+                ArrayNode toolsArray = requestBody.putArray("tools");
+                for (Tool tool : tools) {
+                    ObjectNode toolNode = toolsArray.addObject();
+                    toolNode.put("type", "function");
+                    ObjectNode functionNode = toolNode.putObject("function");
+                    functionNode.put("name", tool.name());
+                    functionNode.put("description", tool.description());
+                    functionNode.set("parameters", tool.parametersSchema());
+                }
+                requestBody.put("tool_choice", "auto");
             }
 
             Request request = new Request.Builder()
@@ -126,13 +161,17 @@ public class LLMService {
                 }
 
                 JsonNode responseJson = objectMapper.readTree(response.body().string());
-                String content = responseJson.path("choices").path(0).path("message").path("content").asText();
+                JsonNode messageNode = responseJson.path("choices").path(0).path("message");
+                String content = messageNode.path("content").isMissingNode() || messageNode.path("content").isNull()
+                        ? ""
+                        : messageNode.path("content").asText();
                 int tokens = responseJson.path("usage").path("total_tokens").asInt(0);
 
                 BotDto.LLMResponse llmResponse = new BotDto.LLMResponse();
                 llmResponse.setContent(content);
                 llmResponse.setTokensUsed(tokens);
                 llmResponse.setModel(model);
+                llmResponse.setToolCalls(parseToolCalls(messageNode.path("tool_calls")));
                 return llmResponse;
             }
         } catch (IOException e) {
@@ -141,8 +180,36 @@ public class LLMService {
         }
     }
 
+    private ObjectNode openAiToolCall(BotDto.ToolCall toolCall) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("id", toolCall.getId());
+        node.put("type", "function");
+        ObjectNode function = node.putObject("function");
+        function.put("name", toolCall.getName());
+        function.put("arguments", toolCall.getArgumentsJson() != null ? toolCall.getArgumentsJson() : "{}");
+        return node;
+    }
+
+    private List<BotDto.ToolCall> parseToolCalls(JsonNode toolCallsNode) {
+        if (toolCallsNode == null || !toolCallsNode.isArray() || toolCallsNode.isEmpty()) {
+            return List.of();
+        }
+        ArrayList<BotDto.ToolCall> toolCalls = new ArrayList<>();
+        for (JsonNode toolCallNode : toolCallsNode) {
+            JsonNode function = toolCallNode.path("function");
+            toolCalls.add(new BotDto.ToolCall(
+                    toolCallNode.path("id").asText(""),
+                    function.path("name").asText(""),
+                    function.path("arguments").asText("{}")));
+        }
+        return toolCalls;
+    }
+
     private BotDto.LLMResponse callClaude(String apiKey, String baseUrl, String model,
-                                           List<BotDto.ChatMessage> messages, BotConfig config) {
+                                           List<BotDto.ChatMessage> messages, BotConfig config, List<Tool> tools) {
+        if (tools != null && !tools.isEmpty()) {
+            throw new UnsupportedOperationException("Claude tool calls are not implemented in PM chat yet");
+        }
         try {
             ObjectNode requestBody = objectMapper.createObjectNode();
             requestBody.put("model", model);
@@ -197,7 +264,10 @@ public class LLMService {
         }
     }
 
-    private BotDto.LLMResponse callOllama(String model, List<BotDto.ChatMessage> messages, BotConfig config) {
+    private BotDto.LLMResponse callOllama(String model, List<BotDto.ChatMessage> messages, BotConfig config, List<Tool> tools) {
+        if (tools != null && !tools.isEmpty()) {
+            throw new UnsupportedOperationException("Ollama tool calls are not implemented in PM chat yet");
+        }
         try {
             ObjectNode requestBody = objectMapper.createObjectNode();
             requestBody.put("model", model);

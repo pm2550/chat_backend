@@ -37,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.hamcrest.Matchers.*;
 import org.mockito.ArgumentCaptor;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
@@ -93,6 +94,15 @@ public class MessageIntegrationTest {
         when(tokenBlacklistService.isBlacklisted(anyString())).thenReturn(false);
         when(agentGatewayService.isConfigured()).thenReturn(false);
         when(llmService.chat(any(BotConfig.class), any())).thenAnswer(invocation -> {
+            List<BotDto.ChatMessage> messages = invocation.getArgument(1);
+            String userPrompt = messages.stream()
+                    .filter(message -> "user".equals(message.getRole()))
+                    .reduce((first, second) -> second)
+                    .map(BotDto.ChatMessage::getContent)
+                    .orElse("任务");
+            return new BotDto.LLMResponse("任务已接收: " + userPrompt, 1, "test-model");
+        });
+        when(llmService.chat(any(BotConfig.class), anyList(), anyList())).thenAnswer(invocation -> {
             List<BotDto.ChatMessage> messages = invocation.getArgument(1);
             String userPrompt = messages.stream()
                     .filter(message -> "user".equals(message.getRole()))
@@ -630,7 +640,7 @@ public class MessageIntegrationTest {
                 .andExpect(jsonPath("$.data.status").value("SUCCEEDED"));
 
         ArgumentCaptor<List<BotDto.ChatMessage>> messagesCaptor = ArgumentCaptor.forClass(List.class);
-        verify(llmService).chat(any(BotConfig.class), messagesCaptor.capture());
+        verify(llmService).chat(any(BotConfig.class), messagesCaptor.capture(), anyList());
         String systemPrompt = messagesCaptor.getValue().get(0).getContent();
 
         assertTrue(systemPrompt.contains(roomName));
@@ -665,7 +675,7 @@ public class MessageIntegrationTest {
                 .andExpect(jsonPath("$.data.status").value("SUCCEEDED"));
 
         ArgumentCaptor<List<BotDto.ChatMessage>> messagesCaptor = ArgumentCaptor.forClass(List.class);
-        verify(llmService).chat(any(BotConfig.class), messagesCaptor.capture());
+        verify(llmService).chat(any(BotConfig.class), messagesCaptor.capture(), anyList());
         String systemPrompt = messagesCaptor.getValue().get(0).getContent();
 
         assertTrue(systemPrompt.contains("agentctxalice"));
@@ -673,6 +683,45 @@ public class MessageIntegrationTest {
         assertTrue(systemPrompt.contains("Alice prior context note"));
         assertTrue(systemPrompt.contains("Bob prior context note"));
         assertTrue(systemPrompt.contains("[RECENT CONVERSATION]"));
+    }
+
+    @Test
+    @DisplayName("Agent task can run a server tool and finish on the second LLM turn")
+    void testAgentTaskMultiTurnToolLoop() throws Exception {
+        Object[] user1 = createUserAndLogin("agenttoolalice");
+        String token1 = (String) user1[0];
+
+        Long roomId = createGroupChat(token1, "Tool Loop Room " + uniqueSuffix, List.of());
+        sendMessage(token1, roomId, "tool loop history anchor");
+
+        when(llmService.chat(any(BotConfig.class), anyList(), anyList()))
+                .thenReturn(new BotDto.LLMResponse("", 3, "test-model",
+                        List.of(new BotDto.ToolCall(
+                                "call-1",
+                                "read_recent_messages",
+                                "{\"roomId\":999999,\"n\":5}"))))
+                .thenReturn(new BotDto.LLMResponse("I found: tool loop history anchor", 4, "test-model"));
+
+        Map<String, Object> request = new HashMap<>();
+        request.put("chatRoomId", roomId);
+        request.put("prompt", "read more history");
+
+        mockMvc.perform(post("/api/v1/agent-tasks")
+                .header("Authorization", "Bearer " + token1)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.data.result").value("I found: tool loop history anchor"))
+                .andExpect(jsonPath("$.data.resultMessage.content").value("I found: tool loop history anchor"))
+                .andExpect(jsonPath("$.data.resultMessage.botName").value("Agent"));
+
+        ArgumentCaptor<List<BotDto.ChatMessage>> messagesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(llmService, times(2)).chat(any(BotConfig.class), messagesCaptor.capture(), anyList());
+        List<BotDto.ChatMessage> secondTurnMessages = messagesCaptor.getAllValues().get(1);
+        assertTrue(secondTurnMessages.stream()
+                .anyMatch(message -> "tool".equals(message.getRole())
+                        && message.getContent().contains("tool loop history anchor")));
     }
 
     @Test
@@ -746,7 +795,7 @@ public class MessageIntegrationTest {
                 .andExpect(jsonPath("$.data.resultMessage.botConfigId").isNumber())
                 .andExpect(jsonPath("$.data.resultMessage.botName").value("Agent"));
 
-        verify(llmService).chat(any(BotConfig.class), any());
+        verify(llmService).chat(any(BotConfig.class), anyList(), anyList());
     }
 
     @Test

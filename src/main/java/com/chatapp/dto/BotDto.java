@@ -98,18 +98,55 @@ public class BotDto {
 
     @Data
     @NoArgsConstructor
-    @AllArgsConstructor
     public static class ChatMessage {
-        private String role; // "system", "user", "assistant"
+        private String role; // "system", "user", "assistant", "tool"
         private String content;
+        private String toolCallId;
+        private String name;
+        private List<ToolCall> toolCalls;
+
+        public ChatMessage(String role, String content) {
+            this.role = role;
+            this.content = content;
+        }
+
+        public ChatMessage(String role, String content, String toolCallId, String name, List<ToolCall> toolCalls) {
+            this.role = role;
+            this.content = content;
+            this.toolCallId = toolCallId;
+            this.name = name;
+            this.toolCalls = toolCalls;
+        }
     }
 
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
+    public static class ToolCall {
+        private String id;
+        private String name;
+        private String argumentsJson;
+    }
+
+    @Data
+    @NoArgsConstructor
     public static class LLMResponse {
         private String content;
         private Integer tokensUsed;
         private String model;
+        private List<ToolCall> toolCalls;
+
+        public LLMResponse(String content, Integer tokensUsed, String model) {
+            this.content = content;
+            this.tokensUsed = tokensUsed;
+            this.model = model;
+        }
+
+        public LLMResponse(String content, Integer tokensUsed, String model, List<ToolCall> toolCalls) {
+            this.content = content;
+            this.tokensUsed = tokensUsed;
+            this.model = model;
+            this.toolCalls = toolCalls;
+        }
     }
 }

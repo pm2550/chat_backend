@@ -1,7 +1,6 @@
 package com.chatapp.service;
 
 import com.chatapp.dto.AgentTaskDto;
-import com.chatapp.dto.BotDto;
 import com.chatapp.dto.WorkspaceDto;
 import com.chatapp.entity.AgentTask;
 import com.chatapp.entity.BotConfig;
@@ -22,8 +21,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Agent Gateway/工作流任务服务。
@@ -39,10 +36,10 @@ public class AgentWorkflowService {
     private final UserRepository userRepository;
     private final BotConfigRepository botConfigRepository;
     private final MessageRepository messageRepository;
-    private final LLMService llmService;
     private final AgentGatewayService agentGatewayService;
     private final WorkspaceService workspaceService;
     private final AgentContextBuilder agentContextBuilder;
+    private final AgentExecutionLoop agentExecutionLoop;
 
     public AgentTask createAndRun(Long requestedById, AgentTaskDto.CreateRequest request) {
         if (request.getChatRoomId() == null) {
@@ -110,7 +107,7 @@ public class AgentWorkflowService {
             Message resultMessage = new Message();
             resultMessage.setChatRoom(task.getChatRoom());
             resultMessage.setSender(task.getRequestedBy());
-            resultMessage.setBotConfig(resolveSystemAgentBot());
+            resultMessage.setBotConfig(botConfig);
             resultMessage.setMessageType(Message.MessageType.SYSTEM);
             resultMessage.setMessageStatus(Message.MessageStatus.SENT);
             resultMessage.setContent(result);
@@ -146,6 +143,9 @@ public class AgentWorkflowService {
                     agent.setMaxHistoryMessages(20);
                     agent.setIncludeRoomMetadata(true);
                     agent.setMaxContextTokensEstimate(6000);
+                    agent.setMaxAgentIterations(8);
+                    agent.setMaxAgentWallclockMs(30000);
+                    agent.setMaxAgentTotalTokens(50000);
                     agent.setIsActive(true);
                     return botConfigRepository.save(agent);
                 });
@@ -182,14 +182,14 @@ public class AgentWorkflowService {
         }
 
         AgentContextBuilder.AgentContextEnvelope envelope = agentContextBuilder.buildContext(task);
-        String systemPrompt = agentContextBuilder.assembleSystemPrompt(envelope);
-        List<BotDto.ChatMessage> messages = new ArrayList<>();
-        messages.add(new BotDto.ChatMessage("system", systemPrompt));
-        messages.add(new BotDto.ChatMessage("user", task.getPrompt()));
-
-        BotDto.LLMResponse response = llmService.chat(botConfig, messages);
-        return response.getContent() != null && !response.getContent().isBlank()
-                ? response.getContent()
+        AgentExecutionLoop.AgentLoopResult result = agentExecutionLoop.runLoop(task, envelope);
+        log.info("Agent task {} loop completed: reason={} iterations={} toolCalls={}",
+                task.getId(),
+                result.terminationReason(),
+                result.iterations(),
+                result.toolCallsMade().size());
+        return result.finalContent() != null && !result.finalContent().isBlank()
+                ? result.finalContent()
                 : "任务已完成";
     }
 }

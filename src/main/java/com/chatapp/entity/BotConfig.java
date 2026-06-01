@@ -93,6 +93,18 @@ public class BotConfig {
     @Column(name = "max_context_tokens_estimate")
     private Integer maxContextTokensEstimate = 6000;
 
+    @Column(name = "enabled_tools", columnDefinition = "TEXT")
+    private String enabledTools;
+
+    @Column(name = "max_agent_iterations")
+    private Integer maxAgentIterations = 8;
+
+    @Column(name = "max_agent_wallclock_ms")
+    private Integer maxAgentWallclockMs = 30000;
+
+    @Column(name = "max_agent_total_tokens")
+    private Integer maxAgentTotalTokens = 50000;
+
     @Column(name = "is_active")
     private Boolean isActive = true;
 
