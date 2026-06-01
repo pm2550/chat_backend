@@ -561,6 +561,7 @@ public class MessageIntegrationTest {
     void testAgentTaskWorkflow() throws Exception {
         Object[] user1 = createUserAndLogin("agentuser");
         String token1 = (String) user1[0];
+        Long userId1 = (Long) user1[1];
 
         Long roomId = createGroupChat(token1, "Agent Room " + uniqueSuffix, List.of());
         Map<String, Object> request = new HashMap<>();
@@ -574,7 +575,13 @@ public class MessageIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
                 .andExpect(jsonPath("$.data.result").value("任务已接收: summarize this room"))
-                .andExpect(jsonPath("$.data.resultMessage.content", containsString("[Agent]")))
+                .andExpect(jsonPath("$.data.resultMessage.content").value("任务已接收: summarize this room"))
+                .andExpect(jsonPath("$.data.resultMessage.content", not(startsWith("[Agent]"))))
+                .andExpect(jsonPath("$.data.resultMessage.senderId").value(userId1))
+                .andExpect(jsonPath("$.data.resultMessage.botConfigId").isNumber())
+                .andExpect(jsonPath("$.data.resultMessage.botSenderId").isNumber())
+                .andExpect(jsonPath("$.data.resultMessage.botName").value("Agent"))
+                .andExpect(jsonPath("$.data.resultMessage.botAvatar").value("/assets/agent-avatar.png"))
                 .andReturn();
 
         Map<String, Object> responseMap = objectMapper.readValue(result.getResponse().getContentAsString(), Map.class);
@@ -660,7 +667,9 @@ public class MessageIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
                 .andExpect(jsonPath("$.data.result").value("gateway completed"))
-                .andExpect(jsonPath("$.data.resultMessage.content").value("[Agent] gateway completed"));
+                .andExpect(jsonPath("$.data.resultMessage.content").value("gateway completed"))
+                .andExpect(jsonPath("$.data.resultMessage.botConfigId").isNumber())
+                .andExpect(jsonPath("$.data.resultMessage.botName").value("Agent"));
 
         verify(agentGatewayService).execute(any());
     }

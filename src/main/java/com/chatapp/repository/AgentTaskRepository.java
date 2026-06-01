@@ -14,10 +14,10 @@ import java.util.Optional;
 @Repository
 public interface AgentTaskRepository extends JpaRepository<AgentTask, Long> {
 
-    @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"chatRoom", "requestedBy", "botConfig", "resultMessage", "resultMessage.sender", "resultMessage.anonymousIdentity", "resultMessage.replyToMessage", "resultMessage.replyToMessage.sender", "resultMessage.replyToMessage.anonymousIdentity"})
+    @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"chatRoom", "requestedBy", "botConfig", "resultMessage", "resultMessage.sender", "resultMessage.botConfig", "resultMessage.anonymousIdentity", "resultMessage.replyToMessage", "resultMessage.replyToMessage.sender", "resultMessage.replyToMessage.anonymousIdentity"})
     Page<AgentTask> findByChatRoomIdOrderByCreatedAtDesc(Long chatRoomId, Pageable pageable);
 
-    @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"chatRoom", "requestedBy", "botConfig", "resultMessage", "resultMessage.sender", "resultMessage.anonymousIdentity", "resultMessage.replyToMessage", "resultMessage.replyToMessage.sender", "resultMessage.replyToMessage.anonymousIdentity"})
+    @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"chatRoom", "requestedBy", "botConfig", "resultMessage", "resultMessage.sender", "resultMessage.botConfig", "resultMessage.anonymousIdentity", "resultMessage.replyToMessage", "resultMessage.replyToMessage.sender", "resultMessage.replyToMessage.anonymousIdentity"})
     @Query("SELECT t FROM AgentTask t WHERE t.id = :id")
     Optional<AgentTask> findWithDetailsById(@Param("id") Long id);
 }

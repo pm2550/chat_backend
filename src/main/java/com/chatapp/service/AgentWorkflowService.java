@@ -111,9 +111,10 @@ public class AgentWorkflowService {
             Message resultMessage = new Message();
             resultMessage.setChatRoom(task.getChatRoom());
             resultMessage.setSender(task.getRequestedBy());
+            resultMessage.setBotConfig(resolveSystemAgentBot());
             resultMessage.setMessageType(Message.MessageType.SYSTEM);
             resultMessage.setMessageStatus(Message.MessageStatus.SENT);
-            resultMessage.setContent("[Agent] " + result);
+            resultMessage.setContent(result);
             resultMessage.setCreatedAt(LocalDateTime.now());
             resultMessage = messageRepository.save(resultMessage);
             chatRoomRepository.incrementUnreadForRoomMembersExcept(
@@ -130,6 +131,22 @@ public class AgentWorkflowService {
         }
         task.setCompletedAt(LocalDateTime.now());
         return agentTaskRepository.save(task);
+    }
+
+    private BotConfig resolveSystemAgentBot() {
+        return botConfigRepository.findFirstByBotNameAndCreatedByIsNullOrderByIdAsc("Agent")
+                .orElseGet(() -> {
+                    BotConfig agent = new BotConfig();
+                    agent.setBotName("Agent");
+                    agent.setBotAvatar("/assets/agent-avatar.png");
+                    agent.setLlmProvider(BotConfig.LLMProvider.DASHSCOPE);
+                    agent.setModelName("system-agent");
+                    agent.setSystemPrompt("You are a helpful agent for PM chat. Respond concisely.");
+                    agent.setTemperature(0.7);
+                    agent.setMaxTokens(2048);
+                    agent.setIsActive(true);
+                    return botConfigRepository.save(agent);
+                });
     }
 
     private WorkspaceDto.FileDto saveResultArtifact(

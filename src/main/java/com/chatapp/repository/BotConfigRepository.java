@@ -19,4 +19,7 @@ public interface BotConfigRepository extends JpaRepository<BotConfig, Long> {
 
     @EntityGraph(attributePaths = {"providerCredential"})
     List<BotConfig> findByIsActiveTrue();
+
+    @EntityGraph(attributePaths = {"providerCredential"})
+    Optional<BotConfig> findFirstByBotNameAndCreatedByIsNullOrderByIdAsc(String botName);
 }

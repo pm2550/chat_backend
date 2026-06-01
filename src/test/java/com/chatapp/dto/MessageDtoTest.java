@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class MessageDtoTest {
 
@@ -55,5 +56,28 @@ class MessageDtoTest {
         assertEquals("HelperBot", dto.getBotName());
         assertEquals("/api/files/avatar/bot.png", dto.getBotAvatar());
         assertEquals("bot answer", dto.getContent());
+    }
+
+    @Test
+    void fromEntitySerializesSystemAgentReplyWithoutTextPrefix() {
+        BotConfig bot = new BotConfig();
+        bot.setId(99L);
+        bot.setBotName("Agent");
+        bot.setBotAvatar("/assets/agent-avatar.png");
+
+        Message message = new Message();
+        message.setId(9L);
+        message.setContent("任务已接收: summarize this room");
+        message.setMessageType(Message.MessageType.SYSTEM);
+        message.setMessageStatus(Message.MessageStatus.SENT);
+        message.setBotConfig(bot);
+
+        MessageDto dto = MessageDto.fromEntity(message);
+
+        assertEquals(99L, dto.getBotConfigId());
+        assertEquals(99L, dto.getBotSenderId());
+        assertEquals("Agent", dto.getBotName());
+        assertEquals("/assets/agent-avatar.png", dto.getBotAvatar());
+        assertFalse(dto.getContent().startsWith("[Agent] "));
     }
 }
