@@ -4,13 +4,17 @@ import com.chatapp.dto.MessageDto;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.ChatRoomClearState;
 import com.chatapp.entity.ChatRoomMember;
+import com.chatapp.entity.ChatRoomPinnedMessage;
 import com.chatapp.entity.Message;
+import com.chatapp.entity.MessageStar;
 import com.chatapp.entity.User;
 import com.chatapp.entity.AnonymousIdentity;
 import com.chatapp.repository.ChatRoomClearStateRepository;
+import com.chatapp.repository.ChatRoomPinnedMessageRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.MessageReadReceiptRepository;
+import com.chatapp.repository.MessageStarRepository;
 import com.chatapp.repository.StickerRepository;
 import com.chatapp.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +52,8 @@ public class MessageService {
     private final UserRepository userRepository;
     private final AnonymousService anonymousService;
     private final ChatRoomClearStateRepository clearStateRepository;
+    private final ChatRoomPinnedMessageRepository pinnedMessageRepository;
+    private final MessageStarRepository messageStarRepository;
 
     @Autowired(required = false)
     private MessageLinkPreviewService linkPreviewService;
@@ -405,6 +411,147 @@ public class MessageService {
 
         log.info("用户 {} 撤回了消息 {}", userId, messageId);
         return message;
+    }
+
+    public Message editMessage(Long messageId, Long userId, String content) {
+        Message message = messageRepository.findWithSenderById(messageId)
+                .orElseThrow(() -> new RuntimeException("消息不存在"));
+        if (!chatRoomRepository.isMember(message.getChatRoom().getId(), userId)) {
+            throw new IllegalArgumentException("您无权限编辑此消息");
+        }
+        if (!message.getSender().getId().equals(userId)) {
+            throw new IllegalArgumentException("只能编辑自己的消息");
+        }
+        if (Boolean.TRUE.equals(message.getIsDeleted())) {
+            throw new IllegalArgumentException("已删除消息不能编辑");
+        }
+        if (message.getMessageType() != Message.MessageType.TEXT) {
+            throw new IllegalArgumentException("仅支持编辑文本消息");
+        }
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("消息内容不能为空");
+        }
+        message.setContent(content.trim());
+        message.setIsEdited(true);
+        message.setMentionedUserIds(resolveMentionedUserIds(content, message.getChatRoom()));
+        return messageRepository.save(message);
+    }
+
+    public Message forwardMessage(Long messageId, Long userId, Long targetRoomId) {
+        Message source = messageRepository.findWithSenderById(messageId)
+                .orElseThrow(() -> new RuntimeException("消息不存在"));
+        if (!chatRoomRepository.isMember(source.getChatRoom().getId(), userId)) {
+            throw new IllegalArgumentException("您无权限查看原消息");
+        }
+        validateCanSendMessage(userId, targetRoomId);
+        User sender = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("发送者不存在"));
+        ChatRoom targetRoom = chatRoomRepository.findById(targetRoomId)
+                .orElseThrow(() -> new RuntimeException("目标聊天室不存在"));
+
+        Message forwarded = new Message();
+        forwarded.setSender(sender);
+        forwarded.setChatRoom(targetRoom);
+        forwarded.setForwardedFromMessage(source);
+        forwarded.setContent(source.getContent());
+        forwarded.setMessageType(source.getMessageType());
+        forwarded.setFileUrl(source.getFileUrl());
+        forwarded.setFileName(source.getFileName());
+        forwarded.setFileSize(source.getFileSize());
+        forwarded.setFileType(source.getFileType());
+        forwarded.setThumbnailUrl(source.getThumbnailUrl());
+        forwarded.setStickerId(source.getStickerId());
+        forwarded.setPollId(source.getPollId());
+        forwarded.setImageGenPrompt(source.getImageGenPrompt());
+        forwarded.setImageGenStatus(source.getImageGenStatus());
+        forwarded.setImageGenUrl(source.getImageGenUrl());
+        forwarded.setDuration(source.getDuration());
+        forwarded.setWidth(source.getWidth());
+        forwarded.setHeight(source.getHeight());
+        forwarded.setMessageStatus(Message.MessageStatus.SENT);
+        if (forwarded.getMessageType() == Message.MessageType.TEXT) {
+            forwarded.setMentionedUserIds(resolveMentionedUserIds(forwarded.getContent(), targetRoom));
+        }
+        Message saved = messageRepository.save(forwarded);
+        chatRoomRepository.incrementUnreadForRoomMembersExcept(targetRoomId, userId);
+        return saved;
+    }
+
+    public ChatRoomPinnedMessage pinMessage(Long roomId, Long messageId, Long userId) {
+        Message message = messageRepository.findWithSenderById(messageId)
+                .orElseThrow(() -> new RuntimeException("消息不存在"));
+        if (!message.getChatRoom().getId().equals(roomId)) {
+            throw new IllegalArgumentException("消息不属于这个聊天室");
+        }
+        requireRoomAdminOrPrivateMember(roomId, userId);
+        return pinnedMessageRepository.findByChatRoomIdAndMessageId(roomId, messageId)
+                .orElseGet(() -> {
+                    ChatRoomPinnedMessage pin = new ChatRoomPinnedMessage();
+                    pin.setChatRoom(message.getChatRoom());
+                    pin.setMessage(message);
+                    pin.setPinnedBy(userRepository.findById(userId)
+                            .orElseThrow(() -> new RuntimeException("用户不存在")));
+                    return pinnedMessageRepository.save(pin);
+                });
+    }
+
+    public void unpinMessage(Long roomId, Long messageId, Long userId) {
+        requireRoomAdminOrPrivateMember(roomId, userId);
+        pinnedMessageRepository.deleteByChatRoomIdAndMessageId(roomId, messageId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Message> getPinnedMessages(Long roomId, Long userId) {
+        if (!chatRoomRepository.isMember(roomId, userId)) {
+            throw new IllegalArgumentException("您不是该聊天室的成员");
+        }
+        return pinnedMessageRepository.findByChatRoomIdOrderByCreatedAtDesc(roomId).stream()
+                .map(ChatRoomPinnedMessage::getMessage)
+                .toList();
+    }
+
+    public Message starMessage(Long messageId, Long userId) {
+        Message message = messageRepository.findWithSenderById(messageId)
+                .orElseThrow(() -> new RuntimeException("消息不存在"));
+        if (!chatRoomRepository.isMember(message.getChatRoom().getId(), userId)) {
+            throw new IllegalArgumentException("您无权限收藏此消息");
+        }
+        messageStarRepository.findByMessageIdAndUserId(messageId, userId)
+                .orElseGet(() -> {
+                    MessageStar star = new MessageStar();
+                    star.setMessage(message);
+                    star.setUser(userRepository.findById(userId)
+                            .orElseThrow(() -> new RuntimeException("用户不存在")));
+                    return messageStarRepository.save(star);
+                });
+        return message;
+    }
+
+    public Message unstarMessage(Long messageId, Long userId) {
+        Message message = messageRepository.findWithSenderById(messageId)
+                .orElseThrow(() -> new RuntimeException("消息不存在"));
+        if (!chatRoomRepository.isMember(message.getChatRoom().getId(), userId)) {
+            throw new IllegalArgumentException("您无权限取消收藏此消息");
+        }
+        messageStarRepository.deleteByMessageIdAndUserId(messageId, userId);
+        return message;
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Message> getStarredMessages(Long userId, Pageable pageable) {
+        return messageStarRepository.findByUserIdOrderByCreatedAtDesc(userId, pageable)
+                .map(MessageStar::getMessage);
+    }
+
+    private void requireRoomAdminOrPrivateMember(Long roomId, Long userId) {
+        ChatRoom room = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
+        if (!chatRoomRepository.isMember(roomId, userId)) {
+            throw new IllegalArgumentException("您不是该聊天室的成员");
+        }
+        if (room.getRoomType() != ChatRoom.RoomType.PRIVATE && !chatRoomRepository.isAdmin(roomId, userId)) {
+            throw new IllegalArgumentException("需要群管理员权限");
+        }
     }
 
     /**

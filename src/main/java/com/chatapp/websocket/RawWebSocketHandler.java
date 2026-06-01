@@ -398,6 +398,15 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         broadcastToRoom(chatRoomId, envelope);
     }
 
+    public void broadcastMessageAction(Long chatRoomId, String action, Object payload) {
+        ObjectNode envelope = objectMapper.createObjectNode();
+        envelope.put("type", "message_action");
+        envelope.put("chatRoomId", chatRoomId);
+        envelope.put("action", action);
+        envelope.set("data", objectMapper.valueToTree(payload));
+        broadcastToRoom(chatRoomId, envelope);
+    }
+
     public void broadcastAppUpdate(AppVersion version) {
         if (version == null) {
             return;

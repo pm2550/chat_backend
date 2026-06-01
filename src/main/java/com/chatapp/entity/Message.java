@@ -50,6 +50,10 @@ public class Message {
     @JoinColumn(name = "reply_to_message_id")
     private Message replyToMessage;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "forwarded_from_message_id")
+    private Message forwardedFromMessage;
+
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(
             name = "message_mentions",

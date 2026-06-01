@@ -2,11 +2,14 @@ package com.chatapp.service;
 
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.ChatRoomMember;
+import com.chatapp.entity.ChatRoomPinnedMessage;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.ChatRoomClearStateRepository;
+import com.chatapp.repository.ChatRoomPinnedMessageRepository;
 import com.chatapp.repository.MessageRepository;
+import com.chatapp.repository.MessageStarRepository;
 import com.chatapp.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,6 +44,12 @@ class MessageServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private ChatRoomPinnedMessageRepository pinnedMessageRepository;
+
+    @Mock
+    private MessageStarRepository messageStarRepository;
 
     @InjectMocks
     private MessageService messageService;
@@ -367,6 +376,102 @@ class MessageServiceTest {
                 () -> messageService.recallMessage(50L, 1L));
 
         assertTrue(ex.getMessage().contains("2分钟"));
+    }
+
+    @Test
+    void editMessage_updatesTextAndMarksEdited() {
+        User sender = createTestUser(1L, "sender");
+        ChatRoom room = createTestChatRoom(10L, sender);
+        Message msg = createTestMessage(50L, sender, room);
+
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(msg));
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Message result = messageService.editMessage(50L, 1L, "updated");
+
+        assertEquals("updated", result.getContent());
+        assertTrue(result.getIsEdited());
+        verify(messageRepository).save(msg);
+    }
+
+    @Test
+    void editMessage_rejectsOtherUser() {
+        User sender = createTestUser(1L, "sender");
+        ChatRoom room = createTestChatRoom(10L, sender);
+        Message msg = createTestMessage(50L, sender, room);
+
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(msg));
+        when(chatRoomRepository.isMember(10L, 2L)).thenReturn(true);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> messageService.editMessage(50L, 2L, "bad"));
+    }
+
+    @Test
+    void forwardMessage_copiesContentIntoTargetRoom() {
+        User sender = createTestUser(1L, "sender");
+        ChatRoom sourceRoom = createTestChatRoom(10L, sender);
+        ChatRoom targetRoom = createTestChatRoom(20L, sender);
+        Message source = createTestMessage(50L, sender, sourceRoom);
+
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(source));
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(chatRoomRepository.isMember(20L, 1L)).thenReturn(true);
+        when(chatRoomRepository.isMuted(20L, 1L)).thenReturn(false);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(sender));
+        when(chatRoomRepository.findById(20L)).thenReturn(Optional.of(targetRoom));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> {
+            Message saved = inv.getArgument(0);
+            saved.setId(99L);
+            return saved;
+        });
+
+        Message forwarded = messageService.forwardMessage(50L, 1L, 20L);
+
+        assertEquals("Test message", forwarded.getContent());
+        assertEquals(20L, forwarded.getChatRoom().getId());
+        assertEquals(50L, forwarded.getForwardedFromMessage().getId());
+        verify(chatRoomRepository).incrementUnreadForRoomMembersExcept(20L, 1L);
+    }
+
+    @Test
+    void pinMessage_requiresAdminInGroupAndSavesPin() {
+        User sender = createTestUser(1L, "sender");
+        ChatRoom room = createTestChatRoom(10L, sender);
+        Message msg = createTestMessage(50L, sender, room);
+
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(msg));
+        when(chatRoomRepository.findById(10L)).thenReturn(Optional.of(room));
+        when(chatRoomRepository.isMember(10L, 2L)).thenReturn(true);
+        when(chatRoomRepository.isAdmin(10L, 2L)).thenReturn(true);
+        when(pinnedMessageRepository.findByChatRoomIdAndMessageId(10L, 50L))
+                .thenReturn(Optional.empty());
+        when(userRepository.findById(2L)).thenReturn(Optional.of(createTestUser(2L, "admin")));
+        when(pinnedMessageRepository.save(any(ChatRoomPinnedMessage.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        ChatRoomPinnedMessage pin = messageService.pinMessage(10L, 50L, 2L);
+
+        assertEquals(50L, pin.getMessage().getId());
+        verify(pinnedMessageRepository).save(any(ChatRoomPinnedMessage.class));
+    }
+
+    @Test
+    void starMessage_isIdempotentForExistingStar() {
+        User sender = createTestUser(1L, "sender");
+        ChatRoom room = createTestChatRoom(10L, sender);
+        Message msg = createTestMessage(50L, sender, room);
+
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(msg));
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(messageStarRepository.findByMessageIdAndUserId(50L, 1L))
+                .thenReturn(Optional.of(new com.chatapp.entity.MessageStar()));
+
+        Message result = messageService.starMessage(50L, 1L);
+
+        assertEquals(50L, result.getId());
+        verify(messageStarRepository, never()).save(any());
     }
 
     // ---- deleteMessage ----

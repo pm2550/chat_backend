@@ -35,6 +35,7 @@ public class MessageDto {
     private Long chatRoomId;
     private Long replyToMessageId;
     private MessageDto replyToMessage;
+    private Long forwardedFromMessageId;
     private List<Long> mentionedUserIds;
     private String fileUrl;
     private String fileName;
@@ -53,6 +54,7 @@ public class MessageDto {
     private Integer height;
     private Boolean isDeleted;
     private Boolean isEdited;
+    private LocalDateTime editedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private Integer readCount;
@@ -112,6 +114,9 @@ public class MessageDto {
                 dto.setReplyToMessage(fromEntity(message.getReplyToMessage(), false));
             }
         }
+        if (message.getForwardedFromMessage() != null) {
+            dto.setForwardedFromMessageId(message.getForwardedFromMessage().getId());
+        }
         dto.setMentionedUserIds(message.getMentionedUserIds() == null
                 ? List.of()
                 : new ArrayList<>(message.getMentionedUserIds()));
@@ -132,6 +137,9 @@ public class MessageDto {
         dto.setHeight(message.getHeight());
         dto.setIsDeleted(Boolean.TRUE.equals(message.getIsDeleted()));
         dto.setIsEdited(Boolean.TRUE.equals(message.getIsEdited()));
+        if (Boolean.TRUE.equals(message.getIsEdited())) {
+            dto.setEditedAt(message.getUpdatedAt());
+        }
         dto.setCreatedAt(message.getCreatedAt());
         dto.setUpdatedAt(message.getUpdatedAt());
         dto.setReadCount(message.getReadCount());

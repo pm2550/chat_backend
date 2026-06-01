@@ -380,6 +380,117 @@ public class MessageController {
         }
     }
 
+    @PutMapping("/{messageId}")
+    public ResponseEntity<?> editMessage(
+            @PathVariable Long messageId,
+            @RequestBody EditMessageRequest request,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Message message = messageService.editMessage(messageId, currentUser.getId(), request.getContent());
+            rawWebSocketHandler.broadcastMessage(message);
+            auditLogService.record(
+                    currentUser,
+                    "MESSAGE_EDIT",
+                    "MESSAGE",
+                    messageId,
+                    message.getChatRoom().getId(),
+                    null);
+            return ResponseEntity.ok(Map.of(
+                    "message", "消息已编辑",
+                    "data", MessageDto.fromEntity(message)
+            ));
+        } catch (Exception e) {
+            log.error("编辑消息失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{messageId}/forward")
+    public ResponseEntity<?> forwardMessage(
+            @PathVariable Long messageId,
+            @RequestBody ForwardMessageRequest request,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Message message = messageService.forwardMessage(messageId, currentUser.getId(), request.getTargetChatRoomId());
+            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            auditLogService.record(
+                    currentUser,
+                    "MESSAGE_FORWARD",
+                    "MESSAGE",
+                    messageId,
+                    message.getChatRoom().getId(),
+                    "targetRoom=" + request.getTargetChatRoomId());
+            return ResponseEntity.ok(Map.of(
+                    "message", "消息已转发",
+                    "data", MessageDto.fromEntity(message)
+            ));
+        } catch (Exception e) {
+            log.error("转发消息失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{messageId}/star")
+    public ResponseEntity<?> starMessage(@PathVariable Long messageId, Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Message message = messageService.starMessage(messageId, currentUser.getId());
+            rawWebSocketHandler.broadcastMessageAction(
+                    message.getChatRoom().getId(),
+                    "star_added",
+                    Map.of("messageId", messageId, "userId", currentUser.getId()));
+            return ResponseEntity.ok(Map.of(
+                    "message", "消息已收藏",
+                    "data", MessageDto.fromEntity(message)
+            ));
+        } catch (Exception e) {
+            log.error("收藏消息失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/{messageId}/star")
+    public ResponseEntity<?> unstarMessage(@PathVariable Long messageId, Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Message message = messageService.unstarMessage(messageId, currentUser.getId());
+            rawWebSocketHandler.broadcastMessageAction(
+                    message.getChatRoom().getId(),
+                    "star_removed",
+                    Map.of("messageId", messageId, "userId", currentUser.getId()));
+            return ResponseEntity.ok(Map.of(
+                    "message", "消息已取消收藏",
+                    "data", MessageDto.fromEntity(message)
+            ));
+        } catch (Exception e) {
+            log.error("取消收藏失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/starred")
+    public ResponseEntity<?> getStarredMessages(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
+            Page<Message> messages = messageService.getStarredMessages(currentUser.getId(), pageable);
+            return ResponseEntity.ok(Map.of(
+                    "messages", toMessageDtos(messages.getContent(), currentUser.getId()),
+                    "currentPage", messages.getNumber(),
+                    "totalPages", messages.getTotalPages(),
+                    "totalElements", messages.getTotalElements()
+            ));
+        } catch (Exception e) {
+            log.error("获取收藏消息失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
     /**
      * 删除消息
      */
@@ -529,6 +640,20 @@ public class MessageController {
         public void setReplyToMessageId(Long replyToMessageId) { this.replyToMessageId = replyToMessageId; }
         public String getContent() { return content; }
         public void setContent(String content) { this.content = content; }
+    }
+
+    public static class EditMessageRequest {
+        private String content;
+
+        public String getContent() { return content; }
+        public void setContent(String content) { this.content = content; }
+    }
+
+    public static class ForwardMessageRequest {
+        private Long targetChatRoomId;
+
+        public Long getTargetChatRoomId() { return targetChatRoomId; }
+        public void setTargetChatRoomId(Long targetChatRoomId) { this.targetChatRoomId = targetChatRoomId; }
     }
 
     private boolean isImageFile(String fileName, String contentType) {
