@@ -42,6 +42,7 @@ public class AgentWorkflowService {
     private final LLMService llmService;
     private final AgentGatewayService agentGatewayService;
     private final WorkspaceService workspaceService;
+    private final AgentContextBuilder agentContextBuilder;
 
     public AgentTask createAndRun(Long requestedById, AgentTaskDto.CreateRequest request) {
         if (request.getChatRoomId() == null) {
@@ -61,14 +62,12 @@ public class AgentWorkflowService {
         BotConfig botConfig = request.getBotId() != null
                 ? botConfigRepository.findById(request.getBotId())
                     .orElseThrow(() -> new RuntimeException("机器人不存在"))
-                : null;
+                : resolveSystemAgentBot();
 
         AgentTask task = new AgentTask();
         task.setChatRoom(chatRoom);
         task.setRequestedBy(requestedBy);
-        if (request.getBotId() != null) {
-            task.setBotConfig(botConfig);
-        }
+        task.setBotConfig(botConfig);
         task.setPrompt(request.getPrompt().trim());
         task.setStatus(AgentTask.Status.PENDING);
         task = agentTaskRepository.save(task);
@@ -139,11 +138,14 @@ public class AgentWorkflowService {
                     BotConfig agent = new BotConfig();
                     agent.setBotName("Agent");
                     agent.setBotAvatar("/assets/agent-avatar.png");
-                    agent.setLlmProvider(BotConfig.LLMProvider.DASHSCOPE);
-                    agent.setModelName("system-agent");
+                    agent.setLlmProvider(BotConfig.LLMProvider.HERMES);
+                    agent.setModelName("hermes-agent");
                     agent.setSystemPrompt("You are a helpful agent for PM chat. Respond concisely.");
                     agent.setTemperature(0.7);
                     agent.setMaxTokens(2048);
+                    agent.setMaxHistoryMessages(20);
+                    agent.setIncludeRoomMetadata(true);
+                    agent.setMaxContextTokensEstimate(6000);
                     agent.setIsActive(true);
                     return botConfigRepository.save(agent);
                 });
@@ -179,10 +181,10 @@ public class AgentWorkflowService {
                     : "任务已接收: " + task.getPrompt();
         }
 
+        AgentContextBuilder.AgentContextEnvelope envelope = agentContextBuilder.buildContext(task);
+        String systemPrompt = agentContextBuilder.assembleSystemPrompt(envelope);
         List<BotDto.ChatMessage> messages = new ArrayList<>();
-        if (botConfig.getSystemPrompt() != null && !botConfig.getSystemPrompt().isBlank()) {
-            messages.add(new BotDto.ChatMessage("system", botConfig.getSystemPrompt()));
-        }
+        messages.add(new BotDto.ChatMessage("system", systemPrompt));
         messages.add(new BotDto.ChatMessage("user", task.getPrompt()));
 
         BotDto.LLMResponse response = llmService.chat(botConfig, messages);

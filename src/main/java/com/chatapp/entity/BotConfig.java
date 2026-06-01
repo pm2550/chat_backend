@@ -81,6 +81,18 @@ public class BotConfig {
     @Column(name = "max_tokens")
     private Integer maxTokens = 2048;
 
+    @Column(name = "max_history_messages")
+    private Integer maxHistoryMessages = 20;
+
+    @Column(name = "include_room_metadata")
+    private Boolean includeRoomMetadata = true;
+
+    @Column(name = "system_prompt_template", columnDefinition = "TEXT")
+    private String systemPromptTemplate;
+
+    @Column(name = "max_context_tokens_estimate")
+    private Integer maxContextTokensEstimate = 6000;
+
     @Column(name = "is_active")
     private Boolean isActive = true;
 

@@ -35,6 +35,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.hamcrest.Matchers.*;
+import org.mockito.ArgumentCaptor;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -91,6 +92,15 @@ public class MessageIntegrationTest {
     void setUp() {
         when(tokenBlacklistService.isBlacklisted(anyString())).thenReturn(false);
         when(agentGatewayService.isConfigured()).thenReturn(false);
+        when(llmService.chat(any(BotConfig.class), any())).thenAnswer(invocation -> {
+            List<BotDto.ChatMessage> messages = invocation.getArgument(1);
+            String userPrompt = messages.stream()
+                    .filter(message -> "user".equals(message.getRole()))
+                    .reduce((first, second) -> second)
+                    .map(BotDto.ChatMessage::getContent)
+                    .orElse("任务");
+            return new BotDto.LLMResponse("任务已接收: " + userPrompt, 1, "test-model");
+        });
         uniqueSuffix = UUID.randomUUID().toString().substring(0, 8);
     }
 
@@ -601,6 +611,71 @@ public class MessageIntegrationTest {
     }
 
     @Test
+    @DisplayName("Agent task sends room metadata in LLM system prompt")
+    void testAgentTaskSystemPromptContainsRoomName() throws Exception {
+        Object[] user1 = createUserAndLogin("agentctxroom");
+        String token1 = (String) user1[0];
+
+        String roomName = "Context Room " + uniqueSuffix;
+        Long roomId = createGroupChat(token1, roomName, List.of());
+        Map<String, Object> request = new HashMap<>();
+        request.put("chatRoomId", roomId);
+        request.put("prompt", "what room is this?");
+
+        mockMvc.perform(post("/api/v1/agent-tasks")
+                .header("Authorization", "Bearer " + token1)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("SUCCEEDED"));
+
+        ArgumentCaptor<List<BotDto.ChatMessage>> messagesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(llmService).chat(any(BotConfig.class), messagesCaptor.capture());
+        String systemPrompt = messagesCaptor.getValue().get(0).getContent();
+
+        assertTrue(systemPrompt.contains(roomName));
+        assertTrue(systemPrompt.contains("[ROOM CONTEXT]"));
+        assertTrue(systemPrompt.contains("[TASK INITIATOR]"));
+        assertTrue(systemPrompt.contains("what room is this?"));
+    }
+
+    @Test
+    @DisplayName("Agent task sends recent room history with sender names in LLM system prompt")
+    void testAgentTaskSystemPromptContainsRecentHistory() throws Exception {
+        Object[] user1 = createUserAndLogin("agentctxalice");
+        String token1 = (String) user1[0];
+
+        Object[] user2 = createUserAndLogin("agentctxbob");
+        String token2 = (String) user2[0];
+        Long userId2 = (Long) user2[1];
+
+        Long roomId = createGroupChat(token1, "History Context Room " + uniqueSuffix, List.of(userId2));
+        sendMessage(token1, roomId, "Alice prior context note");
+        sendMessage(token2, roomId, "Bob prior context note");
+
+        Map<String, Object> request = new HashMap<>();
+        request.put("chatRoomId", roomId);
+        request.put("prompt", "summarize the last few messages");
+
+        mockMvc.perform(post("/api/v1/agent-tasks")
+                .header("Authorization", "Bearer " + token1)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("SUCCEEDED"));
+
+        ArgumentCaptor<List<BotDto.ChatMessage>> messagesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(llmService).chat(any(BotConfig.class), messagesCaptor.capture());
+        String systemPrompt = messagesCaptor.getValue().get(0).getContent();
+
+        assertTrue(systemPrompt.contains("agentctxalice"));
+        assertTrue(systemPrompt.contains("agentctxbob"));
+        assertTrue(systemPrompt.contains("Alice prior context note"));
+        assertTrue(systemPrompt.contains("Bob prior context note"));
+        assertTrue(systemPrompt.contains("[RECENT CONVERSATION]"));
+    }
+
+    @Test
     @DisplayName("Agent task can save its result into a service workspace")
     void testAgentTaskSavesArtifactToWorkspace() throws Exception {
         Object[] user1 = createUserAndLogin("agentartifact");
@@ -631,7 +706,9 @@ public class MessageIntegrationTest {
                 .header("Authorization", "Bearer " + token1))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.files[0].displayName").value("agent-release-notes.txt"))
-                .andExpect(jsonPath("$.data.files[0].sourceType").value("SERVICE"))
+                .andExpect(jsonPath("$.data.files[0].sourceType").value("BOT"))
+                .andExpect(jsonPath("$.data.files[0].sourceBotId").exists())
+                .andExpect(jsonPath("$.data.files[0].sourceBotName").value("Agent"))
                 .andExpect(jsonPath("$.data.files[0].scanStatus").value("CLEAN"))
                 .andReturn();
 
@@ -647,18 +724,16 @@ public class MessageIntegrationTest {
     }
 
     @Test
-    @DisplayName("Agent task uses external gateway when configured")
-    void testAgentTaskUsesConfiguredGateway() throws Exception {
-        Object[] user1 = createUserAndLogin("gatewayuser");
+    @DisplayName("Agent task uses system Agent LLM identity by default")
+    void testAgentTaskUsesSystemAgentByDefault() throws Exception {
+        Object[] user1 = createUserAndLogin("systemagentuser");
         String token1 = (String) user1[0];
 
-        Long roomId = createGroupChat(token1, "Gateway Room " + uniqueSuffix, List.of());
-        when(agentGatewayService.isConfigured()).thenReturn(true);
-        when(agentGatewayService.execute(any())).thenReturn("gateway completed");
+        Long roomId = createGroupChat(token1, "System Agent Room " + uniqueSuffix, List.of());
 
         Map<String, Object> request = new HashMap<>();
         request.put("chatRoomId", roomId);
-        request.put("prompt", "openclaw do work");
+        request.put("prompt", "do work");
 
         mockMvc.perform(post("/api/v1/agent-tasks")
                 .header("Authorization", "Bearer " + token1)
@@ -666,12 +741,12 @@ public class MessageIntegrationTest {
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
-                .andExpect(jsonPath("$.data.result").value("gateway completed"))
-                .andExpect(jsonPath("$.data.resultMessage.content").value("gateway completed"))
+                .andExpect(jsonPath("$.data.result").value("任务已接收: do work"))
+                .andExpect(jsonPath("$.data.botId").isNumber())
                 .andExpect(jsonPath("$.data.resultMessage.botConfigId").isNumber())
                 .andExpect(jsonPath("$.data.resultMessage.botName").value("Agent"));
 
-        verify(agentGatewayService).execute(any());
+        verify(llmService).chat(any(BotConfig.class), any());
     }
 
     @Test
