@@ -650,6 +650,12 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (m.getFileName() != null) json.put("fileName", m.getFileName());
         if (m.getFileSize() != null) json.put("fileSize", m.getFileSize());
         if (m.getFileType() != null) json.put("fileType", m.getFileType());
+        if (m.getImageGenPrompt() != null) json.put("imageGenPrompt", m.getImageGenPrompt());
+        if (m.getImageGenStatus() != null) json.put("imageGenStatus", m.getImageGenStatus().name());
+        if (m.getImageGenUrl() != null) json.put("imageGenUrl", m.getImageGenUrl());
+        if (m.getImageGenProviderTaskId() != null) {
+            json.put("imageGenProviderTaskId", m.getImageGenProviderTaskId());
+        }
         if (m.getEncryptedContent() != null && m.getEncryptedContent().length > 0) {
             json.put("encryptedContent", java.util.Base64.getEncoder().encodeToString(m.getEncryptedContent()));
         }

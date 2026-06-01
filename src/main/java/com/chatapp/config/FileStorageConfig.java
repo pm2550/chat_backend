@@ -32,6 +32,11 @@ public class FileStorageConfig {
     private String chatFileDir = "chat-files";
 
     /**
+     * AI image generation artifacts. Defaults to a sibling directory under uploadDir.
+     */
+    private String imageGenDir = "image_gen";
+
+    /**
      * 工作区文件存储目录
      */
     private String workspaceFileDir = "workspace-files";
@@ -134,6 +139,10 @@ public class FileStorageConfig {
      */
     public String getFullChatFileDir() {
         return resolveChildDir(getFullUploadDir(), chatFileDir);
+    }
+
+    public String getFullImageGenDir() {
+        return resolveChildDir(getFullUploadDir(), imageGenDir);
     }
 
     /**

@@ -44,6 +44,10 @@ public class MessageDto {
     private UrlPreviewDto linkPreview;
     private Long stickerId;
     private Long pollId;
+    private String imageGenPrompt;
+    private Message.ImageGenerationStatus imageGenStatus;
+    private String imageGenUrl;
+    private String imageGenProviderTaskId;
     private Integer duration;
     private Integer width;
     private Integer height;
@@ -119,6 +123,10 @@ public class MessageDto {
         dto.setLinkPreview(parseLinkPreview(message.getLinkPreviewJson()));
         dto.setStickerId(message.getStickerId());
         dto.setPollId(message.getPollId());
+        dto.setImageGenPrompt(message.getImageGenPrompt());
+        dto.setImageGenStatus(message.getImageGenStatus());
+        dto.setImageGenUrl(message.getImageGenUrl());
+        dto.setImageGenProviderTaskId(message.getImageGenProviderTaskId());
         dto.setDuration(message.getDuration());
         dto.setWidth(message.getWidth());
         dto.setHeight(message.getHeight());

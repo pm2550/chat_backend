@@ -80,13 +80,27 @@ public class FileController {
     public ResponseEntity<ByteArrayResource> getChatFile(
             @PathVariable String fileName,
             Authentication auth) {
+        return getMessageScopedFile(fileName, "/api/files/chat/" + fileName, "chat", auth);
+    }
+
+    @GetMapping("/image-gen/{fileName}")
+    public ResponseEntity<ByteArrayResource> getGeneratedImage(
+            @PathVariable String fileName,
+            Authentication auth) {
+        return getMessageScopedFile(fileName, "/api/files/image-gen/" + fileName, "image-gen", auth);
+    }
+
+    private ResponseEntity<ByteArrayResource> getMessageScopedFile(
+            String fileName,
+            String fileUrl,
+            String storageType,
+            Authentication auth) {
         try {
             if (auth == null || auth.getName() == null) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
             }
             User currentUser = userService.findUserByUsername(auth.getName());
-            Optional<Message> message = messageRepository.findFirstByFileUrlAndIsDeletedFalse(
-                    "/api/files/chat/" + fileName);
+            Optional<Message> message = messageRepository.findFirstByFileUrlAndIsDeletedFalse(fileUrl);
             if (message.isEmpty()) {
                 return ResponseEntity.notFound().build();
             }
@@ -95,7 +109,7 @@ public class FileController {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
             }
 
-            byte[] fileData = fileStorageService.getFile("chat", fileName);
+            byte[] fileData = fileStorageService.getFile(storageType, fileName);
             ByteArrayResource resource = new ByteArrayResource(fileData);
             auditLogService.record(
                     currentUser,

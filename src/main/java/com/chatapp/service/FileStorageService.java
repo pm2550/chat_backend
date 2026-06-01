@@ -48,6 +48,7 @@ public class FileStorageService {
             Files.createDirectories(Paths.get(fileStorageConfig.getFullUploadDir()));
             Files.createDirectories(Paths.get(fileStorageConfig.getFullAvatarDir()));
             Files.createDirectories(Paths.get(fileStorageConfig.getFullChatFileDir()));
+            Files.createDirectories(Paths.get(fileStorageConfig.getFullImageGenDir()));
             Files.createDirectories(Paths.get(fileStorageConfig.getFullBackgroundDir()));
             if (isLocalWorkspaceStorage()) {
                 Files.createDirectories(Paths.get(fileStorageConfig.getFullWorkspaceFileDir()));
@@ -125,6 +126,16 @@ public class FileStorageService {
         Path targetLocation = Paths.get(fileStorageConfig.getFullChatFileDir()).resolve(fileName);
         Files.write(targetLocation, bytes == null ? new byte[0] : bytes);
         return "/api/files/chat/" + fileName;
+    }
+
+    public String uploadGeneratedImage(String originalFilename, String contentType, byte[] bytes) throws IOException {
+        String safeName = cleanFileName(originalFilename, "image.png");
+        validateImageFile(safeName, contentType, bytes == null ? 0 : bytes.length);
+        String fileExtension = getFileExtension(safeName);
+        String fileName = UUID.randomUUID() + "." + (fileExtension.isBlank() ? "png" : fileExtension);
+        Path targetLocation = Paths.get(fileStorageConfig.getFullImageGenDir()).resolve(fileName);
+        Files.write(targetLocation, bytes == null ? new byte[0] : bytes);
+        return "/api/files/image-gen/" + fileName;
     }
 
     /**
@@ -236,6 +247,8 @@ public class FileStorageService {
             filePath = Paths.get(fileStorageConfig.getFullAvatarDir()).resolve(fileName);
         } else if ("chat".equals(type)) {
             filePath = Paths.get(fileStorageConfig.getFullChatFileDir()).resolve(fileName);
+        } else if ("image-gen".equals(type)) {
+            filePath = Paths.get(fileStorageConfig.getFullImageGenDir()).resolve(fileName);
         } else if ("background".equals(type)) {
             filePath = Paths.get(fileStorageConfig.getFullBackgroundDir()).resolve(fileName);
         } else if ("workspace".equals(type)) {

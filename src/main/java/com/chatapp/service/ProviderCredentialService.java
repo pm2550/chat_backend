@@ -3,6 +3,7 @@ package com.chatapp.service;
 import com.chatapp.dto.ProviderCredentialDto;
 import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ProviderCredential;
+import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ProviderCredentialRepository;
 import com.chatapp.repository.UserRepository;
@@ -85,6 +86,13 @@ public class ProviderCredentialService {
     public ProviderCredential getOwnedCredential(Long ownerId, Long credentialId) {
         return credentialRepository.findByIdAndOwnerId(credentialId, ownerId)
                 .orElseThrow(() -> new IllegalArgumentException("凭据不存在或无权访问"));
+    }
+
+    public ProviderCredential getLatestActiveCredential(Long ownerId, BotConfig.LLMProvider provider) {
+        return credentialRepository.findByOwnerIdAndLlmProviderAndIsActiveTrueOrderByUpdatedAtDesc(ownerId, provider)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("未配置 " + provider + " 凭据"));
     }
 
     public String decrypt(ProviderCredential credential) {

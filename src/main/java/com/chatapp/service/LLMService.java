@@ -91,6 +91,7 @@ public class LLMService {
                     hermesBaseUrl,
                     resolveModel(botConfig, hermesModel),
                     messages, botConfig);
+            case DASHSCOPE -> throw new IllegalArgumentException("DashScope 当前仅用于图片生成凭据");
         };
     }
 

@@ -82,6 +82,19 @@ public class Message {
     @Column(name = "poll_id")
     private Long pollId;
 
+    @Column(name = "image_gen_prompt", columnDefinition = "TEXT")
+    private String imageGenPrompt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "image_gen_status")
+    private ImageGenerationStatus imageGenStatus;
+
+    @Column(name = "image_gen_url", length = 500)
+    private String imageGenUrl;
+
+    @Column(name = "image_gen_provider_task_id", length = 128)
+    private String imageGenProviderTaskId;
+
     @Column(name = "duration")
     private Integer duration; // 音频/视频时长（秒）
 
@@ -144,6 +157,7 @@ public class Message {
         LOCATION("位置"),
         STICKER("贴纸"),
         POLL("投票"),
+        IMAGE_GENERATION("AI图片生成"),
         SYSTEM("系统消息");
 
         private final String description;
@@ -170,6 +184,23 @@ public class Message {
         private final String description;
 
         MessageStatus(String description) {
+            this.description = description;
+        }
+
+        public String getDescription() {
+            return description;
+        }
+    }
+
+    public enum ImageGenerationStatus {
+        QUEUED("排队中"),
+        PROCESSING("生成中"),
+        DONE("已完成"),
+        FAILED("生成失败");
+
+        private final String description;
+
+        ImageGenerationStatus(String description) {
             this.description = description;
         }
 
