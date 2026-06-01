@@ -164,6 +164,9 @@ public class MessageDto {
         dto.setPhone(user.getPhone());
         dto.setDisplayName(user.getDisplayName());
         dto.setAvatarUrl(user.getAvatarUrl());
+        dto.setTitle(user.getTitle());
+        dto.setTitleColor(user.getTitleColor());
+        dto.setTitleEffect(user.getTitleEffect());
         dto.setBio(user.getBio());
         dto.setOnlineStatus(user.getOnlineStatus());
         dto.setLastSeen(user.getLastSeen());

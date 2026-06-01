@@ -62,6 +62,15 @@ public class User {
     @Column(columnDefinition = "TEXT")
     private String bio;
 
+    @Column(length = 50)
+    private String title;
+
+    @Column(name = "title_color", length = 20)
+    private String titleColor;
+
+    @Column(name = "title_effect", length = 30)
+    private String titleEffect = "none";
+
     @Enumerated(EnumType.STRING)
     @Column(name = "online_status")
     private OnlineStatus onlineStatus = OnlineStatus.OFFLINE;

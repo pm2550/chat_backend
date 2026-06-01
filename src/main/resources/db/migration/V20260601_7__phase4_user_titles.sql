@@ -1,0 +1,4 @@
+ALTER TABLE users
+    ADD COLUMN title VARCHAR(50) NULL,
+    ADD COLUMN title_color VARCHAR(20) NULL,
+    ADD COLUMN title_effect VARCHAR(30) NOT NULL DEFAULT 'none';

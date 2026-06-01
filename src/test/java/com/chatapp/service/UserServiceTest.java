@@ -10,6 +10,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.modelmapper.ModelMapper;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -217,5 +218,71 @@ class UserServiceTest {
 
         assertThrows(UsernameNotFoundException.class,
                 () -> userService.loadUserByUsername("nonexistent"));
+    }
+
+    @Test
+    void updateTitle_normalizesAndPersistsTitleFields() {
+        User user = createTestUser();
+        UserDto.TitleRequest request = new UserDto.TitleRequest();
+        request.setTitle(" 值班 ");
+        request.setTitleColor("#18B98F");
+        request.setTitleEffect("glow");
+
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
+        when(userRepository.save(user)).thenAnswer(invocation -> invocation.getArgument(0));
+        when(modelMapper.map(any(User.class), eq(UserDto.class))).thenAnswer(invocation -> {
+            User saved = invocation.getArgument(0);
+            UserDto dto = new UserDto();
+            dto.setId(saved.getId());
+            dto.setTitle(saved.getTitle());
+            dto.setTitleColor(saved.getTitleColor());
+            dto.setTitleEffect(saved.getTitleEffect());
+            return dto;
+        });
+        when(userSettingsRepository.findByUserId(1L)).thenReturn(Optional.empty());
+
+        UserDto result = userService.updateTitle(1L, request);
+
+        assertEquals("值班", user.getTitle());
+        assertEquals("#18B98F", user.getTitleColor());
+        assertEquals("glow", user.getTitleEffect());
+        assertEquals("值班", result.getTitle());
+        verify(userRepository).save(user);
+    }
+
+    @Test
+    void updateTitle_rejectsInvalidColorAndEffect() {
+        User user = createTestUser();
+        UserDto.TitleRequest badColor = new UserDto.TitleRequest();
+        badColor.setTitle("PM");
+        badColor.setTitleColor("blue");
+        badColor.setTitleEffect("none");
+
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
+        assertThrows(IllegalArgumentException.class,
+                () -> userService.updateTitle(1L, badColor));
+
+        UserDto.TitleRequest badEffect = new UserDto.TitleRequest();
+        badEffect.setTitle("PM");
+        badEffect.setTitleColor("#2F6BFF");
+        badEffect.setTitleEffect("sparkle");
+        assertThrows(IllegalArgumentException.class,
+                () -> userService.updateTitle(1L, badEffect));
+
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    void updateUserTitleAsAdmin_requiresAdminRole() {
+        User operator = createTestUser();
+        UserDto.TitleRequest request = new UserDto.TitleRequest();
+        request.setTitle("管理员");
+        request.setTitleEffect("gradient");
+
+        when(userRepository.findById(1L)).thenReturn(Optional.of(operator));
+
+        assertThrows(AccessDeniedException.class,
+                () -> userService.updateUserTitleAsAdmin(1L, 2L, request));
+        verify(userRepository, never()).save(any(User.class));
     }
 }

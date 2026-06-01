@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -26,6 +27,9 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class UserService implements UserDetailsService {
+
+    private static final Set<String> TITLE_EFFECTS = Set.of(
+            "none", "gradient", "glow", "rainbow", "animated_pulse");
 
     private final UserRepository userRepository;
     private final UserSettingsRepository userSettingsRepository;
@@ -177,6 +181,26 @@ public class UserService implements UserDetailsService {
         return convertToDto(savedUser);
     }
 
+    @Transactional
+    public UserDto updateTitle(Long userId, UserDto.TitleRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("用户不存在"));
+        user.setTitle(normalizeNullable(request.getTitle()));
+        user.setTitleColor(normalizeTitleColor(request.getTitleColor()));
+        user.setTitleEffect(normalizeTitleEffect(request.getTitleEffect()));
+        return convertToDto(userRepository.save(user));
+    }
+
+    @Transactional
+    public UserDto updateUserTitleAsAdmin(Long operatorId, Long targetUserId, UserDto.TitleRequest request) {
+        User operator = userRepository.findById(operatorId)
+                .orElseThrow(() -> new RuntimeException("操作者不存在"));
+        if (!operator.getRoles().contains(User.Role.ADMIN)) {
+            throw new org.springframework.security.access.AccessDeniedException("需要管理员权限");
+        }
+        return updateTitle(targetUserId, request);
+    }
+
     /**
      * 搜索用户
      */
@@ -208,6 +232,30 @@ public class UserService implements UserDetailsService {
         userSettingsRepository.findByUserId(user.getId())
                 .ifPresent(settings -> dto.setAvatarFramePreset(settings.getAvatarFramePreset()));
         return dto;
+    }
+
+    private String normalizeNullable(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String normalizeTitleColor(String value) {
+        String color = normalizeNullable(value);
+        if (color == null) return null;
+        if (!color.matches("^#[0-9a-fA-F]{6}$")) {
+            throw new IllegalArgumentException("头衔颜色必须是 #RRGGBB");
+        }
+        return color;
+    }
+
+    private String normalizeTitleEffect(String value) {
+        String effect = normalizeNullable(value);
+        if (effect == null) return "none";
+        if (!TITLE_EFFECTS.contains(effect)) {
+            throw new IllegalArgumentException("不支持的头衔特效");
+        }
+        return effect;
     }
 
     /**
