@@ -30,6 +30,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -88,7 +89,27 @@ class SecurityEnforcementTest {
     @DisplayName("Protected endpoint rejects request without Authorization header")
     void protected_requires_auth() throws Exception {
         mockMvc.perform(get("/api/profile"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
+    }
+
+    @Test
+    @DisplayName("URL preview endpoint rejects unauthenticated requests")
+    void url_preview_requires_auth() throws Exception {
+        mockMvc.perform(post("/api/v1/url-preview")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "url", "https://example.com"))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
+    }
+
+    @Test
+    @DisplayName("ICE server endpoint rejects unauthenticated requests")
+    void ice_servers_requires_auth() throws Exception {
+        mockMvc.perform(get("/api/v1/ice-servers"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
     }
 
     @Test
@@ -100,12 +121,27 @@ class SecurityEnforcementTest {
     }
 
     @Test
+    @DisplayName("ICE server endpoint returns short-lived TURN credentials for authenticated users")
+    void ice_servers_returns_turn_credentials() throws Exception {
+        mockMvc.perform(get("/api/v1/ice-servers")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.ttl").value(1800))
+                .andExpect(jsonPath("$.data.iceServers[0].urls[0]").value("stun:192.9.134.169:3478"))
+                .andExpect(jsonPath("$.data.iceServers[1].urls[0]").value("turn:192.9.134.169:3478?transport=udp"))
+                .andExpect(jsonPath("$.data.iceServers[1].urls[1]").value("turn:192.9.134.169:3478?transport=tcp"))
+                .andExpect(jsonPath("$.data.iceServers[1].username").exists())
+                .andExpect(jsonPath("$.data.iceServers[1].credential").exists());
+    }
+
+    @Test
     @DisplayName("Blacklisted token denies access to protected endpoint")
     void blacklisted_token_denied() throws Exception {
         when(tokenBlacklistService.isBlacklisted(anyString())).thenReturn(true);
         mockMvc.perform(get("/api/profile")
                         .header("Authorization", "Bearer " + accessToken))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
         // reset
         when(tokenBlacklistService.isBlacklisted(anyString())).thenReturn(false);
     }
@@ -131,7 +167,8 @@ class SecurityEnforcementTest {
         // same token must now be rejected
         mockMvc.perform(get("/api/profile")
                         .header("Authorization", "Bearer " + accessToken))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
 
         // reset
         generatedTokenIds.clear();
@@ -143,7 +180,8 @@ class SecurityEnforcementTest {
     void malformed_bearer_denied() throws Exception {
         mockMvc.perform(get("/api/profile")
                         .header("Authorization", "Bearer not.a.jwt"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
     }
 
     @Test
@@ -169,6 +207,7 @@ class SecurityEnforcementTest {
         // Using refresh token as bearer on a protected endpoint should be denied
         mockMvc.perform(get("/api/profile")
                         .header("Authorization", "Bearer " + refreshToken))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
     }
 }

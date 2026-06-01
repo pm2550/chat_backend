@@ -15,6 +15,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -167,6 +168,55 @@ public class ChatRoomIntegrationTest {
     }
 
     @Test
+    @DisplayName("Admin patches announcement and creates system message")
+    void testPatchAnnouncementCreatesSystemMessage() throws Exception {
+        Object[] owner = createUserAndLogin("announceowner");
+        String ownerToken = (String) owner[0];
+        Long roomId = createGroupChat(ownerToken, "Announcement Room " + uniqueSuffix, "old desc", List.of());
+
+        Map<String, Object> request = new HashMap<>();
+        request.put("description", "New group description");
+        request.put("announcement", "明天上午十点发布版本，请所有成员提前保存工作。");
+
+        mockMvc.perform(patch("/api/v1/chat-rooms/" + roomId)
+                .header("Authorization", "Bearer " + ownerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.chatRoom.description").value("New group description"))
+                .andExpect(jsonPath("$.chatRoom.announcement").value("明天上午十点发布版本，请所有成员提前保存工作。"))
+                .andExpect(jsonPath("$.chatRoom.announcementUpdatedAt").exists())
+                .andExpect(jsonPath("$.chatRoom.announcementUpdatedBy").isNumber());
+
+        mockMvc.perform(get("/api/v1/messages/chat-room/" + roomId)
+                .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages[0].messageType").value("SYSTEM"))
+                .andExpect(jsonPath("$.messages[0].content", startsWith("📢 群公告已更新：明天上午十点发布版本")));
+    }
+
+    @Test
+    @DisplayName("Non-admin cannot patch announcement")
+    void testPatchAnnouncementRejectsNonAdmin() throws Exception {
+        Object[] owner = createUserAndLogin("announceadmin");
+        String ownerToken = (String) owner[0];
+        Object[] member = createUserAndLogin("announcemember");
+        String memberToken = (String) member[0];
+        Long memberId = (Long) member[1];
+        Long roomId = createGroupChat(ownerToken, "Announcement Authz " + uniqueSuffix, "desc", List.of(memberId));
+
+        Map<String, Object> request = new HashMap<>();
+        request.put("announcement", "非管理员不能发公告");
+
+        mockMvc.perform(patch("/api/v1/chat-rooms/" + roomId)
+                .header("Authorization", "Bearer " + memberToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error", containsString("无权限")));
+    }
+
+    @Test
     @DisplayName("Get user chat rooms list")
     void testGetUserChatRooms() throws Exception {
         Object[] user = createUserAndLogin("roomlister");
@@ -249,6 +299,149 @@ public class ChatRoomIntegrationTest {
     }
 
     @Test
+    @DisplayName("Member can read and update room notification settings")
+    void testNotificationSettings() throws Exception {
+        Object[] user = createUserAndLogin("notifyuser");
+        String token = (String) user[0];
+
+        Long roomId = createGroupChat(token, "Notify Test " + uniqueSuffix, "Notify test", List.of());
+
+        mockMvc.perform(get("/api/v1/chat-rooms/" + roomId + "/notification-settings")
+                .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.roomId").value(roomId))
+                .andExpect(jsonPath("$.muted").value(false))
+                .andExpect(jsonPath("$.notificationLevel").value("ALL"));
+
+        mockMvc.perform(put("/api/v1/chat-rooms/" + roomId + "/notification-settings")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"muted\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.muted").value(true))
+                .andExpect(jsonPath("$.notificationLevel").value("MUTE"));
+    }
+
+    @Test
+    @DisplayName("Room background overrides are admin-only and support preset/upload/clear")
+    void testRoomBackgroundOverrides() throws Exception {
+        Object[] owner = createUserAndLogin("bgowner");
+        String ownerToken = (String) owner[0];
+        Object[] member = createUserAndLogin("bgmember");
+        String memberToken = (String) member[0];
+        Long memberId = (Long) member[1];
+        Long roomId = createGroupChat(ownerToken, "Background Test " + uniqueSuffix, "bg", List.of(memberId));
+
+        mockMvc.perform(put("/api/v1/chat-rooms/" + roomId + "/background-preset")
+                .header("Authorization", "Bearer " + ownerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"preset\":\"aurora\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.chatRoom.customBackgroundPreset").value("aurora"))
+                .andExpect(jsonPath("$.customBackgroundPreset").value("aurora"));
+
+        mockMvc.perform(put("/api/v1/chat-rooms/" + roomId + "/background-preset")
+                .header("Authorization", "Bearer " + memberToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"preset\":\"pixel_mint\"}"))
+                .andExpect(status().isForbidden());
+
+        MockMultipartFile background = new MockMultipartFile(
+                "file",
+                "room.webp",
+                "image/webp",
+                new byte[]{1, 2, 3, 4, 5});
+
+        mockMvc.perform(multipart("/api/v1/chat-rooms/" + roomId + "/background-upload")
+                .file(background)
+                .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.chatRoom.customBackgroundPreset").value("aurora"))
+                .andExpect(jsonPath("$.chatRoom.customBackgroundUrl", startsWith("/api/files/background/")));
+
+        mockMvc.perform(delete("/api/v1/chat-rooms/" + roomId + "/background")
+                .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.customBackgroundPreset").value(nullValue()))
+                .andExpect(jsonPath("$.customBackgroundUrl").value(nullValue()));
+
+        mockMvc.perform(put("/api/v1/rooms/" + roomId + "/background-preset")
+                .header("Authorization", "Bearer " + ownerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"preset\":\"pixel_mint\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.chatRoom.customBackgroundPreset").value("pixel_mint"));
+    }
+
+    @Test
+    @DisplayName("Admin uploads group avatar and non-images are rejected")
+    void testRoomAvatarUpload() throws Exception {
+        Object[] owner = createUserAndLogin("avatarowner");
+        String ownerToken = (String) owner[0];
+        Object[] member = createUserAndLogin("avatarmember");
+        String memberToken = (String) member[0];
+        Long memberId = (Long) member[1];
+        Long roomId = createGroupChat(ownerToken, "Avatar Test " + uniqueSuffix, "avatar", List.of(memberId));
+
+        MockMultipartFile avatar = new MockMultipartFile(
+                "file",
+                "room.png",
+                "image/png",
+                new byte[]{1, 2, 3, 4, 5});
+
+        mockMvc.perform(multipart("/api/v1/chat-rooms/" + roomId + "/avatar")
+                .file(avatar)
+                .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.avatarUrl", startsWith("/api/files/avatar/")))
+                .andExpect(jsonPath("$.chatRoom.avatarUrl", startsWith("/api/files/avatar/")));
+
+        MockMultipartFile nonImage = new MockMultipartFile(
+                "file",
+                "notes.txt",
+                "text/plain",
+                "not an image".getBytes());
+
+        mockMvc.perform(multipart("/api/v1/chat-rooms/" + roomId + "/avatar")
+                .file(nonImage)
+                .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error", containsString("不支持")));
+
+        MockMultipartFile memberAvatar = new MockMultipartFile(
+                "file",
+                "member.png",
+                "image/png",
+                new byte[]{1, 2, 3});
+
+        mockMvc.perform(multipart("/api/v1/chat-rooms/" + roomId + "/avatar")
+                .file(memberAvatar)
+                .header("Authorization", "Bearer " + memberToken))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Non-admin room member cannot set room background preset")
+    void testNonAdminCannotSetRoomBackgroundPreset() throws Exception {
+        Object[] owner = createUserAndLogin("bglockowner");
+        String ownerToken = (String) owner[0];
+        Object[] member = createUserAndLogin("bglockmember");
+        String memberToken = (String) member[0];
+        Long memberId = (Long) member[1];
+        Long roomId = createGroupChat(
+                ownerToken,
+                "Background Permission " + uniqueSuffix,
+                "bg permission",
+                List.of(memberId));
+
+        mockMvc.perform(put("/api/v1/chat-rooms/" + roomId + "/background-preset")
+                .header("Authorization", "Bearer " + memberToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"preset\":\"aurora\"}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     @DisplayName("Kick member from chat room (admin operation)")
     void testKickMember() throws Exception {
         Object[] admin = createUserAndLogin("admin");
@@ -288,6 +481,51 @@ public class ChatRoomIntegrationTest {
         mockMvc.perform(post("/api/v1/chat-rooms/" + roomId + "/members/" + memberId + "/toggle-admin")
                 .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Admin can invite a member and member summaries do not expose secrets")
+    void testAdminCanInviteMember() throws Exception {
+        Object[] admin = createUserAndLogin("inviteadmin");
+        String adminToken = (String) admin[0];
+
+        Object[] invited = createUserAndLogin("invited");
+        Long invitedId = (Long) invited[1];
+
+        Long roomId = createGroupChat(adminToken, "Invite Test " + uniqueSuffix, "Invite test", List.of());
+
+        mockMvc.perform(post("/api/v1/chat-rooms/" + roomId + "/members/" + invitedId)
+                .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(2))
+                .andExpect(jsonPath("$.members").isArray())
+                .andExpect(jsonPath("$.members[*].user.password").doesNotExist())
+                .andExpect(jsonPath("$.members[*].user.roles").doesNotExist())
+                .andExpect(jsonPath("$.members[*].userId", hasItem(invitedId.intValue())));
+
+        mockMvc.perform(post("/api/v1/chat-rooms/" + roomId + "/members/" + invitedId)
+                .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("Non-admin cannot invite members")
+    void testNonAdminCannotInvite() throws Exception {
+        Object[] admin = createUserAndLogin("inviteowner");
+        String adminToken = (String) admin[0];
+
+        Object[] member = createUserAndLogin("invitemember");
+        String memberToken = (String) member[0];
+        Long memberId = (Long) member[1];
+
+        Object[] invited = createUserAndLogin("inviteblocked");
+        Long invitedId = (Long) invited[1];
+
+        Long roomId = createGroupChat(adminToken, "Invite Deny Test " + uniqueSuffix, "Invite deny", List.of(memberId));
+
+        mockMvc.perform(post("/api/v1/chat-rooms/" + roomId + "/members/" + invitedId)
+                .header("Authorization", "Bearer " + memberToken))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

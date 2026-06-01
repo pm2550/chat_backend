@@ -55,6 +55,23 @@ public class FriendshipService {
             return acceptFriendRequest(userId, friendId);
         }
 
+        Friendship existingDirect = friendshipRepository.findDirectFriendship(userId, friendId)
+                .orElse(null);
+        if (existingDirect != null) {
+            if (existingDirect.getStatus() == Friendship.FriendshipStatus.DECLINED
+                    && !Boolean.TRUE.equals(existingDirect.getIsBlocked())) {
+                existingDirect.setStatus(Friendship.FriendshipStatus.PENDING);
+                existingDirect.setAcceptedAt(null);
+                existingDirect = friendshipRepository.save(existingDirect);
+                log.info("用户 {} 重新向用户 {} 发送好友请求", user.getUsername(), friend.getUsername());
+                return existingDirect;
+            }
+            if (Boolean.TRUE.equals(existingDirect.getIsBlocked())
+                    || existingDirect.getStatus() == Friendship.FriendshipStatus.BLOCKED) {
+                throw new IllegalArgumentException("用户已被屏蔽");
+            }
+        }
+
         // 创建新的好友请求
         Friendship friendship = new Friendship(user, friend);
         friendship = friendshipRepository.save(friendship);
@@ -67,13 +84,8 @@ public class FriendshipService {
      * 接受好友请求
      */
     public Friendship acceptFriendRequest(Long userId, Long friendId) {
-        Friendship friendship = friendshipRepository.findFriendshipBetween(userId, friendId)
+        Friendship friendship = friendshipRepository.findPendingRequestFromSenderToReceiver(friendId, userId)
                 .orElseThrow(() -> new RuntimeException("好友请求不存在"));
-
-        // 检查请求状态
-        if (friendship.getStatus() != Friendship.FriendshipStatus.PENDING) {
-            throw new IllegalArgumentException("好友请求状态无效");
-        }
 
         // 检查权限（只有接收方可以接受请求）
         if (!friendship.getFriend().getId().equals(userId)) {
@@ -94,7 +106,7 @@ public class FriendshipService {
      * 拒绝好友请求
      */
     public void declineFriendRequest(Long userId, Long friendId) {
-        Friendship friendship = friendshipRepository.findFriendshipBetween(userId, friendId)
+        Friendship friendship = friendshipRepository.findPendingRequestFromSenderToReceiver(friendId, userId)
                 .orElseThrow(() -> new RuntimeException("好友请求不存在"));
 
         // 检查权限
@@ -255,15 +267,20 @@ public class FriendshipService {
                     return friend;
                 })
                 .filter(friend -> {
+                    String displayName = friend.getDisplayName() != null ? friend.getDisplayName() : "";
+                    String username = friend.getUsername() != null ? friend.getUsername() : "";
+                    String email = friend.getEmail() != null ? friend.getEmail() : "";
                     String alias = friendships.stream()
                         .filter(f -> (f.getUser().getId().equals(userId) ? f.getFriend() : f.getUser()).getId().equals(friend.getId()))
                         .findFirst()
                         .map(Friendship::getFriendAlias)
                         .orElse(null);
-                    
-                    return friend.getDisplayName().toLowerCase().contains(keyword.toLowerCase()) ||
-                           friend.getUsername().toLowerCase().contains(keyword.toLowerCase()) ||
-                           (alias != null && alias.toLowerCase().contains(keyword.toLowerCase()));
+
+                    String normalizedKeyword = keyword.toLowerCase();
+                    return displayName.toLowerCase().contains(normalizedKeyword) ||
+                           username.toLowerCase().contains(normalizedKeyword) ||
+                           email.toLowerCase().contains(normalizedKeyword) ||
+                           (alias != null && alias.toLowerCase().contains(normalizedKeyword));
                 })
                 .collect(Collectors.toList());
     }
@@ -282,4 +299,4 @@ public class FriendshipService {
                 })
                 .collect(Collectors.toList());
     }
-} 
+}

@@ -14,6 +14,9 @@ public class AnonymousDto {
     private String anonymousName;
     private String anonymousAvatar;
     private Boolean customNameUsed;
+    private ThemeInfo theme;
+    private Integer dailyRemaining;
+    private String quotaResetsAt;
 
     @Data
     @NoArgsConstructor
@@ -30,5 +33,36 @@ public class AnonymousDto {
         private String anonymousName;
         private String anonymousAvatar;
         private Boolean isAnonymous;
+        private ThemeInfo theme;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ThemeInfo {
+        private Long id;
+        private String themeKey;
+        private String displayName;
+        private String description;
+        private String accentColor;
+        private String backgroundColor;
+        private String messageColor;
+        private String personaPrefix;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ThemeRequest {
+        private String themeKey;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class QuotaInfo {
+        private Integer used;
+        private Integer remaining;
+        private String resetsAt;
     }
 }

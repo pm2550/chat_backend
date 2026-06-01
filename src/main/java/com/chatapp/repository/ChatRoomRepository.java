@@ -68,14 +68,57 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
     @Query("DELETE FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
     void removeMember(@Param("roomId") Long roomId, @Param("userId") Long userId);
 
-    @Query("SELECT cr FROM ChatRoom cr WHERE cr.isActive = true AND EXISTS (SELECT 1 FROM ChatRoomMember crm WHERE crm.chatRoom = cr AND crm.user.id = :userId)")
+    @Query("SELECT cr FROM ChatRoomMember crm JOIN crm.chatRoom cr " +
+           "WHERE crm.user.id = :userId AND cr.isActive = true " +
+           "ORDER BY COALESCE(crm.isPinned, false) DESC, cr.updatedAt DESC")
     Page<ChatRoom> findByUserId(@Param("userId") Long userId, Pageable pageable);
 
-    @Query("SELECT crm FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId")
+    @Query("SELECT crm FROM ChatRoomMember crm JOIN FETCH crm.user WHERE crm.chatRoom.id = :roomId")
     List<ChatRoomMember> findMembersByRoomId(@Param("roomId") Long roomId);
 
     @Query("SELECT crm.user.id FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId")
     List<Long> findMemberUserIdsByRoomId(@Param("roomId") Long roomId);
+
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.unreadCount = COALESCE(crm.unreadCount, 0) + 1 " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id <> :senderId")
+    int incrementUnreadForRoomMembersExcept(@Param("roomId") Long roomId, @Param("senderId") Long senderId);
+
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.unreadCount = CASE WHEN COALESCE(crm.unreadCount, 0) > 0 THEN crm.unreadCount - 1 ELSE 0 END, " +
+           "crm.lastReadMessageId = CASE WHEN crm.lastReadMessageId IS NULL OR crm.lastReadMessageId < :messageId THEN :messageId ELSE crm.lastReadMessageId END " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    int markMessageReadForMember(@Param("roomId") Long roomId,
+                                 @Param("userId") Long userId,
+                                 @Param("messageId") Long messageId);
+
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.unreadCount = 0, crm.lastReadMessageId = :lastReadMessageId " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    int markRoomReadForMember(@Param("roomId") Long roomId,
+                              @Param("userId") Long userId,
+                              @Param("lastReadMessageId") Long lastReadMessageId);
+
+    @Query("SELECT COALESCE(crm.unreadCount, 0) FROM ChatRoomMember crm " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    Optional<Integer> findUnreadCount(@Param("roomId") Long roomId, @Param("userId") Long userId);
+
+    @Query("SELECT crm FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    Optional<ChatRoomMember> findMember(@Param("roomId") Long roomId, @Param("userId") Long userId);
+
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.isMuted = :muted " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    int updateNotificationMuted(@Param("roomId") Long roomId,
+                                @Param("userId") Long userId,
+                                @Param("muted") boolean muted);
+
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.isPinned = :pinned " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    int updatePinned(@Param("roomId") Long roomId,
+                     @Param("userId") Long userId,
+                     @Param("pinned") boolean pinned);
 
     @Query("SELECT cr FROM ChatRoom cr WHERE cr.isPrivate = false AND cr.isActive = true AND " +
            "(LOWER(cr.name) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +

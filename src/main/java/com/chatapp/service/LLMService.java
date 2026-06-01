@@ -21,6 +21,7 @@ public class LLMService {
 
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
+    private final ProviderCredentialService providerCredentialService;
 
     @Value("${llm.openai.api-key:}")
     private String openaiApiKey;
@@ -48,8 +49,16 @@ public class LLMService {
     @Value("${llm.ollama.model:llama3}")
     private String ollamaModel;
 
-    public LLMService(ObjectMapper objectMapper) {
+    @Value("${llm.hermes.api-key:}")
+    private String hermesApiKey;
+    @Value("${llm.hermes.base-url:http://127.0.0.1:8642/v1}")
+    private String hermesBaseUrl;
+    @Value("${llm.hermes.model:hermes-agent}")
+    private String hermesModel;
+
+    public LLMService(ObjectMapper objectMapper, ProviderCredentialService providerCredentialService) {
         this.objectMapper = objectMapper;
+        this.providerCredentialService = providerCredentialService;
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(120, TimeUnit.SECONDS)
@@ -60,22 +69,27 @@ public class LLMService {
     public BotDto.LLMResponse chat(BotConfig botConfig, List<BotDto.ChatMessage> messages) {
         return switch (botConfig.getLlmProvider()) {
             case OPENAI -> callOpenAICompatible(
-                    resolveApiKey(botConfig, openaiApiKey),
+                    requireApiKey(resolveApiKey(botConfig, openaiApiKey), "OpenAI"),
                     openaiBaseUrl,
                     resolveModel(botConfig, openaiModel),
                     messages, botConfig);
             case CLAUDE -> callClaude(
-                    resolveApiKey(botConfig, claudeApiKey),
+                    requireApiKey(resolveApiKey(botConfig, claudeApiKey), "Claude"),
                     claudeBaseUrl,
                     resolveModel(botConfig, claudeModel),
                     messages, botConfig);
             case DEEPSEEK -> callOpenAICompatible(
-                    resolveApiKey(botConfig, deepseekApiKey),
+                    requireApiKey(resolveApiKey(botConfig, deepseekApiKey), "DeepSeek"),
                     deepseekBaseUrl,
                     resolveModel(botConfig, deepseekModel),
                     messages, botConfig);
             case OLLAMA -> callOllama(
                     resolveModel(botConfig, ollamaModel),
+                    messages, botConfig);
+            case HERMES -> callOpenAICompatible(
+                    requireApiKey(resolveApiKey(botConfig, hermesApiKey), "Hermes"),
+                    hermesBaseUrl,
+                    resolveModel(botConfig, hermesModel),
                     messages, botConfig);
         };
     }
@@ -225,11 +239,24 @@ public class LLMService {
         }
     }
 
-    private String resolveApiKey(BotConfig config, String defaultKey) {
+    String resolveApiKey(BotConfig config, String defaultKey) {
+        if (config.getProviderCredential() != null) {
+            String credentialKey = providerCredentialService.decrypt(config.getProviderCredential());
+            if (credentialKey != null && !credentialKey.isBlank()) {
+                return credentialKey;
+            }
+        }
         if (config.getApiKeyEncrypted() != null && !config.getApiKeyEncrypted().isEmpty()) {
-            return config.getApiKeyEncrypted(); // TODO: decrypt in production
+            return providerCredentialService.decryptLegacyBotKey(config.getApiKeyEncrypted());
         }
         return defaultKey;
+    }
+
+    private String requireApiKey(String apiKey, String provider) {
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException(provider + " API key is not configured");
+        }
+        return apiKey;
     }
 
     private String resolveModel(BotConfig config, String defaultModel) {

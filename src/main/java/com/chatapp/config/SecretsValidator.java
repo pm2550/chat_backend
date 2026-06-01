@@ -45,6 +45,36 @@ public class SecretsValidator {
     @Value("${websocket.allowed-origins:}")
     private String wsOrigins;
 
+    @Value("${file.storage.upload-dir:}")
+    private String fileUploadDir;
+
+    @Value("${llm.required:false}")
+    private boolean llmRequired;
+
+    @Value("${llm.openai.api-key:}")
+    private String openaiApiKey;
+
+    @Value("${llm.claude.api-key:}")
+    private String claudeApiKey;
+
+    @Value("${llm.deepseek.api-key:}")
+    private String deepseekApiKey;
+
+    @Value("${llm.ollama.base-url:}")
+    private String ollamaBaseUrl;
+
+    @Value("${llm.hermes.api-key:}")
+    private String hermesApiKey;
+
+    @Value("${llm.hermes.base-url:}")
+    private String hermesBaseUrl;
+
+    @Value("${agent.gateway.enabled:false}")
+    private boolean agentGatewayEnabled;
+
+    @Value("${agent.gateway.base-url:}")
+    private String agentGatewayBaseUrl;
+
     public SecretsValidator(Environment environment) {
         this.environment = environment;
     }
@@ -92,7 +122,32 @@ public class SecretsValidator {
             fail("WS_ALLOWED_ORIGINS must be a comma-separated list with no wildcards in prod");
         }
 
+        if (fileUploadDir == null || fileUploadDir.isBlank() || !fileUploadDir.startsWith("/")) {
+            fail("FILE_UPLOAD_PATH must be an absolute writable path in prod");
+        }
+
+        if (agentGatewayEnabled && isBlank(agentGatewayBaseUrl)) {
+            fail("AGENT_GATEWAY_ENABLED=true requires AGENT_GATEWAY_BASE_URL");
+        }
+
+        if (llmRequired && !hasAnyExternalModelProvider()) {
+            fail("LLM_REQUIRED=true but no LLM key, Ollama URL, or Agent Gateway is configured");
+        }
+
         log.info("SecretsValidator: prod profile passed");
+    }
+
+    private boolean hasAnyExternalModelProvider() {
+        return !isBlank(openaiApiKey)
+                || !isBlank(claudeApiKey)
+                || !isBlank(deepseekApiKey)
+                || !isBlank(ollamaBaseUrl)
+                || (!isBlank(hermesApiKey) && !isBlank(hermesBaseUrl))
+                || (agentGatewayEnabled && !isBlank(agentGatewayBaseUrl));
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private void fail(String message) {

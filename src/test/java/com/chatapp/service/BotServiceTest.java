@@ -5,6 +5,7 @@ import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.ChatRoomBot;
 import com.chatapp.entity.Message;
+import com.chatapp.entity.ProviderCredential;
 import com.chatapp.entity.User;
 import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
@@ -37,6 +38,7 @@ class BotServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private MessageRepository messageRepository;
     @Mock private LLMService llmService;
+    @Mock private ProviderCredentialService providerCredentialService;
 
     @InjectMocks private BotService service;
 
@@ -77,7 +79,14 @@ class BotServiceTest {
         req.setModelName("claude-sonnet");
         req.setSystemPrompt("helpful");
         // temperature/maxTokens intentionally null
+        ProviderCredential credential = new ProviderCredential();
+        credential.setId(99L);
+        credential.setLlmProvider(BotConfig.LLMProvider.CLAUDE);
+        credential.setLabel("NewBot CLAUDE key");
+        credential.setSecretLast4("-key");
         when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(providerCredentialService.createForBot(eq(1L), eq(BotConfig.LLMProvider.CLAUDE), anyString(), eq("secret-key")))
+                .thenReturn(credential);
         when(botConfigRepository.save(any(BotConfig.class)))
                 .thenAnswer(inv -> { ((BotConfig) inv.getArgument(0)).setId(11L); return inv.getArgument(0); });
 
@@ -91,7 +100,8 @@ class BotServiceTest {
         verify(botConfigRepository).save(captor.capture());
         assertEquals(0.7, captor.getValue().getTemperature()); // default
         assertEquals(2048, captor.getValue().getMaxTokens()); // default
-        assertEquals("secret-key", captor.getValue().getApiKeyEncrypted());
+        assertNull(captor.getValue().getApiKeyEncrypted());
+        assertEquals(credential, captor.getValue().getProviderCredential());
     }
 
     @Test
@@ -115,12 +125,25 @@ class BotServiceTest {
         req.setIsActive(false);
         // other fields null
 
-        service.updateBot(10L, req);
+        service.updateBot(10L, alice.getId(), req);
         assertEquals(0.2, bot.getTemperature());
         assertEquals(false, bot.getIsActive());
         // unchanged
         assertEquals("gpt-4o", bot.getModelName());
         assertEquals("GPT-Helper", bot.getBotName());
+    }
+
+    @Test
+    @DisplayName("updateBot forbids non-owner credential changes")
+    void update_non_owner_forbidden() {
+        when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));
+        BotDto.UpdateRequest req = new BotDto.UpdateRequest();
+        req.setProviderCredentialId(123L);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.updateBot(10L, 999L, req));
+        verify(providerCredentialService, never()).getOwnedCredential(any(), any());
+        verify(botConfigRepository, never()).save(any());
     }
 
     @Test
@@ -130,6 +153,22 @@ class BotServiceTest {
         List<BotDto> dtos = service.getMyBots(1L);
         assertEquals(1, dtos.size());
         assertEquals("GPT-Helper", dtos.get(0).getBotName());
+    }
+
+    @Test
+    @DisplayName("getBotsInChatRoom uses fetched bot configs")
+    void get_bots_in_chat_room() {
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setChatRoom(room);
+        crb.setBotConfig(bot);
+        crb.setIsActive(true);
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+
+        List<BotDto> dtos = service.getBotsInChatRoom(100L);
+
+        assertEquals(1, dtos.size());
+        assertEquals("GPT-Helper", dtos.get(0).getBotName());
+        verify(chatRoomBotRepository).findActiveBotsWithConfig(100L);
     }
 
     @Test
@@ -191,12 +230,44 @@ class BotServiceTest {
         when(llmService.chat(any(BotConfig.class), any()))
                 .thenReturn(new BotDto.LLMResponse("hello back", 42, "gpt-4o"));
         when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
         when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
 
         service.processMessageForBots(100L, "@GPT-Helper what's up", 1L);
 
         verify(llmService).chat(eq(bot), any());
-        verify(messageRepository).save(any(Message.class));
+        ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
+        verify(messageRepository).save(captor.capture());
+        Message saved = captor.getValue();
+        assertEquals("hello back", saved.getContent());
+        assertEquals(Message.MessageType.TEXT, saved.getMessageType());
+        assertEquals(bot, saved.getBotConfig());
+    }
+
+    @Test
+    @DisplayName("processMessageForBots saves bot media URL replies as attachment messages")
+    void process_media_url_reply() {
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.ALL);
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(llmService.chat(any(BotConfig.class), any()))
+                .thenReturn(new BotDto.LLMResponse("done https://cdn.example.com/result.png", 7, "m"));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.processMessageForBots(100L, "make image", 1L);
+
+        ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
+        verify(messageRepository).save(captor.capture());
+        Message saved = captor.getValue();
+        assertEquals(Message.MessageType.IMAGE, saved.getMessageType());
+        assertEquals("result.png", saved.getContent());
+        assertEquals("https://cdn.example.com/result.png", saved.getFileUrl());
+        assertEquals("result.png", saved.getFileName());
+        assertEquals("image/png", saved.getFileType());
+        assertEquals(bot, saved.getBotConfig());
     }
 
     @Test
@@ -222,6 +293,7 @@ class BotServiceTest {
         when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
         when(llmService.chat(any(), any())).thenReturn(new BotDto.LLMResponse("ack", 1, "m"));
         when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
 
         service.processMessageForBots(100L, "I need urgent attention", 1L);
         verify(llmService).chat(any(), any());
@@ -236,6 +308,7 @@ class BotServiceTest {
         when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
         when(llmService.chat(any(), any())).thenReturn(new BotDto.LLMResponse("hi", 1, "m"));
         when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
 
         service.processMessageForBots(100L, "anything", 1L);
         verify(llmService).chat(any(), any());

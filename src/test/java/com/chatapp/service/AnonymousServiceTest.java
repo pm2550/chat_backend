@@ -2,9 +2,11 @@ package com.chatapp.service;
 
 import com.chatapp.dto.AnonymousDto;
 import com.chatapp.entity.AnonymousIdentity;
+import com.chatapp.entity.AnonymousTheme;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.User;
 import com.chatapp.repository.AnonymousIdentityRepository;
+import com.chatapp.repository.AnonymousThemeRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +30,9 @@ class AnonymousServiceTest {
     private AnonymousIdentityRepository anonymousIdentityRepository;
 
     @Mock
+    private AnonymousThemeRepository anonymousThemeRepository;
+
+    @Mock
     private ChatRoomRepository chatRoomRepository;
 
     @Mock
@@ -39,6 +44,7 @@ class AnonymousServiceTest {
     private User testUser;
     private ChatRoom testRoom;
     private AnonymousIdentity testIdentity;
+    private AnonymousTheme testTheme;
 
     @BeforeEach
     void setUp() {
@@ -50,6 +56,15 @@ class AnonymousServiceTest {
         testRoom.setId(10L);
         testRoom.setName("Test Room");
         testRoom.setAnonymousEnabled(true);
+
+        testTheme = new AnonymousTheme();
+        testTheme.setId(1L);
+        testTheme.setThemeKey("default");
+        testTheme.setDisplayName("经典匿名");
+        testTheme.setAccentColor("#7C3AED");
+        testTheme.setPersonaPrefix("匿名");
+        lenient().when(anonymousThemeRepository.findByThemeKeyAndIsEnabledTrue(anyString()))
+                .thenReturn(Optional.of(testTheme));
 
         testIdentity = new AnonymousIdentity();
         testIdentity.setId(100L);

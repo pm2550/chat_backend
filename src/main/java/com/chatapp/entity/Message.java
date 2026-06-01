@@ -9,6 +9,8 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * 消息实体类
@@ -35,6 +37,10 @@ public class Message {
     @JoinColumn(name = "sender_id", nullable = false)
     private User sender;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "bot_config_id")
+    private BotConfig botConfig;
+
     @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "chat_room_id", nullable = false)
@@ -43,6 +49,14 @@ public class Message {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "reply_to_message_id")
     private Message replyToMessage;
+
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(
+            name = "message_mentions",
+            joinColumns = @JoinColumn(name = "message_id")
+    )
+    @Column(name = "user_id", nullable = false)
+    private Set<Long> mentionedUserIds = new HashSet<>();
 
     @Column(name = "file_url")
     private String fileUrl;
@@ -58,6 +72,15 @@ public class Message {
 
     @Column(name = "thumbnail_url")
     private String thumbnailUrl;
+
+    @Column(name = "link_preview_json", columnDefinition = "TEXT")
+    private String linkPreviewJson;
+
+    @Column(name = "sticker_id")
+    private Long stickerId;
+
+    @Column(name = "poll_id")
+    private Long pollId;
 
     @Column(name = "duration")
     private Integer duration; // 音频/视频时长（秒）
@@ -119,6 +142,8 @@ public class Message {
         VIDEO("视频"),
         AUDIO("音频"),
         LOCATION("位置"),
+        STICKER("贴纸"),
+        POLL("投票"),
         SYSTEM("系统消息");
 
         private final String description;

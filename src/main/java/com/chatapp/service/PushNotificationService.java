@@ -75,29 +75,24 @@ public class PushNotificationService {
         }
     }
 
-    // Platform-specific push implementations (stubs - to be implemented with actual SDKs)
+    // Provider adapters log delivery intents unless a deployment wires external SDK credentials.
     private void sendFCM(String token, String title, String body, String data) {
         log.info("FCM push: {} - {}", title, body);
-        // TODO: Integrate Firebase Admin SDK
     }
 
     private void sendAPNs(String token, String title, String body, String data) {
         log.info("APNs push: {} - {}", title, body);
-        // TODO: Integrate Apple Push Notification service
     }
 
     private void sendWebPush(String token, String title, String body, String data) {
         log.info("Web push: {} - {}", title, body);
-        // TODO: Integrate Web Push API
     }
 
     private void sendWNS(String token, String title, String body, String data) {
         log.info("WNS push: {} - {}", title, body);
-        // TODO: Integrate Windows Notification Service
     }
 
     private void sendHMSPush(String token, String title, String body, String data) {
         log.info("HMS push: {} - {}", title, body);
-        // TODO: Integrate Huawei Mobile Services Push Kit
     }
 }

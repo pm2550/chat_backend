@@ -1,9 +1,11 @@
 package com.chatapp.service;
 
 import com.chatapp.entity.ChatRoom;
+import com.chatapp.entity.ChatRoomMember;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
+import com.chatapp.repository.ChatRoomClearStateRepository;
 import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.UserRepository;
 import org.junit.jupiter.api.Test;
@@ -19,6 +21,7 @@ import org.springframework.data.domain.Pageable;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -32,6 +35,9 @@ class MessageServiceTest {
 
     @Mock
     private ChatRoomRepository chatRoomRepository;
+
+    @Mock
+    private ChatRoomClearStateRepository clearStateRepository;
 
     @Mock
     private UserRepository userRepository;
@@ -69,6 +75,15 @@ class MessageServiceTest {
         return msg;
     }
 
+    private void addMember(ChatRoom room, User user, String nickname) {
+        ChatRoomMember member = new ChatRoomMember();
+        member.setId(user.getId());
+        member.setChatRoom(room);
+        member.setUser(user);
+        member.setNickname(nickname);
+        room.getMembers().add(member);
+    }
+
     // ---- sendMessage ----
 
     @Test
@@ -94,6 +109,7 @@ class MessageServiceTest {
         assertSame(sender, result.getSender());
         assertSame(room, result.getChatRoom());
         verify(messageRepository).save(any(Message.class));
+        verify(chatRoomRepository).incrementUnreadForRoomMembersExcept(10L, 1L);
     }
 
     @Test
@@ -127,6 +143,52 @@ class MessageServiceTest {
         assertTrue(ex.getMessage().contains("禁言"));
     }
 
+    @Test
+    void testSendMessage_StoresMentionedUserIds() {
+        User sender = createTestUser(1L, "sender");
+        sender.setDisplayName("发送者");
+        User target = createTestUser(2L, "luming");
+        target.setDisplayName("陆铭");
+        ChatRoom room = createTestChatRoom(10L, sender);
+        addMember(room, sender, null);
+        addMember(room, target, "老陆");
+
+        when(userRepository.findById(1L)).thenReturn(Optional.of(sender));
+        when(chatRoomRepository.findById(10L)).thenReturn(Optional.of(room));
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(chatRoomRepository.isMuted(10L, 1L)).thenReturn(false);
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> {
+            Message m = inv.getArgument(0);
+            m.setId(100L);
+            return m;
+        });
+
+        Message result = messageService.sendMessage(
+                1L,
+                10L,
+                "hi @陆铭 @老陆 @sender @不存在",
+                Message.MessageType.TEXT);
+
+        assertEquals(Set.of(1L, 2L), result.getMentionedUserIds());
+    }
+
+    @Test
+    void testResolveMentionedUserIds_EdgeCases() {
+        User sender = createTestUser(1L, "sender");
+        sender.setDisplayName("Me");
+        User target = createTestUser(2L, "alice");
+        target.setDisplayName("Alice");
+        ChatRoom room = createTestChatRoom(10L, sender);
+        addMember(room, sender, null);
+        addMember(room, target, null);
+
+        assertEquals(Set.of(), messageService.resolveMentionedUserIds("@", room));
+        assertEquals(Set.of(), messageService.resolveMentionedUserIds("\\@Alice", room));
+        assertEquals(Set.of(), messageService.resolveMentionedUserIds("@Missing", room));
+        assertEquals(Set.of(1L), messageService.resolveMentionedUserIds("@Me", room));
+        assertEquals(Set.of(2L), messageService.resolveMentionedUserIds("@alice,", room));
+    }
+
     // ---- sendFileMessage ----
 
     @Test
@@ -154,6 +216,7 @@ class MessageServiceTest {
         assertEquals(1024L, result.getFileSize());
         assertEquals(Message.MessageType.FILE, result.getMessageType());
         verify(messageRepository).save(any(Message.class));
+        verify(chatRoomRepository).incrementUnreadForRoomMembersExcept(10L, 1L);
     }
 
     // ---- replyToMessage ----
@@ -164,7 +227,7 @@ class MessageServiceTest {
         ChatRoom room = createTestChatRoom(10L, sender);
         Message originalMsg = createTestMessage(50L, sender, room);
 
-        when(messageRepository.findById(50L)).thenReturn(Optional.of(originalMsg));
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(originalMsg));
         // sendMessage internals
         when(userRepository.findById(1L)).thenReturn(Optional.of(sender));
         when(chatRoomRepository.findById(10L)).thenReturn(Optional.of(room));
@@ -190,7 +253,7 @@ class MessageServiceTest {
         ChatRoom room2 = createTestChatRoom(20L, sender);
         Message originalMsg = createTestMessage(50L, sender, room2); // in room2
 
-        when(messageRepository.findById(50L)).thenReturn(Optional.of(originalMsg));
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(originalMsg));
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> messageService.replyToMessage(1L, 10L, 50L, "Reply", Message.MessageType.TEXT));
@@ -206,6 +269,7 @@ class MessageServiceTest {
         Page<Message> page = new PageImpl<>(Collections.emptyList());
 
         when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(clearStateRepository.findByUserIdAndChatRoomId(1L, 10L)).thenReturn(Optional.empty());
         when(messageRepository.findByChatRoomIdOrderByCreatedAtDesc(10L, pageable)).thenReturn(page);
 
         Page<Message> result = messageService.getChatRoomMessages(10L, 1L, pageable);
@@ -240,6 +304,7 @@ class MessageServiceTest {
         messageService.markMessageAsRead(50L, 2L);
 
         verify(messageRepository).markAsRead(50L, 2L);
+        verify(chatRoomRepository).markMessageReadForMember(10L, 2L, 50L);
     }
 
     @Test
@@ -265,7 +330,7 @@ class MessageServiceTest {
         Message msg = createTestMessage(50L, sender, room);
         msg.setCreatedAt(LocalDateTime.now().minusSeconds(30)); // within 2 min
 
-        when(messageRepository.findById(50L)).thenReturn(Optional.of(msg));
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(msg));
         when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
 
         messageService.recallMessage(50L, 1L);
@@ -281,7 +346,7 @@ class MessageServiceTest {
         ChatRoom room = createTestChatRoom(10L, sender);
         Message msg = createTestMessage(50L, sender, room);
 
-        when(messageRepository.findById(50L)).thenReturn(Optional.of(msg));
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(msg));
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> messageService.recallMessage(50L, 2L));
@@ -296,7 +361,7 @@ class MessageServiceTest {
         Message msg = createTestMessage(50L, sender, room);
         msg.setCreatedAt(LocalDateTime.now().minusMinutes(5)); // past 2 min
 
-        when(messageRepository.findById(50L)).thenReturn(Optional.of(msg));
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(msg));
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> messageService.recallMessage(50L, 1L));
@@ -313,7 +378,7 @@ class MessageServiceTest {
         ChatRoom room = createTestChatRoom(10L, sender);
         Message msg = createTestMessage(50L, sender, room);
 
-        when(messageRepository.findById(50L)).thenReturn(Optional.of(msg));
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(msg));
         when(chatRoomRepository.isAdmin(10L, 2L)).thenReturn(true);
         when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -330,7 +395,7 @@ class MessageServiceTest {
         ChatRoom room = createTestChatRoom(10L, sender);
         Message msg = createTestMessage(50L, sender, room);
 
-        when(messageRepository.findById(50L)).thenReturn(Optional.of(msg));
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(msg));
         when(chatRoomRepository.isAdmin(10L, 3L)).thenReturn(false);
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,

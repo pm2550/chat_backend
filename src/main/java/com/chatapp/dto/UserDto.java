@@ -21,6 +21,7 @@ public class UserDto {
     private String phone;
     private String displayName;
     private String avatarUrl;
+    private String avatarFramePreset;
     private String bio;
     private User.OnlineStatus onlineStatus;
     private LocalDateTime lastSeen;

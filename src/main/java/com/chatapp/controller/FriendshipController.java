@@ -37,7 +37,7 @@ public class FriendshipController {
             
             Map<String, Object> response = new HashMap<>();
             response.put("message", "好友请求已发送");
-            response.put("friendship", friendship);
+            response.put("friendship", toFriendshipSummary(friendship));
             
             return ResponseEntity.ok(response);
         } catch (Exception e) {
@@ -57,7 +57,7 @@ public class FriendshipController {
             
             Map<String, Object> response = new HashMap<>();
             response.put("message", "已接受好友请求");
-            response.put("friendship", friendship);
+            response.put("friendship", toFriendshipSummary(friendship));
             
             return ResponseEntity.ok(response);
         } catch (Exception e) {
@@ -176,7 +176,7 @@ public class FriendshipController {
             List<User> friends = friendshipService.getFriends(currentUser.getId());
             
             Map<String, Object> response = new HashMap<>();
-            response.put("friends", friends);
+            response.put("friends", toUserSummaries(friends));
             response.put("count", friends.size());
             
             return ResponseEntity.ok(response);
@@ -196,7 +196,7 @@ public class FriendshipController {
             List<Friendship> requests = friendshipService.getPendingFriendRequests(currentUser.getId());
             
             Map<String, Object> response = new HashMap<>();
-            response.put("requests", requests);
+            response.put("requests", toFriendshipSummaries(requests));
             response.put("count", requests.size());
             
             return ResponseEntity.ok(response);
@@ -216,7 +216,7 @@ public class FriendshipController {
             List<Friendship> requests = friendshipService.getSentFriendRequests(currentUser.getId());
             
             Map<String, Object> response = new HashMap<>();
-            response.put("requests", requests);
+            response.put("requests", toFriendshipSummaries(requests));
             response.put("count", requests.size());
             
             return ResponseEntity.ok(response);
@@ -236,7 +236,7 @@ public class FriendshipController {
             List<User> friends = friendshipService.searchFriends(currentUser.getId(), keyword);
             
             Map<String, Object> response = new HashMap<>();
-            response.put("friends", friends);
+            response.put("friends", toUserSummaries(friends));
             response.put("count", friends.size());
             response.put("keyword", keyword);
             
@@ -257,7 +257,7 @@ public class FriendshipController {
             List<User> friends = friendshipService.getPinnedFriends(currentUser.getId());
             
             Map<String, Object> response = new HashMap<>();
-            response.put("friends", friends);
+            response.put("friends", toUserSummaries(friends));
             response.put("count", friends.size());
             
             return ResponseEntity.ok(response);
@@ -309,4 +309,49 @@ public class FriendshipController {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
-} 
+
+    private List<Map<String, Object>> toUserSummaries(List<User> users) {
+        return users.stream()
+                .map(this::toUserSummary)
+                .toList();
+    }
+
+    private List<Map<String, Object>> toFriendshipSummaries(List<Friendship> friendships) {
+        return friendships.stream()
+                .map(this::toFriendshipSummary)
+                .toList();
+    }
+
+    private Map<String, Object> toFriendshipSummary(Friendship friendship) {
+        Map<String, Object> summary = new HashMap<>();
+        summary.put("id", friendship.getId());
+        summary.put("status", friendship.getStatus().name());
+        summary.put("statusDescription", friendship.getStatus().getDescription());
+        summary.put("user", toUserSummary(friendship.getUser()));
+        summary.put("friend", toUserSummary(friendship.getFriend()));
+        summary.put("friendAlias", friendship.getFriendAlias());
+        summary.put("isBlocked", friendship.getIsBlocked());
+        summary.put("isPinned", friendship.getIsPinned());
+        summary.put("createdAt", friendship.getCreatedAt());
+        summary.put("updatedAt", friendship.getUpdatedAt());
+        summary.put("acceptedAt", friendship.getAcceptedAt());
+        return summary;
+    }
+
+    private Map<String, Object> toUserSummary(User user) {
+        Map<String, Object> summary = new HashMap<>();
+        summary.put("id", user.getId());
+        summary.put("username", user.getUsername());
+        summary.put("email", user.getEmail());
+        summary.put("phone", user.getPhone());
+        summary.put("displayName", user.getDisplayName());
+        summary.put("avatarUrl", user.getAvatarUrl());
+        summary.put("bio", user.getBio());
+        summary.put("onlineStatus", user.getOnlineStatus());
+        summary.put("lastSeen", user.getLastSeen());
+        summary.put("isActive", user.getIsActive());
+        summary.put("createdAt", user.getCreatedAt());
+        summary.put("updatedAt", user.getUpdatedAt());
+        return summary;
+    }
+}

@@ -23,6 +23,7 @@ import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 /**
  * 用户实体类
@@ -32,6 +33,7 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@ToString(exclude = {"password", "roles"})
 public class User {
 
     @Id
@@ -79,6 +81,7 @@ public class User {
     private LocalDateTime updatedAt;
 
     // 用户角色
+    @JsonIgnore
     @ElementCollection(fetch = FetchType.EAGER)
     @Enumerated(EnumType.STRING)
     @CollectionTable(name = "user_roles", joinColumns = @JoinColumn(name = "user_id"))
@@ -123,4 +126,4 @@ public class User {
             return description;
         }
     }
-} 
+}

@@ -2,9 +2,11 @@ package com.chatapp.service;
 
 import com.chatapp.dto.AnonymousDto;
 import com.chatapp.entity.AnonymousIdentity;
+import com.chatapp.entity.AnonymousTheme;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.User;
 import com.chatapp.repository.AnonymousIdentityRepository;
+import com.chatapp.repository.AnonymousThemeRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +25,7 @@ import java.util.Random;
 public class AnonymousService {
 
     private final AnonymousIdentityRepository anonymousIdentityRepository;
+    private final AnonymousThemeRepository anonymousThemeRepository;
     private final ChatRoomRepository chatRoomRepository;
     private final UserRepository userRepository;
     private final Random random = new Random();
@@ -49,19 +52,22 @@ public class AnonymousService {
 
     @Transactional
     public AnonymousDto getOrCreateIdentity(Long userId, Long chatRoomId) {
+        return toDto(getOrCreateIdentityEntity(userId, chatRoomId));
+    }
+
+    @Transactional
+    public AnonymousIdentity getOrCreateIdentityEntity(Long userId, Long chatRoomId) {
         ChatRoom chatRoom = chatRoomRepository.findById(chatRoomId)
                 .orElseThrow(() -> new RuntimeException("聊天室不存在"));
 
-        if (!chatRoom.getAnonymousEnabled()) {
+        if (!Boolean.TRUE.equals(chatRoom.getAnonymousEnabled())) {
             throw new IllegalArgumentException("该聊天室未开启匿名功能");
         }
 
         LocalDate today = LocalDate.now();
-        AnonymousIdentity identity = anonymousIdentityRepository
+        return anonymousIdentityRepository
                 .findByUserIdAndChatRoomIdAndAssignedDate(userId, chatRoomId, today)
                 .orElseGet(() -> createNewIdentity(userId, chatRoomId, today));
-
-        return toDto(identity);
     }
 
     private AnonymousIdentity createNewIdentity(Long userId, Long chatRoomId, LocalDate date) {
@@ -73,8 +79,9 @@ public class AnonymousService {
         AnonymousIdentity identity = new AnonymousIdentity();
         identity.setUser(user);
         identity.setChatRoom(chatRoom);
-        identity.setAnonymousName(generateRandomName());
-        identity.setAnonymousAvatar(generateRandomAvatar());
+        AnonymousTheme theme = resolveTheme(chatRoom);
+        identity.setAnonymousName(generateRandomName(theme));
+        identity.setAnonymousAvatar(generateRandomAvatar(theme));
         identity.setAssignedDate(date);
         identity.setCustomNameUsed(false);
 
@@ -103,6 +110,23 @@ public class AnonymousService {
     }
 
     @Transactional
+    public AnonymousDto rerollAnonymousIdentity(Long userId, Long chatRoomId) {
+        LocalDate today = LocalDate.now();
+        AnonymousIdentity identity = anonymousIdentityRepository
+                .findByUserIdAndChatRoomIdAndAssignedDate(userId, chatRoomId, today)
+                .orElseGet(() -> createNewIdentity(userId, chatRoomId, today));
+
+        AnonymousTheme theme = resolveTheme(identity.getChatRoom());
+        identity.setAnonymousName(generateRandomName(theme));
+        identity.setAnonymousAvatar(generateRandomAvatar(theme));
+        identity.setCustomNameUsed(false);
+        identity = anonymousIdentityRepository.save(identity);
+
+        log.info("用户 {} 在聊天室 {} 重新抽取匿名身份: {}", userId, chatRoomId, identity.getAnonymousName());
+        return toDto(identity);
+    }
+
+    @Transactional
     public void toggleAnonymous(Long chatRoomId, Long operatorId, boolean enable) {
         ChatRoom chatRoom = chatRoomRepository.findById(chatRoomId)
                 .orElseThrow(() -> new RuntimeException("聊天室不存在"));
@@ -116,6 +140,29 @@ public class AnonymousService {
         log.info("聊天室 {} 匿名功能已{}", chatRoomId, enable ? "开启" : "关闭");
     }
 
+    @Transactional(readOnly = true)
+    public List<AnonymousDto.ThemeInfo> listThemes() {
+        return anonymousThemeRepository.findByIsEnabledTrueOrderByIdAsc().stream()
+                .map(this::toThemeInfo)
+                .toList();
+    }
+
+    @Transactional
+    public AnonymousDto.ThemeInfo updateRoomTheme(Long chatRoomId, Long operatorId, String themeKey) {
+        if (!chatRoomRepository.isAdmin(chatRoomId, operatorId)) {
+            throw new IllegalArgumentException("只有管理员可以切换匿名主题");
+        }
+        ChatRoom chatRoom = chatRoomRepository.findById(chatRoomId)
+                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
+        AnonymousTheme theme = anonymousThemeRepository.findByThemeKeyAndIsEnabledTrue(themeKey)
+                .orElseThrow(() -> new IllegalArgumentException("匿名主题不存在或已停用"));
+        chatRoom.setAnonymousTheme(theme.getThemeKey());
+        chatRoom.setAnonymousThemeConfig(theme);
+        chatRoomRepository.save(chatRoom);
+        return toThemeInfo(theme);
+    }
+
+    @Transactional(readOnly = true)
     public AnonymousDto.AnonymousMessageInfo getAnonymousInfoForMessage(Long anonymousIdentityId) {
         if (anonymousIdentityId == null) {
             return null;
@@ -129,6 +176,7 @@ public class AnonymousService {
         info.setAnonymousName(identity.getAnonymousName());
         info.setAnonymousAvatar(identity.getAnonymousAvatar());
         info.setIsAnonymous(true);
+        info.setTheme(toThemeInfo(resolveTheme(identity.getChatRoom())));
         return info;
     }
 
@@ -142,14 +190,35 @@ public class AnonymousService {
         }
     }
 
-    private String generateRandomName() {
+    private String generateRandomName(AnonymousTheme theme) {
         String adj = ADJECTIVES[random.nextInt(ADJECTIVES.length)];
         String animal = ANIMALS[random.nextInt(ANIMALS.length)];
-        return adj + animal;
+        String prefix = theme != null && theme.getPersonaPrefix() != null && !theme.getPersonaPrefix().isBlank()
+                ? theme.getPersonaPrefix()
+                : "";
+        return prefix + adj + animal;
     }
 
-    private String generateRandomAvatar() {
+    private String generateRandomAvatar(AnonymousTheme theme) {
+        if (theme != null && theme.getAccentColor() != null && !theme.getAccentColor().isBlank()) {
+            return theme.getAccentColor();
+        }
         return AVATAR_COLORS[random.nextInt(AVATAR_COLORS.length)];
+    }
+
+    private AnonymousTheme resolveTheme(ChatRoom chatRoom) {
+        if (chatRoom == null) {
+            return anonymousThemeRepository.findByThemeKeyAndIsEnabledTrue("default").orElse(null);
+        }
+        if (chatRoom.getAnonymousThemeConfig() != null) {
+            return chatRoom.getAnonymousThemeConfig();
+        }
+        String themeKey = chatRoom.getAnonymousTheme() != null && !chatRoom.getAnonymousTheme().isBlank()
+                ? chatRoom.getAnonymousTheme()
+                : "default";
+        return anonymousThemeRepository.findByThemeKeyAndIsEnabledTrue(themeKey)
+                .or(() -> anonymousThemeRepository.findByThemeKeyAndIsEnabledTrue("default"))
+                .orElse(null);
     }
 
     private AnonymousDto toDto(AnonymousIdentity entity) {
@@ -158,6 +227,22 @@ public class AnonymousService {
         dto.setAnonymousName(entity.getAnonymousName());
         dto.setAnonymousAvatar(entity.getAnonymousAvatar());
         dto.setCustomNameUsed(entity.getCustomNameUsed());
+        dto.setTheme(toThemeInfo(resolveTheme(entity.getChatRoom())));
         return dto;
+    }
+
+    private AnonymousDto.ThemeInfo toThemeInfo(AnonymousTheme theme) {
+        if (theme == null) {
+            return null;
+        }
+        return new AnonymousDto.ThemeInfo(
+                theme.getId(),
+                theme.getThemeKey(),
+                theme.getDisplayName(),
+                theme.getDescription(),
+                theme.getAccentColor(),
+                theme.getBackgroundColor(),
+                theme.getMessageColor(),
+                theme.getPersonaPrefix());
     }
 }

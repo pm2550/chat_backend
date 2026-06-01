@@ -3,6 +3,7 @@ package com.chatapp.service;
 import com.chatapp.dto.UserDto;
 import com.chatapp.entity.User;
 import com.chatapp.repository.UserRepository;
+import com.chatapp.repository.UserSettingsRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -26,6 +27,9 @@ class UserServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private UserSettingsRepository userSettingsRepository;
 
     @Mock
     private PasswordEncoder passwordEncoder;

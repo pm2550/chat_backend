@@ -44,8 +44,14 @@ public class ChatRoomMember {
     @Column(name = "nickname", length = 100)
     private String nickname;
 
+    @Column(name = "member_title", length = 100)
+    private String memberTitle;
+
     @Column(name = "is_muted")
     private Boolean isMuted = false;
+
+    @Column(name = "is_pinned")
+    private Boolean isPinned = false;
 
     @Column(name = "is_admin")
     private Boolean isAdmin = false;
@@ -79,4 +85,4 @@ public class ChatRoomMember {
             return description;
         }
     }
-} 
+}

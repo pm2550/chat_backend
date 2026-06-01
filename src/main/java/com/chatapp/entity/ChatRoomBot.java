@@ -34,6 +34,15 @@ public class ChatRoomBot {
     @Column(name = "trigger_keywords", length = 500)
     private String triggerKeywords;
 
+    @Column(name = "room_nickname", length = 100)
+    private String roomNickname;
+
+    @Column(name = "room_prompt_suffix", columnDefinition = "TEXT")
+    private String roomPromptSuffix;
+
+    @Column(name = "enabled_in_room")
+    private Boolean enabledInRoom = true;
+
     @Column(name = "is_active")
     private Boolean isActive = true;
 

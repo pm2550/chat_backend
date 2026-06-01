@@ -1,0 +1,1 @@
+ALTER TABLE messages ADD COLUMN sticker_id BIGINT NULL;

@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
@@ -14,6 +15,7 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@ToString(exclude = "apiKeyEncrypted")
 public class BotConfig {
 
     @Id
@@ -32,6 +34,10 @@ public class BotConfig {
 
     @Column(name = "api_key_encrypted", length = 500)
     private String apiKeyEncrypted;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "provider_credential_id")
+    private ProviderCredential providerCredential;
 
     @Column(name = "model_name", length = 100)
     private String modelName;
@@ -61,6 +67,6 @@ public class BotConfig {
     private LocalDateTime updatedAt;
 
     public enum LLMProvider {
-        OPENAI, CLAUDE, DEEPSEEK, OLLAMA
+        OPENAI, CLAUDE, DEEPSEEK, OLLAMA, HERMES
     }
 }

@@ -2,7 +2,10 @@ package com.chatapp.service;
 
 import com.chatapp.dto.UserProfileUpdateRequest;
 import com.chatapp.entity.User;
+import com.chatapp.entity.UserSettings;
+import com.chatapp.repository.UserSettingsRepository;
 import com.chatapp.repository.UserRepository;
+import com.chatapp.util.ChatCustomizationPresets;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +27,9 @@ public class UserProfileService {
 
     @Autowired
     private FileStorageService fileStorageService;
+
+    @Autowired
+    private UserSettingsRepository userSettingsRepository;
 
     /**
      * 更新用户资料
@@ -154,4 +160,126 @@ public class UserProfileService {
                 org.springframework.data.domain.PageRequest.of(0, limit)
         ).getContent();
     }
-} 
+
+    public UserSettings getSettings(Long userId) {
+        return userSettingsRepository.findByUserId(userId)
+                .orElseGet(() -> createDefaultSettings(userId));
+    }
+
+    public UserSettings updateSettings(Long userId, UserSettingsUpdateRequest request) {
+        UserSettings settings = getSettings(userId);
+        if (request.getMessageNotificationsEnabled() != null) {
+            settings.setMessageNotificationsEnabled(request.getMessageNotificationsEnabled());
+        }
+        if (request.getShowOnlineStatus() != null) {
+            settings.setShowOnlineStatus(request.getShowOnlineStatus());
+        }
+        if (request.getAllowFriendRequests() != null) {
+            settings.setAllowFriendRequests(request.getAllowFriendRequests());
+        }
+        if (request.getAllowDirectMessages() != null) {
+            settings.setAllowDirectMessages(request.getAllowDirectMessages());
+        }
+        if (request.getReadReceiptsEnabled() != null) {
+            settings.setReadReceiptsEnabled(request.getReadReceiptsEnabled());
+        }
+        if (request.getChatBackgroundPreset() != null) {
+            settings.setChatBackgroundPreset(
+                    ChatCustomizationPresets.requireBackground(request.getChatBackgroundPreset()));
+        }
+        if (request.getChatBackgroundCustomUrl() != null) {
+            String url = request.getChatBackgroundCustomUrl().trim();
+            settings.setChatBackgroundCustomUrl(url.isEmpty() ? null : requireBackgroundUrl(url));
+        }
+        if (request.getAvatarFramePreset() != null) {
+            settings.setAvatarFramePreset(
+                    ChatCustomizationPresets.requireAvatarFrame(request.getAvatarFramePreset()));
+        }
+        if (request.getBubbleStylePreset() != null) {
+            settings.setBubbleStylePreset(
+                    ChatCustomizationPresets.requireBubbleStyle(request.getBubbleStylePreset()));
+        }
+        return userSettingsRepository.save(settings);
+    }
+
+    public UserSettings uploadChatBackground(Long userId, MultipartFile backgroundFile) throws IOException {
+        UserSettings settings = getSettings(userId);
+        String previousUrl = settings.getChatBackgroundCustomUrl();
+        String backgroundUrl = fileStorageService.uploadChatBackground(backgroundFile);
+        settings.setChatBackgroundCustomUrl(backgroundUrl);
+        if (previousUrl != null && !previousUrl.isBlank()) {
+            fileStorageService.deleteFile(previousUrl);
+        }
+        return userSettingsRepository.save(settings);
+    }
+
+    private UserSettings createDefaultSettings(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("用户不存在"));
+        UserSettings settings = new UserSettings();
+        settings.setUser(user);
+        settings.setMessageNotificationsEnabled(true);
+        settings.setShowOnlineStatus(true);
+        settings.setAllowFriendRequests(true);
+        settings.setAllowDirectMessages(true);
+        settings.setReadReceiptsEnabled(true);
+        settings.setChatBackgroundPreset(ChatCustomizationPresets.DEFAULT_BACKGROUND);
+        settings.setAvatarFramePreset(ChatCustomizationPresets.DEFAULT_AVATAR_FRAME);
+        settings.setBubbleStylePreset(ChatCustomizationPresets.DEFAULT_BUBBLE_STYLE);
+        return userSettingsRepository.save(settings);
+    }
+
+    private String requireBackgroundUrl(String url) {
+        if (!url.startsWith("/api/files/background/")) {
+            throw new IllegalArgumentException("chatBackgroundCustomUrl 必须来自背景上传接口");
+        }
+        return url;
+    }
+
+    public static class UserSettingsUpdateRequest {
+        private Boolean messageNotificationsEnabled;
+        private Boolean showOnlineStatus;
+        private Boolean allowFriendRequests;
+        private Boolean allowDirectMessages;
+        private Boolean readReceiptsEnabled;
+        private String chatBackgroundPreset;
+        private String chatBackgroundCustomUrl;
+        private String avatarFramePreset;
+        private String bubbleStylePreset;
+
+        public Boolean getMessageNotificationsEnabled() { return messageNotificationsEnabled; }
+        public void setMessageNotificationsEnabled(Boolean messageNotificationsEnabled) {
+            this.messageNotificationsEnabled = messageNotificationsEnabled;
+        }
+        public Boolean getShowOnlineStatus() { return showOnlineStatus; }
+        public void setShowOnlineStatus(Boolean showOnlineStatus) { this.showOnlineStatus = showOnlineStatus; }
+        public Boolean getAllowFriendRequests() { return allowFriendRequests; }
+        public void setAllowFriendRequests(Boolean allowFriendRequests) {
+            this.allowFriendRequests = allowFriendRequests;
+        }
+        public Boolean getAllowDirectMessages() { return allowDirectMessages; }
+        public void setAllowDirectMessages(Boolean allowDirectMessages) {
+            this.allowDirectMessages = allowDirectMessages;
+        }
+        public Boolean getReadReceiptsEnabled() { return readReceiptsEnabled; }
+        public void setReadReceiptsEnabled(Boolean readReceiptsEnabled) {
+            this.readReceiptsEnabled = readReceiptsEnabled;
+        }
+        public String getChatBackgroundPreset() { return chatBackgroundPreset; }
+        public void setChatBackgroundPreset(String chatBackgroundPreset) {
+            this.chatBackgroundPreset = chatBackgroundPreset;
+        }
+        public String getChatBackgroundCustomUrl() { return chatBackgroundCustomUrl; }
+        public void setChatBackgroundCustomUrl(String chatBackgroundCustomUrl) {
+            this.chatBackgroundCustomUrl = chatBackgroundCustomUrl;
+        }
+        public String getAvatarFramePreset() { return avatarFramePreset; }
+        public void setAvatarFramePreset(String avatarFramePreset) {
+            this.avatarFramePreset = avatarFramePreset;
+        }
+        public String getBubbleStylePreset() { return bubbleStylePreset; }
+        public void setBubbleStylePreset(String bubbleStylePreset) {
+            this.bubbleStylePreset = bubbleStylePreset;
+        }
+    }
+}

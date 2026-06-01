@@ -3,6 +3,7 @@ package com.chatapp.service;
 import com.chatapp.dto.UserDto;
 import com.chatapp.entity.User;
 import com.chatapp.repository.UserRepository;
+import com.chatapp.repository.UserSettingsRepository;
 import lombok.RequiredArgsConstructor;
 import org.modelmapper.ModelMapper;
 import org.springframework.data.domain.Page;
@@ -27,6 +28,7 @@ import java.util.stream.Collectors;
 public class UserService implements UserDetailsService {
 
     private final UserRepository userRepository;
+    private final UserSettingsRepository userSettingsRepository;
     private final PasswordEncoder passwordEncoder;
     private final ModelMapper modelMapper;
 
@@ -202,7 +204,10 @@ public class UserService implements UserDetailsService {
      * 将User实体转换为UserDto
      */
     private UserDto convertToDto(User user) {
-        return modelMapper.map(user, UserDto.class);
+        UserDto dto = modelMapper.map(user, UserDto.class);
+        userSettingsRepository.findByUserId(user.getId())
+                .ifPresent(settings -> dto.setAvatarFramePreset(settings.getAvatarFramePreset()));
+        return dto;
     }
 
     /**

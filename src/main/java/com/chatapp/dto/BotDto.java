@@ -25,7 +25,16 @@ public class BotDto {
     private Double temperature;
     private Integer maxTokens;
     private Boolean isActive;
+    private Long providerCredentialId;
+    private String providerCredentialLabel;
+    private String providerCredentialLast4;
+    private Boolean hasCredential;
     private LocalDateTime createdAt;
+    private ChatRoomBot.TriggerMode triggerMode;
+    private String triggerKeywords;
+    private String roomNickname;
+    private String roomPromptSuffix;
+    private Boolean enabledInRoom;
 
     @Data
     @NoArgsConstructor
@@ -39,6 +48,7 @@ public class BotDto {
         private BotConfig.LLMProvider llmProvider;
 
         private String apiKey;
+        private Long providerCredentialId;
         private String modelName;
         private String systemPrompt;
         private Double temperature;
@@ -52,6 +62,7 @@ public class BotDto {
         private String botName;
         private String botAvatar;
         private String apiKey;
+        private Long providerCredentialId;
         private String modelName;
         private String systemPrompt;
         private Double temperature;
@@ -65,6 +76,9 @@ public class BotDto {
     public static class AddToChatRoomRequest {
         private ChatRoomBot.TriggerMode triggerMode;
         private String triggerKeywords;
+        private String roomNickname;
+        private String roomPromptSuffix;
+        private Boolean enabledInRoom;
     }
 
     @Data

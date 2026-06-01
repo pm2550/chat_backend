@@ -33,8 +33,10 @@ public class BotController {
     @PutMapping("/{botId}")
     public ResponseEntity<ApiResponse<BotDto>> updateBot(
             @PathVariable Long botId,
-            @RequestBody BotDto.UpdateRequest request) {
-        BotDto result = botService.updateBot(botId, request);
+            @RequestBody BotDto.UpdateRequest request,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        BotDto result = botService.updateBot(botId, currentUser.getId(), request);
         return ResponseEntity.ok(ApiResponse.success("机器人更新成功", result));
     }
 
@@ -46,8 +48,11 @@ public class BotController {
     }
 
     @GetMapping("/{botId}")
-    public ResponseEntity<ApiResponse<BotDto>> getBot(@PathVariable Long botId) {
-        BotDto result = botService.getBot(botId);
+    public ResponseEntity<ApiResponse<BotDto>> getBot(
+            @PathVariable Long botId,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        BotDto result = botService.getBot(botId, currentUser.getId());
         return ResponseEntity.ok(ApiResponse.success(result));
     }
 
@@ -64,17 +69,32 @@ public class BotController {
     public ResponseEntity<ApiResponse<Void>> addBotToChatRoom(
             @PathVariable Long roomId,
             @PathVariable Long botId,
-            @RequestBody(required = false) BotDto.AddToChatRoomRequest request) {
-        botService.addBotToChatRoom(roomId, botId, request);
+            @RequestBody(required = false) BotDto.AddToChatRoomRequest request,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        botService.addBotToChatRoom(roomId, botId, request, currentUser.getId());
         return ResponseEntity.ok(ApiResponse.<Void>success("机器人已添加到聊天室", null));
     }
 
     @DeleteMapping("/chat-rooms/{roomId}/bots/{botId}")
     public ResponseEntity<ApiResponse<Void>> removeBotFromChatRoom(
             @PathVariable Long roomId,
-            @PathVariable Long botId) {
-        botService.removeBotFromChatRoom(roomId, botId);
+            @PathVariable Long botId,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        botService.removeBotFromChatRoom(roomId, botId, currentUser.getId());
         return ResponseEntity.ok(ApiResponse.<Void>success("机器人已从聊天室移除", null));
+    }
+
+    @PutMapping("/chat-rooms/{roomId}/bots/{botId}")
+    public ResponseEntity<ApiResponse<BotDto>> updateRoomBotConfig(
+            @PathVariable Long roomId,
+            @PathVariable Long botId,
+            @RequestBody BotDto.AddToChatRoomRequest request,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        BotDto result = botService.updateRoomBotConfig(roomId, botId, request, currentUser.getId());
+        return ResponseEntity.ok(ApiResponse.success("聊天室机器人配置已更新", result));
     }
 
     @GetMapping("/chat-rooms/{roomId}/bots")
