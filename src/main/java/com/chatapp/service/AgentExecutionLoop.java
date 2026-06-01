@@ -3,6 +3,7 @@ package com.chatapp.service;
 import com.chatapp.dto.BotDto;
 import com.chatapp.entity.AgentTask;
 import com.chatapp.entity.BotConfig;
+import com.chatapp.service.tool.AgentToolDispatcher;
 import com.chatapp.service.tool.AgentToolRegistry;
 import com.chatapp.service.tool.Tool;
 import com.chatapp.service.tool.ToolContext;
@@ -26,6 +27,7 @@ import java.util.List;
 public class AgentExecutionLoop {
     private final LLMService llmService;
     private final AgentToolRegistry toolRegistry;
+    private final AgentToolDispatcher toolDispatcher;
     private final AgentContextBuilder agentContextBuilder;
     private final ObjectMapper objectMapper;
 
@@ -49,7 +51,7 @@ public class AgentExecutionLoop {
         for (int iteration = 1; iteration <= budget.maxIterations(); iteration++) {
             BudgetHit beforeCallHit = budget.check(iteration, startedAt, cumulativeTokens);
             if (beforeCallHit != null) {
-                return exhausted(lastAssistantContent, iteration - 1, toolCalls, cumulativeTokens, beforeCallHit);
+                return exhausted(lastAssistantContent, iteration - 1, toolCalls, cumulativeTokens, beforeCallHit, startedAt);
             }
 
             log.info("Agent loop iteration={} taskId={} tools={} cumulativeTokens={}",
@@ -84,7 +86,11 @@ public class AgentExecutionLoop {
                     requestedTools));
 
             for (BotDto.ToolCall requestedTool : requestedTools) {
-                String resultJson = executeTool(requestedTool, toolContext, toolCalls);
+                String resultJson = executeTool(
+                        requestedTool,
+                        toolContext,
+                        toolCalls,
+                        budget.remainingWallclockMs(startedAt));
                 messages.add(new BotDto.ChatMessage(
                         "tool",
                         resultJson,
@@ -96,27 +102,28 @@ public class AgentExecutionLoop {
 
             BudgetHit afterToolsHit = budget.check(iteration + 1, startedAt, cumulativeTokens);
             if (afterToolsHit != null) {
-                return exhausted(lastAssistantContent, iteration, toolCalls, cumulativeTokens, afterToolsHit);
+                return exhausted(lastAssistantContent, iteration, toolCalls, cumulativeTokens, afterToolsHit, startedAt);
             }
         }
 
-        return exhausted(lastAssistantContent, budget.maxIterations(), toolCalls, cumulativeTokens, BudgetHit.ITERATIONS);
+        return exhausted(lastAssistantContent, budget.maxIterations(), toolCalls, cumulativeTokens, BudgetHit.ITERATIONS, startedAt);
     }
 
     private String executeTool(BotDto.ToolCall requestedTool,
                                ToolContext context,
-                               List<ToolCallRecord> toolCalls) {
+                               List<ToolCallRecord> toolCalls,
+                               long remainingWallclockMs) {
         String toolName = requestedTool.getName();
         JsonNode arguments = parseArguments(requestedTool.getArgumentsJson());
         Instant started = Instant.now();
         try {
             Tool tool = toolRegistry.getTool(toolName)
                     .orElseThrow(() -> new ToolExecutionException("tool_not_allowed", "Tool is not available: " + toolName));
-            JsonNode result = tool.execute(arguments, context);
+            JsonNode result = toolDispatcher.dispatch(tool, arguments, context, remainingWallclockMs);
             String resultJson = result.toString();
-            toolCalls.add(new ToolCallRecord(toolName, requestedTool.getId(), false, resultJson.length()));
-            log.info("Tool executed: {} roomId={} taskId={} resultBytes={}",
-                    toolName, context.roomId(), context.taskId(), resultJson.length());
+            toolCalls.add(new ToolCallRecord(toolName, requestedTool.getId(), result.has("error"), resultJson.length()));
+            log.info("Tool executed: {} ctx={} roomId={} taskId={} resultBytes={}",
+                    toolName, tool.executionContext(), context.roomId(), context.taskId(), resultJson.length());
             return resultJson;
         } catch (Exception e) {
             String code = e instanceof ToolExecutionException toolException
@@ -149,7 +156,8 @@ public class AgentExecutionLoop {
                                       int iterations,
                                       List<ToolCallRecord> toolCalls,
                                       int cumulativeTokens,
-                                      BudgetHit budgetHit) {
+                                      BudgetHit budgetHit,
+                                      Instant startedAt) {
         String base = content != null && !content.isBlank() ? content : "任务已停止";
         String finalContent = base + "\n\n(stopped: budget exhausted - " + budgetHit.name().toLowerCase() + ")";
         log.warn("Agent loop stopped by budget cap: reason={} iterations={} cumulativeTokens={}",
@@ -163,7 +171,7 @@ public class AgentExecutionLoop {
                     case WALLCLOCK -> TerminationReason.WALLCLOCK_BUDGET;
                     case TOKENS -> TerminationReason.TOKEN_BUDGET;
                 },
-                new BudgetSnapshot(cumulativeTokens, 0));
+                new BudgetSnapshot(cumulativeTokens, elapsedMs(startedAt)));
     }
 
     private int estimateMessages(List<BotDto.ChatMessage> messages) {
@@ -197,6 +205,11 @@ public class AgentExecutionLoop {
                 return BudgetHit.TOKENS;
             }
             return null;
+        }
+
+        long remainingWallclockMs(Instant startedAt) {
+            long elapsed = Duration.between(startedAt, Instant.now()).toMillis();
+            return Math.max(0L, maxWallclockMs - elapsed);
         }
 
         private static int positiveOrDefault(Integer value, int defaultValue) {

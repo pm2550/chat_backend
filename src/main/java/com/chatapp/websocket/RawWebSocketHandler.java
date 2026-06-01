@@ -11,6 +11,7 @@ import com.chatapp.service.BotService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.PushNotificationService;
 import com.chatapp.service.RoomTypingAggregator;
+import com.chatapp.service.tool.PendingClientCallRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -28,6 +29,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -35,10 +37,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *   ← {"type":"message","chatRoomId":1,"content":"hi","messageType":"TEXT"}
  *   ← {"type":"typing","chatRoomId":1,"isTyping":true}
  *   ← {"type":"call","action":"invite|accept|reject|offer|answer|ice|hangup",...}
+ *   ← {"type":"agent_tool_result","callId":"...","result":{...}}
  *   ← {"type":"ping"}
  *   → {"type":"message","message":{...MessageDto...}}
  *   → {"type":"typing","chatRoomId":1,"userId":2,"isTyping":true}
  *   → {"type":"call","action":"offer|answer|ice|hangup",...}
+ *   → {"type":"agent_tool_request","callId":"...","toolName":"...","params":{...}}
  *   → {"type":"status","userId":2,"onlineStatus":"ONLINE"}
  *   → {"type":"pong"}
  *
@@ -60,6 +64,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     private final PushNotificationService pushNotificationService;
     private final RoomTypingAggregator roomTypingAggregator;
     private final CallRoomRegistry callRoomRegistry;
+    private final PendingClientCallRegistry pendingClientCallRegistry;
 
     // userId -> sessions (a user may have multiple devices connected)
     private final Map<Long, Set<WebSocketSession>> userSessions = new ConcurrentHashMap<>();
@@ -111,6 +116,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
                 case "typing" -> handleTyping(user, root);
                 case "read", "read_receipt" -> handleReadReceipt(user, root);
                 case "call" -> handleCallSignal(user, root);
+                case "agent_tool_result" -> handleAgentToolResult(user, root);
                 default -> log.debug("Unknown ws message type: {}", type);
             }
         } catch (Exception e) {
@@ -433,6 +439,54 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
 
         userSessions.forEach((userId, sessions) ->
                 sessions.forEach(session -> sendJson(session, envelope)));
+    }
+
+    public boolean sendAgentToolRequest(Long userId, UUID callId, String toolName, JsonNode params) {
+        Set<WebSocketSession> sessions = userSessions.get(userId);
+        if (sessions == null || sessions.isEmpty()) {
+            return false;
+        }
+        ObjectNode envelope = objectMapper.createObjectNode();
+        envelope.put("type", "agent_tool_request");
+        envelope.put("callId", callId.toString());
+        envelope.put("toolName", toolName);
+        envelope.set("params", params == null ? objectMapper.createObjectNode() : params);
+        sessions.forEach(session -> sendJson(session, envelope));
+        return true;
+    }
+
+    private void handleAgentToolResult(User user, JsonNode root) {
+        String callIdText = root.path("callId").asText("");
+        if (callIdText.isBlank()) {
+            log.warn("agent_tool_result missing callId from userId={}", user.getId());
+            return;
+        }
+        UUID callId;
+        try {
+            callId = UUID.fromString(callIdText);
+        } catch (IllegalArgumentException e) {
+            log.warn("agent_tool_result invalid callId={} from userId={}", callIdText, user.getId());
+            return;
+        }
+        JsonNode result;
+        if (root.has("error")) {
+            ObjectNode wrapper = objectMapper.createObjectNode();
+            wrapper.set("error", root.get("error"));
+            result = wrapper;
+        } else if (root.has("result")) {
+            result = root.get("result");
+        } else {
+            ObjectNode wrapper = objectMapper.createObjectNode();
+            ObjectNode error = wrapper.putObject("error");
+            error.put("code", "client_tool_empty_result");
+            error.put("message", "agent_tool_result did not include result or error");
+            result = wrapper;
+        }
+        boolean accepted = pendingClientCallRegistry.complete(callId, user.getId(), result);
+        if (accepted) {
+            log.info("agent client tool result accepted callId={} userId={} resultBytes={}",
+                    callId, user.getId(), result.toString().length());
+        }
     }
 
     public void broadcastChatRoomUpdated(ChatRoom chatRoom) {

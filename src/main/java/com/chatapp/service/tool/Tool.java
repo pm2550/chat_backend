@@ -17,6 +17,7 @@ public interface Tool {
 
     enum ExecutionContext {
         SERVER,
-        CLIENT
+        CLIENT,
+        EITHER
     }
 }

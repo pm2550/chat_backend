@@ -5,6 +5,7 @@ import com.chatapp.entity.AgentTask;
 import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.User;
+import com.chatapp.service.tool.AgentToolDispatcher;
 import com.chatapp.service.tool.AgentToolRegistry;
 import com.chatapp.service.tool.Tool;
 import com.chatapp.service.tool.ToolContext;
@@ -20,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -29,6 +31,7 @@ class AgentExecutionLoopTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private LLMService llmService;
     private AgentToolRegistry registry;
+    private AgentToolDispatcher dispatcher;
     private AgentContextBuilder contextBuilder;
     private AgentExecutionLoop loop;
     private Tool echoTool;
@@ -40,8 +43,9 @@ class AgentExecutionLoopTest {
     void setUp() {
         llmService = mock(LLMService.class);
         registry = mock(AgentToolRegistry.class);
+        dispatcher = mock(AgentToolDispatcher.class);
         contextBuilder = mock(AgentContextBuilder.class);
-        loop = new AgentExecutionLoop(llmService, registry, contextBuilder, objectMapper);
+        loop = new AgentExecutionLoop(llmService, registry, dispatcher, contextBuilder, objectMapper);
         echoTool = new EchoTool();
         bot = new BotConfig();
         bot.setId(99L);
@@ -67,6 +71,13 @@ class AgentExecutionLoopTest {
         });
         when(registry.listToolsForBot(bot)).thenReturn(List.of(echoTool));
         when(registry.getTool("echo")).thenReturn(Optional.of(echoTool));
+        when(dispatcher.dispatch(any(Tool.class), any(JsonNode.class), any(ToolContext.class), anyLong()))
+                .thenAnswer(invocation -> {
+                    Tool tool = invocation.getArgument(0);
+                    JsonNode params = invocation.getArgument(1);
+                    ToolContext context = invocation.getArgument(2);
+                    return tool.execute(params, context);
+                });
     }
 
     @Test
