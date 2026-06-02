@@ -143,6 +143,26 @@ class BotServiceAgentRoutingTest {
     }
 
     @Test
+    @DisplayName("createBot persists enabled_tools and exposes them in the DTO")
+    void createBotPersistsEnabledTools() {
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(botConfigRepository.save(any(BotConfig.class))).thenAnswer(inv -> {
+            BotConfig b = inv.getArgument(0);
+            b.setId(7L);
+            return b;
+        });
+
+        BotDto.CreateRequest req = new BotDto.CreateRequest();
+        req.setBotName("Searcher");
+        req.setLlmProvider(BotConfig.LLMProvider.DASHSCOPE);
+        req.setEnabledTools(List.of("web_search"));
+
+        BotDto dto = service.createBot(1L, req);
+
+        assertEquals(List.of("web_search"), dto.getEnabledTools());
+    }
+
+    @Test
     @DisplayName("bot without tool whitelist keeps the one-shot path")
     void nonToolBotUsesOneShot() {
         when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));

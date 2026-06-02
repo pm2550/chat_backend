@@ -1,5 +1,6 @@
 package com.chatapp.service.tool;
 
+import com.chatapp.service.BotRateLimitService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -21,11 +22,14 @@ public class WebSearchTool implements Tool {
     private final ObjectMapper objectMapper;
     private final OkHttpClient httpClient;
     private final String baseUrl;
+    private final BotRateLimitService rateLimitService;
 
     public WebSearchTool(ObjectMapper objectMapper,
-                         @Value("${searxng.base-url:http://172.17.0.1:8888}") String baseUrl) {
+                         @Value("${searxng.base-url:http://172.17.0.1:8888}") String baseUrl,
+                         BotRateLimitService rateLimitService) {
         this.objectMapper = objectMapper;
         this.baseUrl = baseUrl;
+        this.rateLimitService = rateLimitService;
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.SECONDS)
@@ -59,6 +63,10 @@ public class WebSearchTool implements Tool {
         String query = params.path("query").asText("").trim();
         if (query.isBlank()) {
             throw new ToolExecutionException("invalid_params", "query is required");
+        }
+        if (!rateLimitService.tryAcquireWebSearch(context.roomId())) {
+            log.warn("web_search rate limit exceeded for roomId={}", context.roomId());
+            return error("search_rate_limited", "web search rate limit exceeded for this room");
         }
         int maxResults = Math.max(1, Math.min(params.path("max_results").asInt(5), 10));
         try {

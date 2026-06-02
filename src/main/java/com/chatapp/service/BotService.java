@@ -69,6 +69,7 @@ public class BotService {
         bot.setSystemPrompt(request.getSystemPrompt());
         bot.setTemperature(request.getTemperature() != null ? request.getTemperature() : 0.7);
         bot.setMaxTokens(request.getMaxTokens() != null ? request.getMaxTokens() : 2048);
+        applyEnabledTools(bot, request.getEnabledTools());
         bot.setCreatedBy(creator);
 
         bot = botConfigRepository.save(bot);
@@ -95,6 +96,7 @@ public class BotService {
         if (request.getTemperature() != null) bot.setTemperature(request.getTemperature());
         if (request.getMaxTokens() != null) bot.setMaxTokens(request.getMaxTokens());
         if (request.getIsActive() != null) bot.setIsActive(request.getIsActive());
+        if (request.getEnabledTools() != null) applyEnabledTools(bot, request.getEnabledTools());
 
         bot = botConfigRepository.save(bot);
         return toDto(bot, true);
@@ -550,8 +552,17 @@ public class BotService {
         dto.setCharacterFirstMes(entity.getCharacterFirstMes());
         dto.setCharacterAlternateGreetings(readStringList(entity.getCharacterAlternateGreetings()));
         dto.setCharacterBookEntryCount(countCharacterBookEntries(entity.getCharacterBookJson()));
+        dto.setEnabledTools(readStringList(entity.getEnabledTools()));
         dto.setCreatedAt(entity.getCreatedAt());
         return dto;
+    }
+
+    /** Stores the enabled-tools whitelist as a JSON array; an empty list clears it (no tools = one-shot path). */
+    private void applyEnabledTools(BotConfig bot, List<String> tools) {
+        if (tools == null) {
+            return;
+        }
+        bot.setEnabledTools(tools.isEmpty() ? null : writeJson(tools));
     }
 
     private void applyCredentialSelection(

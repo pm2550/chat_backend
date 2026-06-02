@@ -182,6 +182,10 @@ bot:
 outbound-url:
   owner-allowed-internal-hosts: ${OUTBOUND_URL_ALLOWED_INTERNAL_HOSTS:127.0.0.1,localhost,172.17.0.1}
 
+# Self-hosted aggregated search backing the bot web_search tool.
+searxng:
+  base-url: ${SEARXNG_BASE_URL:http://172.17.0.1:8888}
+
 agent:
   gateway:
     enabled: ${AGENT_GATEWAY_ENABLED:false}

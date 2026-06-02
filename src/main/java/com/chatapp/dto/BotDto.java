@@ -42,6 +42,7 @@ public class BotDto {
     private String characterFirstMes;
     private List<String> characterAlternateGreetings;
     private Integer characterBookEntryCount;
+    private List<String> enabledTools;
 
     @Data
     @NoArgsConstructor
@@ -68,6 +69,7 @@ public class BotDto {
         private String systemPrompt;
         private Double temperature;
         private Integer maxTokens;
+        private List<String> enabledTools;
     }
 
     @Data
@@ -83,6 +85,7 @@ public class BotDto {
         private Double temperature;
         private Integer maxTokens;
         private Boolean isActive;
+        private List<String> enabledTools;
     }
 
     @Data

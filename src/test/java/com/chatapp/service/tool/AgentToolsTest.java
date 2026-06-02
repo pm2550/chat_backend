@@ -5,6 +5,7 @@ import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MessageRepository;
+import com.chatapp.service.BotRateLimitService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -88,7 +89,7 @@ class AgentToolsTest {
         });
         server.start();
         try {
-            WebSearchTool tool = new WebSearchTool(objectMapper, "http://127.0.0.1:" + server.getAddress().getPort());
+            WebSearchTool tool = new WebSearchTool(objectMapper, "http://127.0.0.1:" + server.getAddress().getPort(), new BotRateLimitService());
             JsonNode result = tool.execute(objectMapper.createObjectNode().put("query", "pm chat").put("max_results", 1),
                     new ToolContext(10L, 1L, 77L));
 
@@ -102,7 +103,7 @@ class AgentToolsTest {
 
     @Test
     void webSearchReturnsErrorNodeOnUnavailableService() {
-        WebSearchTool tool = new WebSearchTool(objectMapper, "http://127.0.0.1:1");
+        WebSearchTool tool = new WebSearchTool(objectMapper, "http://127.0.0.1:1", new BotRateLimitService());
 
         JsonNode result = tool.execute(objectMapper.createObjectNode().put("query", "pm chat"),
                 new ToolContext(10L, 1L, 77L));
