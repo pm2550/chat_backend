@@ -29,6 +29,7 @@ import java.time.LocalDateTime;
 @RequiredArgsConstructor
 @Slf4j
 @Transactional
+@Deprecated(forRemoval = false)
 public class AgentWorkflowService {
 
     private final AgentTaskRepository agentTaskRepository;
@@ -41,6 +42,7 @@ public class AgentWorkflowService {
     private final AgentContextBuilder agentContextBuilder;
     private final AgentExecutionLoop agentExecutionLoop;
 
+    @Deprecated(forRemoval = false)
     public AgentTask createAndRun(Long requestedById, AgentTaskDto.CreateRequest request) {
         if (request.getChatRoomId() == null) {
             throw new IllegalArgumentException("chatRoomId 不能为空");
@@ -72,6 +74,7 @@ public class AgentWorkflowService {
         return runTask(task, botConfig, request);
     }
 
+    @Deprecated(forRemoval = false)
     public Page<AgentTask> listRoomTasks(Long chatRoomId, Long userId, Pageable pageable) {
         if (!chatRoomRepository.isMember(chatRoomId, userId)) {
             throw new IllegalArgumentException("您不是该聊天室的成员");
@@ -79,6 +82,7 @@ public class AgentWorkflowService {
         return agentTaskRepository.findByChatRoomIdOrderByCreatedAtDesc(chatRoomId, pageable);
     }
 
+    @Deprecated(forRemoval = false)
     public AgentTask getTask(Long taskId, Long userId) {
         AgentTask task = agentTaskRepository.findWithDetailsById(taskId)
                 .orElseThrow(() -> new RuntimeException("任务不存在"));
@@ -129,6 +133,7 @@ public class AgentWorkflowService {
         return agentTaskRepository.save(task);
     }
 
+    @Deprecated(forRemoval = false)
     private BotConfig resolveSystemAgentBot() {
         return botConfigRepository.findFirstByBotNameAndCreatedByIsNullOrderByIdAsc("Agent")
                 .orElseGet(() -> {

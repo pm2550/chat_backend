@@ -22,6 +22,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/agent-tasks")
 @RequiredArgsConstructor
+@Deprecated(forRemoval = false)
 public class AgentTaskController {
 
     private final AgentWorkflowService agentWorkflowService;
@@ -30,6 +31,7 @@ public class AgentTaskController {
     private final AuditLogService auditLogService;
 
     @PostMapping
+    @Deprecated(forRemoval = false)
     public ResponseEntity<ApiResponse<AgentTaskDto>> createTask(
             @RequestBody AgentTaskDto.CreateRequest request,
             Authentication auth) {
@@ -49,6 +51,7 @@ public class AgentTaskController {
     }
 
     @GetMapping
+    @Deprecated(forRemoval = false)
     public ResponseEntity<ApiResponse<Map<String, Object>>> listTasks(
             @RequestParam Long chatRoomId,
             @RequestParam(defaultValue = "0") int page,
@@ -68,6 +71,7 @@ public class AgentTaskController {
     }
 
     @GetMapping("/{taskId}")
+    @Deprecated(forRemoval = false)
     public ResponseEntity<ApiResponse<AgentTaskDto>> getTask(
             @PathVariable Long taskId,
             Authentication auth) {

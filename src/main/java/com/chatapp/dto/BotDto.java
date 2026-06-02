@@ -30,6 +30,7 @@ public class BotDto {
     private String providerCredentialLabel;
     private String providerCredentialLast4;
     private Boolean hasCredential;
+    private Long createdById;
     private LocalDateTime createdAt;
     private ChatRoomBot.TriggerMode triggerMode;
     private String triggerKeywords;

@@ -52,6 +52,9 @@ public class Message {
     @JoinColumn(name = "bot_config_id")
     private BotConfig botConfig;
 
+    @Column(name = "bot_display_name", length = 255)
+    private String botDisplayName;
+
     @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "chat_room_id", nullable = false)

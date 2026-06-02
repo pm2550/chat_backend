@@ -1,9 +1,13 @@
 package com.chatapp.service;
 
+import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
+import com.chatapp.entity.ChatRoomBot;
 import com.chatapp.entity.ChatRoomMember;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
+import com.chatapp.repository.BotConfigRepository;
+import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.UserRepository;
@@ -21,6 +25,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -36,6 +41,8 @@ public class ChatRoomService {
     private final UserRepository userRepository;
     private final MessageRepository messageRepository;
     private final FileStorageService fileStorageService;
+    private final BotConfigRepository botConfigRepository;
+    private final ChatRoomBotRepository chatRoomBotRepository;
 
     /**
      * 创建私聊房间
@@ -64,6 +71,7 @@ public class ChatRoomService {
         chatRoom.setMaxMembers(2);
 
         chatRoom = chatRoomRepository.save(chatRoom);
+        ensureSystemAgentBinding(chatRoom);
 
         // 添加成员
         addMemberToRoom(chatRoom.getId(), userId, ChatRoomMember.MemberRole.MEMBER);
@@ -91,6 +99,7 @@ public class ChatRoomService {
         chatRoom.setMaxMembers(500);
 
         chatRoom = chatRoomRepository.save(chatRoom);
+        ensureSystemAgentBinding(chatRoom);
 
         // 添加创建者为管理员
         addMemberToRoom(chatRoom.getId(), creatorId, ChatRoomMember.MemberRole.ADMIN);
@@ -107,6 +116,31 @@ public class ChatRoomService {
         log.info("创建群聊房间: {} (创建者: {}, 成员数: {})", 
                 chatRoom.getId(), creatorId, memberIds != null ? memberIds.size() : 1);
         return chatRoom;
+    }
+
+    private void ensureSystemAgentBinding(ChatRoom chatRoom) {
+        if (chatRoom == null || chatRoom.getId() == null) {
+            return;
+        }
+        Optional<BotConfig> agent =
+                botConfigRepository.findFirstByBotNameAndCreatedByIsNullOrderByIdAsc("Agent");
+        if (agent != null) {
+            agent.ifPresent(bot -> ensureRoomBot(chatRoom, bot));
+        }
+    }
+
+    private void ensureRoomBot(ChatRoom chatRoom, BotConfig agent) {
+        chatRoomBotRepository.findByChatRoomIdAndBotConfigId(chatRoom.getId(), agent.getId())
+                .orElseGet(() -> {
+                    ChatRoomBot binding = new ChatRoomBot();
+                    binding.setChatRoom(chatRoom);
+                    binding.setBotConfig(agent);
+                    binding.setTriggerMode(ChatRoomBot.TriggerMode.MENTION);
+                    binding.setRoomNickname(agent.getBotName());
+                    binding.setEnabledInRoom(true);
+                    binding.setIsActive(true);
+                    return chatRoomBotRepository.save(binding);
+                });
     }
 
     /**

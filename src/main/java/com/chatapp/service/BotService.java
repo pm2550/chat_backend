@@ -445,6 +445,7 @@ public class BotService {
         }
         message.setChatRoom(chatRoom);
         message.setBotConfig(config);
+        message.setBotDisplayName(displayName);
         // Bot messages need a sender - use the bot creator or chat room creator
         Long botUserId = config.getCreatedBy() != null
                 ? config.getCreatedBy().getId()
@@ -578,6 +579,9 @@ public class BotService {
         }
         dto.setHasCredential(entity.getProviderCredential() != null
                 || (entity.getApiKeyEncrypted() != null && !entity.getApiKeyEncrypted().isBlank()));
+        if (entity.getCreatedBy() != null) {
+            dto.setCreatedById(entity.getCreatedBy().getId());
+        }
         dto.setHasCharacterCard(entity.getCharacterCardJson() != null && !entity.getCharacterCardJson().isBlank());
         dto.setCharacterPersona(entity.getCharacterPersona());
         dto.setCharacterScenario(entity.getCharacterScenario());

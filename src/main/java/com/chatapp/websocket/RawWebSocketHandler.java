@@ -676,7 +676,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (m.getBotConfig() != null) {
             json.put("botConfigId", m.getBotConfig().getId());
             json.put("botSenderId", m.getBotConfig().getId());
-            json.put("botName", m.getBotConfig().getBotName());
+            json.put("botName", fallback(m.getBotDisplayName(), m.getBotConfig().getBotName()));
             if (m.getBotConfig().getBotAvatar() != null) {
                 json.put("botAvatar", m.getBotConfig().getBotAvatar());
             }

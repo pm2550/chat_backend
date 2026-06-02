@@ -1,13 +1,19 @@
 package com.chatapp.service;
 
+import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
+import com.chatapp.entity.ChatRoomBot;
 import com.chatapp.entity.ChatRoomMember;
 import com.chatapp.entity.User;
+import com.chatapp.repository.BotConfigRepository;
+import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
+import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -28,6 +34,18 @@ class ChatRoomServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private MessageRepository messageRepository;
+
+    @Mock
+    private FileStorageService fileStorageService;
+
+    @Mock
+    private BotConfigRepository botConfigRepository;
+
+    @Mock
+    private ChatRoomBotRepository chatRoomBotRepository;
 
     @InjectMocks
     private ChatRoomService chatRoomService;
@@ -72,9 +90,17 @@ class ChatRoomServiceTest {
 
     @Test
     void testCreatePrivateChat_New() {
+        BotConfig agent = new BotConfig();
+        agent.setId(7L);
+        agent.setBotName("Agent");
         when(chatRoomRepository.findPrivateChatBetween(1L, 2L)).thenReturn(Optional.empty());
         when(userRepository.findById(1L)).thenReturn(Optional.of(user1));
         when(userRepository.findById(2L)).thenReturn(Optional.of(user2));
+        when(botConfigRepository.findFirstByBotNameAndCreatedByIsNullOrderByIdAsc("Agent"))
+                .thenReturn(Optional.of(agent));
+        when(chatRoomBotRepository.findByChatRoomIdAndBotConfigId(100L, 7L))
+                .thenReturn(Optional.empty());
+        when(chatRoomBotRepository.save(any(ChatRoomBot.class))).thenAnswer(inv -> inv.getArgument(0));
         when(chatRoomRepository.save(any(ChatRoom.class))).thenAnswer(invocation -> {
             ChatRoom room = invocation.getArgument(0);
             if (room.getId() == null) {
@@ -101,6 +127,12 @@ class ChatRoomServiceTest {
         assertTrue(result.getIsPrivate());
         assertEquals(2, result.getMaxMembers());
         verify(chatRoomRepository, atLeastOnce()).save(any(ChatRoom.class));
+        ArgumentCaptor<ChatRoomBot> binding = ArgumentCaptor.forClass(ChatRoomBot.class);
+        verify(chatRoomBotRepository).save(binding.capture());
+        assertEquals(100L, binding.getValue().getChatRoom().getId());
+        assertEquals("Agent", binding.getValue().getBotConfig().getBotName());
+        assertTrue(binding.getValue().getIsActive());
+        assertEquals(ChatRoomBot.TriggerMode.MENTION, binding.getValue().getTriggerMode());
     }
 
     @Test
@@ -118,8 +150,16 @@ class ChatRoomServiceTest {
 
     @Test
     void testCreateGroupChat() {
+        BotConfig agent = new BotConfig();
+        agent.setId(7L);
+        agent.setBotName("Agent");
         when(userRepository.findById(1L)).thenReturn(Optional.of(user1));
         when(userRepository.findById(2L)).thenReturn(Optional.of(user2));
+        when(botConfigRepository.findFirstByBotNameAndCreatedByIsNullOrderByIdAsc("Agent"))
+                .thenReturn(Optional.of(agent));
+        when(chatRoomBotRepository.findByChatRoomIdAndBotConfigId(200L, 7L))
+                .thenReturn(Optional.empty());
+        when(chatRoomBotRepository.save(any(ChatRoomBot.class))).thenAnswer(inv -> inv.getArgument(0));
         when(chatRoomRepository.save(any(ChatRoom.class))).thenAnswer(invocation -> {
             ChatRoom room = invocation.getArgument(0);
             if (room.getId() == null) {
@@ -143,6 +183,10 @@ class ChatRoomServiceTest {
         assertEquals(ChatRoom.RoomType.GROUP, result.getRoomType());
         assertEquals("My Group", result.getName());
         verify(chatRoomRepository, atLeastOnce()).save(any(ChatRoom.class));
+        ArgumentCaptor<ChatRoomBot> binding = ArgumentCaptor.forClass(ChatRoomBot.class);
+        verify(chatRoomBotRepository).save(binding.capture());
+        assertEquals(ChatRoomBot.TriggerMode.MENTION, binding.getValue().getTriggerMode());
+        assertEquals("Agent", binding.getValue().getRoomNickname());
     }
 
     // ---- joinChatRoom ----

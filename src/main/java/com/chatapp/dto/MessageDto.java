@@ -95,7 +95,7 @@ public class MessageDto {
         if (message.getBotConfig() != null) {
             dto.setBotConfigId(message.getBotConfig().getId());
             dto.setBotSenderId(message.getBotConfig().getId());
-            dto.setBotName(message.getBotConfig().getBotName());
+            dto.setBotName(prefer(message.getBotDisplayName(), message.getBotConfig().getBotName()));
             dto.setBotAvatar(message.getBotConfig().getBotAvatar());
         }
         dto.setIsAnonymous(Boolean.TRUE.equals(message.getIsAnonymous()));
@@ -161,6 +161,10 @@ public class MessageDto {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    private static String prefer(String preferred, String fallback) {
+        return preferred != null && !preferred.isBlank() ? preferred : fallback;
     }
 
     private static UserDto toUserDto(com.chatapp.entity.User user) {

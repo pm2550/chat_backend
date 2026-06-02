@@ -1,14 +1,56 @@
 package com.chatapp.dto;
 
-import com.chatapp.entity.Message;
 import com.chatapp.entity.BotConfig;
+import com.chatapp.entity.ChatRoom;
+import com.chatapp.entity.Message;
+import com.chatapp.entity.User;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class MessageDtoTest {
+
+    @Test
+    void botNamePrefersPersistedRoomDisplayName() {
+        Message message = botMessage("Agent", "无敌高");
+
+        MessageDto dto = MessageDto.fromEntity(message);
+
+        assertEquals("无敌高", dto.getBotName());
+    }
+
+    @Test
+    void botNameFallsBackToBotConfigNameForLegacyRows() {
+        Message message = botMessage("Agent", null);
+
+        MessageDto dto = MessageDto.fromEntity(message);
+
+        assertEquals("Agent", dto.getBotName());
+    }
+
+    @Test
+    void botDisplayNameTrimsBlankRoomNicknameAndFallsBack() {
+        Message msg = botMessage("PrimaryBot", "   ");
+
+        MessageDto dto = MessageDto.fromEntity(msg);
+
+        assertEquals("PrimaryBot", dto.getBotName(),
+                "blank/whitespace botDisplayName must fall back to botConfig.botName");
+    }
+
+    @Test
+    void botDisplayNameIsIndependentPerRoomSnapshot() {
+        Message msgA = botMessage("Echo", "无敌高");
+        Message msgB = botMessage("Echo", "Echo");
+
+        MessageDto dtoA = MessageDto.fromEntity(msgA);
+        MessageDto dtoB = MessageDto.fromEntity(msgB);
+
+        assertEquals("无敌高", dtoA.getBotName());
+        assertEquals("Echo", dtoB.getBotName());
+    }
 
     @Test
     void fromEntityParsesStoredLinkPreviewJson() {
@@ -79,5 +121,29 @@ class MessageDtoTest {
         assertEquals("Agent", dto.getBotName());
         assertEquals("/assets/agent-avatar.png", dto.getBotAvatar());
         assertFalse(dto.getContent().startsWith("[Agent] "));
+    }
+
+    private Message botMessage(String botName, String botDisplayName) {
+        User sender = new User();
+        sender.setId(1L);
+        sender.setUsername("admin");
+
+        ChatRoom room = new ChatRoom();
+        room.setId(42L);
+
+        BotConfig bot = new BotConfig();
+        bot.setId(7L);
+        bot.setBotName(botName);
+
+        Message message = new Message();
+        message.setId(100L);
+        message.setContent("hello");
+        message.setSender(sender);
+        message.setChatRoom(room);
+        message.setBotConfig(bot);
+        message.setBotDisplayName(botDisplayName);
+        message.setMessageType(Message.MessageType.TEXT);
+        message.setMessageStatus(Message.MessageStatus.SENT);
+        return message;
     }
 }

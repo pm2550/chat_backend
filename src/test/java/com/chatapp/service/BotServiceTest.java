@@ -236,6 +236,7 @@ class BotServiceTest {
         ChatRoomBot crb = new ChatRoomBot();
         crb.setBotConfig(bot);
         crb.setTriggerMode(ChatRoomBot.TriggerMode.MENTION);
+        crb.setRoomNickname("Deploy Bot");
         when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
         when(llmService.chat(any(BotConfig.class), any()))
                 .thenReturn(new BotDto.LLMResponse("hello back", 42, "gpt-4o"));
@@ -243,7 +244,7 @@ class BotServiceTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
         when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.processMessageForBots(100L, "@GPT-Helper what's up", 1L);
+        service.processMessageForBots(100L, "@Deploy Bot what's up", 1L);
 
         verify(llmService).chat(eq(bot), any());
         ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
@@ -252,6 +253,7 @@ class BotServiceTest {
         assertEquals("hello back", saved.getContent());
         assertEquals(Message.MessageType.TEXT, saved.getMessageType());
         assertEquals(bot, saved.getBotConfig());
+        assertEquals("Deploy Bot", saved.getBotDisplayName());
     }
 
     @Test
