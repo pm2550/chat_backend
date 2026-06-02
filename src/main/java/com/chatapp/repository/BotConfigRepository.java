@@ -22,4 +22,6 @@ public interface BotConfigRepository extends JpaRepository<BotConfig, Long> {
 
     @EntityGraph(attributePaths = {"providerCredential"})
     Optional<BotConfig> findFirstByBotNameAndCreatedByIsNullOrderByIdAsc(String botName);
+
+    Optional<BotConfig> findByInboundTokenFingerprint(String inboundTokenFingerprint);
 }

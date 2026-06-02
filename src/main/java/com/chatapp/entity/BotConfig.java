@@ -96,6 +96,14 @@ public class BotConfig {
     @Column(name = "enabled_tools", columnDefinition = "TEXT")
     private String enabledTools;
 
+    // Inbound bot token (Phase 4 / F1): lets an external service post AS this bot.
+    // Only fingerprint + last4 are stored; the raw token is shown once on rotate.
+    @Column(name = "inbound_token_fingerprint", length = 64)
+    private String inboundTokenFingerprint;
+
+    @Column(name = "inbound_token_last4", length = 8)
+    private String inboundTokenLast4;
+
     @Column(name = "max_agent_iterations")
     private Integer maxAgentIterations = 8;
 

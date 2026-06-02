@@ -16,6 +16,8 @@ public interface ChatRoomBotRepository extends JpaRepository<ChatRoomBot, Long> 
 
     Optional<ChatRoomBot> findByChatRoomIdAndBotConfigId(Long chatRoomId, Long botConfigId);
 
+    List<ChatRoomBot> findByBotConfigIdAndIsActiveTrue(Long botConfigId);
+
     @Query("SELECT crb FROM ChatRoomBot crb JOIN FETCH crb.botConfig bc " +
            "LEFT JOIN FETCH bc.providerCredential " +
            "WHERE crb.chatRoom.id = :chatRoomId AND crb.isActive = true")

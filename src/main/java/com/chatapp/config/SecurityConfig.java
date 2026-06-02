@@ -87,6 +87,7 @@ public class SecurityConfig {
                     .requestMatchers("/ws", "/ws/**").permitAll()
                     .requestMatchers("/api/v1/app/version").permitAll()
                     .requestMatchers("/api/v1/app/version/publish-from-ci").permitAll()
+                    .requestMatchers("/api/bot-gateway/**").permitAll()
                     .requestMatchers("/api/v1/app/download/**").permitAll()
                     .requestMatchers("/api/files/avatar/**").permitAll()
                     .requestMatchers("/api/files/background/**").permitAll()

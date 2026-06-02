@@ -4,6 +4,7 @@ import com.chatapp.dto.ApiResponse;
 import com.chatapp.dto.BotDto;
 import com.chatapp.dto.UserDto;
 import com.chatapp.service.BotService;
+import com.chatapp.service.BotTokenService;
 import com.chatapp.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +22,19 @@ public class BotController {
 
     private final BotService botService;
     private final UserService userService;
+    private final BotTokenService botTokenService;
+
+    /** (Re)generate this bot's inbound gateway token. Returns the raw token ONCE. */
+    @PostMapping("/{botId}/token/rotate")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> rotateInboundToken(
+            @PathVariable Long botId,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        String rawToken = botTokenService.rotateTokenForOwner(botId, currentUser.getId());
+        return ResponseEntity.ok(ApiResponse.success(
+                "令牌已生成（仅显示一次，请妥善保存）",
+                Map.<String, Object>of("token", rawToken)));
+    }
 
     @PostMapping
     public ResponseEntity<ApiResponse<BotDto>> createBot(
