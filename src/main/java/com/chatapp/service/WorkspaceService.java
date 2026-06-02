@@ -11,6 +11,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
@@ -21,6 +22,8 @@ import java.util.*;
 public class WorkspaceService {
 
     private static final long DEFAULT_WORKSPACE_QUOTA_BYTES = 10L * 1024 * 1024 * 1024;
+    /** Cap for in-app text read/edit (F6); larger files must use upload/download. */
+    private static final int MAX_EDITABLE_TEXT_BYTES = 2 * 1024 * 1024;
 
     private final WorkspaceRepository workspaceRepository;
     private final WorkspaceMemberRepository workspaceMemberRepository;
@@ -354,6 +357,117 @@ public class WorkspaceService {
         auditLogService.record(actor, "WORKSPACE_FILE_GENERATED", "WORKSPACE_FILE",
                 savedFile.getId(), null, savedFile.getDisplayName());
         return WorkspaceDto.FileDto.fromEntity(savedFile);
+    }
+
+    // ---- F6: in-app text editing (read current text / create text file / save edited version) ----
+
+    /** Read the current version of a text-like file as a UTF-8 string for in-app editing. */
+    @Transactional(readOnly = true)
+    public WorkspaceDto.TextContent readTextContent(Long workspaceId, Long fileId, Long actorId)
+            throws IOException {
+        Workspace workspace = loadWorkspace(workspaceId);
+        WorkspaceFile file = loadFile(workspaceId, fileId);
+        requireUserResourceAccess(workspace, fileId, WorkspacePermission.ResourceType.FILE,
+                actorId, WorkspacePermission.AccessLevel.VIEW);
+        if (!isPreviewable(file)) {
+            throw new IllegalArgumentException("该文件不是可在线编辑的文本类型");
+        }
+        if (safeSize(file.getFileSize()) > MAX_EDITABLE_TEXT_BYTES) {
+            throw new IllegalArgumentException("文件过大，无法在线编辑（上限 "
+                    + (MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)) + "MB）");
+        }
+        byte[] bytes = fileStorageService.getWorkspaceFile(file.getStorageProvider(), storageKey(file));
+        return new WorkspaceDto.TextContent(
+                file.getId(), file.getDisplayName(), file.getMimeType(),
+                file.getCurrentVersion(), new String(bytes, StandardCharsets.UTF_8));
+    }
+
+    /** Create a new text file (version 1) from a UTF-8 string. */
+    @Transactional
+    public WorkspaceDto.FileDto createTextFile(Long workspaceId, Long actorId, Long folderId,
+            Long sourceBotId, String fileName, String content, String versionNote) throws IOException {
+        Workspace workspace = loadWorkspace(workspaceId);
+        User actor = getUser(actorId);
+        WorkspaceFolder folder = folderId == null ? null : loadFolder(workspaceId, folderId);
+        requireWritable(workspace, folder, null, actorId);
+        BotConfig sourceBot = resolveSourceBot(sourceBotId, actorId, workspace);
+        String safeFileName = generatedFileName(fileName);
+        byte[] bytes = content == null ? new byte[0] : content.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_EDITABLE_TEXT_BYTES) {
+            throw new IllegalArgumentException("文本内容过大（上限 "
+                    + (MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)) + "MB）");
+        }
+        WorkspaceFileScanService.ScanResult scan = workspaceFileScanService.scan(safeFileName, bytes);
+        assertWithinQuota(workspace, bytes.length);
+
+        FileStorageService.StoredFile storedFile = fileStorageService.uploadWorkspaceFile(
+                safeFileName, "text/plain; charset=utf-8", bytes);
+
+        WorkspaceFile file = new WorkspaceFile();
+        file.setWorkspace(workspace);
+        file.setFolder(folder);
+        file.setDisplayName(storedFile.originalFileName());
+        file.setCurrentStorageName(storedFile.storageFileName());
+        file.setMimeType(storedFile.contentType());
+        file.setFileSize(storedFile.size());
+        file.setCreatedBy(actor);
+        file.setSourceBot(sourceBot);
+        file.setSourceType(sourceBot != null ? WorkspaceFile.SourceType.BOT : WorkspaceFile.SourceType.USER);
+        file.setBotAccessEnabled(false);
+        file.setScanStatus(scan.status());
+        file.setScanSummary(scan.summary());
+        file.setScannedAt(scan.scannedAt());
+        file.setStorageProvider(storedFile.storageProvider());
+        file.setObjectKey(storedFile.objectKey());
+        WorkspaceFile savedFile = workspaceFileRepository.save(file);
+        saveVersion(savedFile, 1, storedFile, bytes, actor, sourceBot, versionNote, scan);
+        adjustWorkspaceUsage(workspace, storedFile.size());
+        auditLogService.record(actor, "WORKSPACE_FILE_TEXT_CREATE", "WORKSPACE_FILE",
+                savedFile.getId(), null, savedFile.getDisplayName());
+        return WorkspaceDto.FileDto.fromEntity(savedFile);
+    }
+
+    /** Save edited text as a new version of an existing file (preserves the display name). */
+    @Transactional
+    public WorkspaceDto.FileDto saveTextVersion(Long workspaceId, Long fileId, Long actorId,
+            Long sourceBotId, String content, String versionNote) throws IOException {
+        Workspace workspace = loadWorkspace(workspaceId);
+        WorkspaceFile file = loadFile(workspaceId, fileId);
+        User actor = getUser(actorId);
+        requireWritable(workspace, file.getFolder(), file, actorId);
+        BotConfig sourceBot = resolveSourceBot(sourceBotId, actorId, workspace);
+        byte[] bytes = content == null ? new byte[0] : content.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_EDITABLE_TEXT_BYTES) {
+            throw new IllegalArgumentException("文本内容过大（上限 "
+                    + (MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)) + "MB）");
+        }
+        String fileName = file.getDisplayName() == null || file.getDisplayName().isBlank()
+                ? "edited.txt" : file.getDisplayName();
+        WorkspaceFileScanService.ScanResult scan = workspaceFileScanService.scan(fileName, bytes);
+        long delta = bytes.length - safeSize(file.getFileSize());
+        assertWithinQuota(workspace, delta);
+
+        FileStorageService.StoredFile storedFile = fileStorageService.uploadWorkspaceFile(
+                fileName,
+                file.getMimeType() == null || file.getMimeType().isBlank()
+                        ? "text/plain; charset=utf-8" : file.getMimeType(),
+                bytes);
+        int nextVersion = Optional.ofNullable(file.getCurrentVersion()).orElse(0) + 1;
+        saveVersion(file, nextVersion, storedFile, bytes, actor, sourceBot, versionNote, scan);
+        // Editing keeps the original display name (unlike a multipart re-upload).
+        file.setCurrentStorageName(storedFile.storageFileName());
+        file.setFileSize(storedFile.size());
+        file.setCurrentVersion(nextVersion);
+        file.setScanStatus(scan.status());
+        file.setScanSummary(scan.summary());
+        file.setScannedAt(scan.scannedAt());
+        file.setStorageProvider(storedFile.storageProvider());
+        file.setObjectKey(storedFile.objectKey());
+        WorkspaceFile saved = workspaceFileRepository.save(file);
+        adjustWorkspaceUsage(workspace, delta);
+        auditLogService.record(actor, "WORKSPACE_FILE_TEXT_EDIT", "WORKSPACE_FILE",
+                saved.getId(), null, saved.getDisplayName() + "#" + nextVersion);
+        return WorkspaceDto.FileDto.fromEntity(saved);
     }
 
     @Transactional(readOnly = true)

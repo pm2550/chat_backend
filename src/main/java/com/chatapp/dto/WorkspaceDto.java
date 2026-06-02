@@ -311,4 +311,33 @@ public class WorkspaceDto {
         private final WorkspaceFile file;
         private final byte[] bytes;
     }
+
+    /** UTF-8 text body of a file's current version, for in-app editing (F6). */
+    @Data
+    public static class TextContent {
+        private final Long fileId;
+        private final String displayName;
+        private final String mimeType;
+        private final Integer currentVersion;
+        private final String content;
+    }
+
+    /** Create a new text file from a UTF-8 string (F6). */
+    @Data
+    public static class CreateTextFileRequest {
+        @NotBlank
+        private String fileName;
+        private String content;
+        private Long folderId;
+        private Long sourceBotId;
+        private String versionNote;
+    }
+
+    /** Save edited text as a new version of an existing file (F6). */
+    @Data
+    public static class SaveTextRequest {
+        private String content;
+        private Long sourceBotId;
+        private String versionNote;
+    }
 }

@@ -235,6 +235,39 @@ public class WorkspaceController {
                 workspaceService.addFileVersion(workspaceId, fileId, currentUserId(auth), sourceBotId, versionNote, file)));
     }
 
+    // ---- F6: in-app text editing ----
+
+    @GetMapping("/{workspaceId}/files/{fileId}/text")
+    public ResponseEntity<ApiResponse<WorkspaceDto.TextContent>> readText(
+            @PathVariable Long workspaceId,
+            @PathVariable Long fileId,
+            Authentication auth) throws IOException {
+        return ResponseEntity.ok(ApiResponse.success(
+                workspaceService.readTextContent(workspaceId, fileId, currentUserId(auth))));
+    }
+
+    @PostMapping("/{workspaceId}/files/text")
+    public ResponseEntity<ApiResponse<WorkspaceDto.FileDto>> createTextFile(
+            @PathVariable Long workspaceId,
+            @Valid @RequestBody WorkspaceDto.CreateTextFileRequest request,
+            Authentication auth) throws IOException {
+        return ResponseEntity.ok(ApiResponse.success("文件已创建",
+                workspaceService.createTextFile(workspaceId, currentUserId(auth), request.getFolderId(),
+                        request.getSourceBotId(), request.getFileName(), request.getContent(),
+                        request.getVersionNote())));
+    }
+
+    @PostMapping("/{workspaceId}/files/{fileId}/text")
+    public ResponseEntity<ApiResponse<WorkspaceDto.FileDto>> saveText(
+            @PathVariable Long workspaceId,
+            @PathVariable Long fileId,
+            @RequestBody WorkspaceDto.SaveTextRequest request,
+            Authentication auth) throws IOException {
+        return ResponseEntity.ok(ApiResponse.success("文件已保存",
+                workspaceService.saveTextVersion(workspaceId, fileId, currentUserId(auth),
+                        request.getSourceBotId(), request.getContent(), request.getVersionNote())));
+    }
+
     @PostMapping("/{workspaceId}/files/{fileId}/versions/{versionNumber}/restore")
     public ResponseEntity<ApiResponse<WorkspaceDto.FileDto>> restoreVersion(
             @PathVariable Long workspaceId,

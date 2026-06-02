@@ -268,6 +268,108 @@ class WorkspaceIntegrationTest {
     }
 
     @Test
+    @DisplayName("F6: in-app text editing create/read/edit-new-version preserves name and history")
+    void inAppTextEditingCreateReadAndVersion() throws Exception {
+        Object[] owner = createUserAndLogin("wstext");
+        String ownerToken = (String) owner[0];
+        Long workspaceId = createWorkspace(ownerToken, "Text vault", "TEAM", false);
+
+        // Create a text file via JSON (not multipart).
+        Map<String, Object> create = new HashMap<>();
+        create.put("fileName", "notes.txt");
+        create.put("content", "# Title\nhello");
+        create.put("versionNote", "initial");
+        MvcResult created = mockMvc.perform(post("/api/v1/workspaces/" + workspaceId + "/files/text")
+                .header("Authorization", "Bearer " + ownerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(create)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.displayName").value("notes.txt"))
+                .andExpect(jsonPath("$.data.sourceType").value("USER"))
+                .andReturn();
+        Long fileId = extractDataId(created);
+
+        // Read the text back.
+        mockMvc.perform(get("/api/v1/workspaces/" + workspaceId + "/files/" + fileId + "/text")
+                .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content").value("# Title\nhello"))
+                .andExpect(jsonPath("$.data.currentVersion").value(1));
+
+        // Save an edited new version.
+        Map<String, Object> edit = new HashMap<>();
+        edit.put("content", "# Title\nhello world");
+        edit.put("versionNote", "expanded");
+        mockMvc.perform(post("/api/v1/workspaces/" + workspaceId + "/files/" + fileId + "/text")
+                .header("Authorization", "Bearer " + ownerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(edit)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.currentVersion").value(2))
+                .andExpect(jsonPath("$.data.displayName").value("notes.txt")); // name preserved on edit
+
+        // Read + download reflect the edit; two versions recorded.
+        mockMvc.perform(get("/api/v1/workspaces/" + workspaceId + "/files/" + fileId + "/text")
+                .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content").value("# Title\nhello world"));
+        mockMvc.perform(get("/api/v1/workspaces/" + workspaceId + "/files/" + fileId + "/download")
+                .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(content().bytes("# Title\nhello world".getBytes()));
+        mockMvc.perform(get("/api/v1/workspaces/" + workspaceId + "/files/" + fileId + "/versions")
+                .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(2)));
+    }
+
+    @Test
+    @DisplayName("F6: text read/edit respects workspace VIEW/EDIT permissions")
+    void textEditingRespectsPermissions() throws Exception {
+        Object[] owner = createUserAndLogin("wstextowner");
+        String ownerToken = (String) owner[0];
+        Object[] viewer = createUserAndLogin("wstextviewer");
+        String viewerToken = (String) viewer[0];
+        Long viewerId = (Long) viewer[1];
+        Object[] outsider = createUserAndLogin("wstextoutsider");
+        String outsiderToken = (String) outsider[0];
+
+        Long workspaceId = createWorkspace(ownerToken, "Perm text vault", "TEAM", false);
+        addMember(ownerToken, workspaceId, viewerId, "VIEWER");
+
+        Map<String, Object> create = new HashMap<>();
+        create.put("fileName", "shared.txt");
+        create.put("content", "v1");
+        MvcResult created = mockMvc.perform(post("/api/v1/workspaces/" + workspaceId + "/files/text")
+                .header("Authorization", "Bearer " + ownerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(create)))
+                .andExpect(status().isOk())
+                .andReturn();
+        Long fileId = extractDataId(created);
+
+        // VIEWER can read the text.
+        mockMvc.perform(get("/api/v1/workspaces/" + workspaceId + "/files/" + fileId + "/text")
+                .header("Authorization", "Bearer " + viewerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content").value("v1"));
+
+        // VIEWER may NOT save a new version (needs EDIT).
+        Map<String, Object> edit = new HashMap<>();
+        edit.put("content", "tampered");
+        mockMvc.perform(post("/api/v1/workspaces/" + workspaceId + "/files/" + fileId + "/text")
+                .header("Authorization", "Bearer " + viewerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(edit)))
+                .andExpect(status().isForbidden());
+
+        // An outsider may not even read it.
+        mockMvc.perform(get("/api/v1/workspaces/" + workspaceId + "/files/" + fileId + "/text")
+                .header("Authorization", "Bearer " + outsiderToken))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     @DisplayName("Malformed workspace permission payload returns bad request")
     void malformedPermissionPayloadReturnsBadRequest() throws Exception {
         Object[] owner = createUserAndLogin("wsmalformed");
