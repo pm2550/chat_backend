@@ -31,6 +31,9 @@ public class LlmHealthIndicator implements HealthIndicator {
     @Value("${llm.ollama.base-url:}")
     private String ollamaBaseUrl;
 
+    @Value("${llm.ollama.api-key:}")
+    private String ollamaApiKey;
+
     @Value("${llm.hermes.api-key:}")
     private String hermesApiKey;
 
@@ -78,8 +81,14 @@ public class LlmHealthIndicator implements HealthIndicator {
                 .connectTimeout(1500, TimeUnit.MILLISECONDS)
                 .readTimeout(1500, TimeUnit.MILLISECONDS)
                 .build();
-        String url = ollamaBaseUrl.replaceAll("/+$", "") + "/api/tags";
-        Request request = new Request.Builder().url(url).get().build();
+        String base = ollamaBaseUrl.replaceAll("/+$", "");
+        Request.Builder requestBuilder = new Request.Builder()
+                .url(hasText(ollamaApiKey) ? base + "/v1/models" : base + "/api/tags")
+                .get();
+        if (hasText(ollamaApiKey)) {
+            requestBuilder.header("Authorization", "Bearer " + ollamaApiKey);
+        }
+        Request request = requestBuilder.build();
         try (Response response = client.newCall(request).execute()) {
             return response.isSuccessful();
         } catch (IOException e) {

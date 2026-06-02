@@ -50,6 +50,8 @@ public class LLMService {
     private String ollamaBaseUrl;
     @Value("${llm.ollama.model:llama3}")
     private String ollamaModel;
+    @Value("${llm.ollama.api-key:}")
+    private String ollamaApiKey;
 
     @Value("${llm.hermes.api-key:}")
     private String hermesApiKey;
@@ -99,10 +101,15 @@ public class LLMService {
                     resolveBaseUrl(botConfig, deepseekBaseUrl),
                     resolveModel(botConfig, deepseekModel),
                     messages, botConfig, tools);
-            case OLLAMA -> callOllama(
-                    resolveBaseUrl(botConfig, ollamaBaseUrl),
-                    resolveModel(botConfig, ollamaModel),
-                    messages, botConfig, tools);
+            case OLLAMA -> {
+                String apiKey = resolveApiKey(botConfig, ollamaApiKey);
+                String baseUrl = resolveBaseUrl(botConfig, ollamaBaseUrl);
+                String model = resolveModel(botConfig, ollamaModel);
+                if (apiKey != null && !apiKey.isBlank()) {
+                    yield callOpenAICompatible(apiKey, ollamaOpenAiBaseUrl(baseUrl), model, messages, botConfig, tools);
+                }
+                yield callOllama(baseUrl, model, messages, botConfig, tools);
+            }
             case HERMES -> callOpenAICompatible(
                     requireApiKey(resolveApiKey(botConfig, hermesApiKey), "Hermes"),
                     resolveBaseUrl(botConfig, hermesBaseUrl),
@@ -442,5 +449,13 @@ public class LLMService {
             }
         }
         return defaultBaseUrl;
+    }
+
+    String ollamaOpenAiBaseUrl(String baseUrl) {
+        String trimmed = baseUrl == null ? "" : baseUrl.trim().replaceAll("/+$", "");
+        if (trimmed.endsWith("/v1")) {
+            return trimmed;
+        }
+        return trimmed + "/v1";
     }
 }

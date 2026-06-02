@@ -30,10 +30,72 @@ class LLMServiceProviderToolTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
+    void ollamaCloudWithApiKeyUsesOpenAiCompatibleEndpointAndBearerAuth() throws Exception {
+        AtomicReference<String> capturedPath = new AtomicReference<>();
+        AtomicReference<String> authHeader = new AtomicReference<>("__unset__");
+        StringBuilder capturedRequest = new StringBuilder();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            capturedPath.set(exchange.getRequestURI().getPath());
+            authHeader.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            capturedRequest.append(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] body = """
+                    {
+                      "choices": [{
+                        "finish_reason": "tool_calls",
+                        "message": {
+                          "role": "assistant",
+                          "content": "",
+                          "tool_calls": [{
+                            "id": "call-ollama-cloud",
+                            "type": "function",
+                            "function": {"name": "echo", "arguments": "{\\"value\\":\\"cloud\\"}"}
+                          }]
+                        }
+                      }],
+                      "usage": {"total_tokens": 13}
+                    }
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            LLMService service = new LLMService(objectMapper, mock(ProviderCredentialService.class));
+            ReflectionTestUtils.setField(service, "ollamaBaseUrl", "http://127.0.0.1:" + server.getAddress().getPort());
+            ReflectionTestUtils.setField(service, "ollamaModel", "kimi-k2.6");
+            ReflectionTestUtils.setField(service, "ollamaApiKey", "cloud-key");
+
+            BotConfig bot = new BotConfig();
+            bot.setLlmProvider(BotConfig.LLMProvider.OLLAMA);
+            BotDto.LLMResponse response = service.chat(bot,
+                    List.of(new BotDto.ChatMessage("user", "use a tool")),
+                    List.of(new EchoTool()));
+
+            assertEquals("/v1/chat/completions", capturedPath.get());
+            assertEquals("Bearer cloud-key", authHeader.get());
+            assertTrue(capturedRequest.toString().contains("\"tools\""));
+            assertTrue(capturedRequest.toString().contains("\"tool_choice\":\"auto\""));
+            assertEquals(1, response.getToolCalls().size());
+            assertEquals("echo", response.getToolCalls().get(0).getName());
+            assertEquals("{\"value\":\"cloud\"}", response.getToolCalls().get(0).getArgumentsJson());
+            assertEquals(13, response.getTokensUsed());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void ollamaSendsToolsAndParsesObjectArgumentsToolCalls() throws Exception {
+        AtomicReference<String> capturedPath = new AtomicReference<>();
+        AtomicReference<String> authHeader = new AtomicReference<>("__unset__");
         StringBuilder capturedRequest = new StringBuilder();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/api/chat", exchange -> {
+            capturedPath.set(exchange.getRequestURI().getPath());
+            authHeader.set(exchange.getRequestHeaders().getFirst("Authorization"));
             capturedRequest.append(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] body = """
                     {
@@ -66,6 +128,9 @@ class LLMServiceProviderToolTest {
                     List.of(new EchoTool()));
 
             // Request carried the OpenAI-style tools array.
+            assertEquals("/api/chat", capturedPath.get());
+            assertNull(authHeader.get());
+            assertFalse("__unset__".equals(authHeader.get()));
             assertTrue(capturedRequest.toString().contains("\"tools\""));
             assertTrue(capturedRequest.toString().contains("\"echo\""));
             // tool_calls parsed: object arguments stringified, id synthesized.
