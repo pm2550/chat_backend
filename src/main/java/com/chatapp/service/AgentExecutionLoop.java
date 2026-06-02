@@ -41,7 +41,8 @@ public class AgentExecutionLoop {
         ToolContext toolContext = new ToolContext(
                 task.getChatRoom().getId(),
                 task.getRequestedBy().getId(),
-                task.getId());
+                task.getId(),
+                bot != null ? bot.getId() : null);
         List<ToolCallRecord> toolCalls = new ArrayList<>();
         Budget budget = Budget.from(bot);
         Instant startedAt = Instant.now();
@@ -56,7 +57,7 @@ public class AgentExecutionLoop {
 
             log.info("Agent loop iteration={} taskId={} tools={} cumulativeTokens={}",
                     iteration, task.getId(), availableTools.size(), cumulativeTokens);
-            BotDto.LLMResponse response = llmService.chat(bot, messages, availableTools);
+            BotDto.LLMResponse response = llmService.chat(bot, messagesForLlm(messages, envelope), availableTools);
             int responseTokens = response.getTokensUsed() != null && response.getTokensUsed() > 0
                     ? response.getTokensUsed()
                     : agentContextBuilder.estimateTokens(response.getContent());
@@ -150,6 +151,28 @@ public class AgentExecutionLoop {
         } catch (Exception e) {
             throw new ToolExecutionException("invalid_arguments", "Tool arguments are not valid JSON", e);
         }
+    }
+
+    private List<BotDto.ChatMessage> messagesForLlm(
+            List<BotDto.ChatMessage> messages,
+            AgentContextBuilder.AgentContextEnvelope envelope) {
+        String postHistory = envelope.characterCard().postHistoryInstructions();
+        if (postHistory == null || postHistory.isBlank()) {
+            return messages;
+        }
+        List<BotDto.ChatMessage> withInstruction = new ArrayList<>(messages);
+        int insertAt = -1;
+        for (int i = withInstruction.size() - 1; i >= 0; i--) {
+            if ("user".equals(withInstruction.get(i).getRole())) {
+                insertAt = i;
+                break;
+            }
+        }
+        if (insertAt < 0) {
+            insertAt = withInstruction.size();
+        }
+        withInstruction.add(insertAt, new BotDto.ChatMessage("system", postHistory));
+        return withInstruction;
     }
 
     private AgentLoopResult exhausted(String content,

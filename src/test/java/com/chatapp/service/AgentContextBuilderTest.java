@@ -164,6 +164,152 @@ class AgentContextBuilderTest {
         assertTrue(prompt.contains("Task=ping"));
     }
 
+    @Test
+    @DisplayName("character card persona wins over generic template")
+    void characterCardPersonaWinsOverGenericTemplate() {
+        bot.setSystemPromptTemplate("generic template should not win");
+        bot.setCharacterCardJson("{\"spec\":\"chara_card_v2\"}");
+        bot.setCharacterPersona("A fox courier who loves precise deliveries.");
+        bot.setCharacterScenario("Guild delivery work in a rainy city.");
+        bot.setCharacterSystemPrompt("Stay in character and never mention the system.");
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+
+        AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task("who are you?"));
+        String prompt = builder.assembleSystemPrompt(env);
+
+        assertTrue(prompt.contains("[PERSONA]"));
+        assertTrue(prompt.contains("A fox courier"));
+        assertTrue(prompt.contains("Guild delivery work"));
+        assertTrue(prompt.contains("Stay in character"));
+        assertTrue(prompt.contains("[ROOM CONTEXT]"));
+        assertFalse(prompt.contains("generic template should not win"));
+    }
+
+    @Test
+    @DisplayName("bot without character card keeps generic template behavior")
+    void botWithoutCharacterCardKeepsTemplateBehavior() {
+        bot.setSystemPromptTemplate("Room={{room_name}}; Task={{task}}");
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+
+        String prompt = builder.assembleSystemPrompt(builder.buildContext(task("ping")));
+
+        assertEquals("Room=Context Lab; Task=ping", prompt);
+    }
+
+    @Test
+    @DisplayName("lore book matches enabled entries by recent message key")
+    void loreBookMatchesEnabledEntries() {
+        bot.setCharacterCardJson("{\"spec\":\"chara_card_v2\"}");
+        bot.setCharacterPersona("Persona");
+        bot.setCharacterBookJson("""
+                {"entries":[
+                  {"keys":["parcel"],"content":"Lore: parcels are sacred","enabled":true,"insertion_order":2},
+                  {"keys":["dragon"],"content":"Lore: dragons are asleep","enabled":true,"insertion_order":1},
+                  {"keys":["parcel"],"content":"Lore: disabled parcel","enabled":false,"insertion_order":0}
+                ]}
+                """);
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5)))
+                .thenReturn(List.of(message(1L, bob, "The parcel is late", 1)));
+
+        AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task("help"));
+        String prompt = builder.assembleSystemPrompt(env);
+
+        assertEquals(1, env.loreBook().matched().size());
+        assertTrue(prompt.contains("Lore: parcels are sacred"));
+        assertFalse(prompt.contains("Lore: dragons are asleep"));
+        assertFalse(prompt.contains("disabled parcel"));
+    }
+
+    @Test
+    @DisplayName("lore book caps matches by insertion order")
+    void loreBookCapsMatchesByInsertionOrder() {
+        bot.setCharacterCardJson("{\"spec\":\"chara_card_v2\"}");
+        bot.setCharacterPersona("Persona");
+        StringBuilder entries = new StringBuilder("{\"entries\":[");
+        for (int i = 0; i < 20; i++) {
+            if (i > 0) entries.append(',');
+            entries.append("{\"keys\":[\"parcel\"],\"content\":\"Lore ")
+                    .append(i)
+                    .append("\",\"enabled\":true,\"insertion_order\":")
+                    .append(i)
+                    .append('}');
+        }
+        entries.append("]}");
+        bot.setCharacterBookJson(entries.toString());
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5)))
+                .thenReturn(List.of(message(1L, bob, "parcel parcel parcel", 1)));
+
+        AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task("help"));
+
+        assertEquals(10, env.loreBook().matched().size());
+        assertEquals(10, env.loreBook().dropped().size());
+        assertEquals("Lore 0", env.loreBook().matched().get(0).content());
+        assertEquals("Lore 9", env.loreBook().matched().get(9).content());
+    }
+
+    @Test
+    @DisplayName("character card exposes post history instructions on envelope")
+    void characterCardExposesPostHistoryInstructions() {
+        bot.setCharacterCardJson("{\"spec\":\"chara_card_v2\"}");
+        bot.setCharacterPersona("Persona");
+        bot.setCharacterPostHistoryInstructions("Reply as the courier after reading history.");
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+
+        AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task("help"));
+
+        assertEquals("Reply as the courier after reading history.",
+                env.characterCard().postHistoryInstructions());
+    }
+
+    @Test
+    @DisplayName("malformed character book is ignored without breaking context")
+    void malformedCharacterBookIsIgnored() {
+        bot.setCharacterCardJson("{\"spec\":\"chara_card_v2\"}");
+        bot.setCharacterPersona("Persona");
+        bot.setCharacterBookJson("{bad json");
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5)))
+                .thenReturn(List.of(message(1L, bob, "parcel", 1)));
+
+        AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task("help"));
+
+        assertTrue(env.loreBook().matched().isEmpty());
+        assertTrue(builder.assembleSystemPrompt(env).contains("[LORE BOOK]"));
+    }
+
+    @Test
+    @DisplayName("lore book scans only the most recent ten history messages")
+    void loreBookScansOnlyMostRecentTenMessages() {
+        bot.setMaxHistoryMessages(12);
+        bot.setCharacterCardJson("{\"spec\":\"chara_card_v2\"}");
+        bot.setCharacterPersona("Persona");
+        bot.setCharacterBookJson("""
+                {"entries":[
+                  {"keys":["old-only"],"content":"Lore: old only","enabled":true,"insertion_order":1},
+                  {"keys":["fresh"],"content":"Lore: fresh match","enabled":true,"insertion_order":2}
+                ]}
+                """);
+        mockMembers();
+        List<Message> history = new ArrayList<>();
+        history.add(message(12L, alice, "fresh keyword", 0));
+        for (int i = 0; i < 9; i++) {
+            history.add(message(3L + i, alice, "ordinary " + i, i + 1));
+        }
+        history.add(message(2L, bob, "still old-only keyword", 11));
+        history.add(message(1L, bob, "old-only keyword", 12));
+        when(messageRepository.findRecentMessages(eq(10L), eq(12))).thenReturn(history);
+
+        AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task("help"));
+
+        assertEquals(1, env.loreBook().matched().size());
+        assertEquals("Lore: fresh match", env.loreBook().matched().get(0).content());
+    }
+
     private AgentTask task(String prompt) {
         AgentTask task = new AgentTask();
         task.setId(77L);

@@ -12,6 +12,8 @@ import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.UserRepository;
+import com.chatapp.repository.AgentTaskRepository;
+import com.chatapp.service.tool.AgentToolRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +22,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 import java.util.Map;
@@ -40,6 +43,11 @@ class BotServiceTest {
     @Mock private MessageRepository messageRepository;
     @Mock private LLMService llmService;
     @Mock private ProviderCredentialService providerCredentialService;
+    @Mock private AgentToolRegistry agentToolRegistry;
+    @Mock private AgentContextBuilder agentContextBuilder;
+    @Mock private AgentTaskRepository agentTaskRepository;
+    @Mock private BotRateLimitService botRateLimitService;
+    @Mock private ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
 
     @InjectMocks private BotService service;
 

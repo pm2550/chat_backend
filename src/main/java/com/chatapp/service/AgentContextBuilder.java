@@ -8,6 +8,8 @@ import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MessageRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -39,11 +41,14 @@ public class AgentContextBuilder {
     private static final int DEFAULT_HISTORY_LIMIT = 20;
     private static final int DEFAULT_CONTEXT_TOKEN_BUDGET = 6000;
     private static final int TOP_MEMBER_LIMIT = 12;
+    private static final int LORE_SCAN_HISTORY_LIMIT = 10;
+    private static final int LORE_ENTRY_LIMIT = 10;
     private static final DateTimeFormatter HISTORY_TIME_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC'");
 
     private final MessageRepository messageRepository;
     private final ChatRoomRepository chatRoomRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AgentContextEnvelope buildContext(AgentTask task) {
         BotConfig botConfig = task.getBotConfig();
@@ -72,6 +77,8 @@ public class AgentContextBuilder {
 
         List<HistoricalMessage> history = fetchHistory(room, historyLimit);
         List<String> behaviorRules = defaultBehaviorRules();
+        CharacterCardSection card = buildCharacterCardSection(botConfig);
+        LoreBookSection loreBook = matchLoreBook(botConfig, history, LORE_ENTRY_LIMIT);
 
         AgentContextEnvelope env = new AgentContextEnvelope(
                 agentIdentity,
@@ -79,6 +86,8 @@ public class AgentContextBuilder {
                 history,
                 initiatorInfo,
                 behaviorRules,
+                card,
+                loreBook,
                 defaultString(task.getPrompt(), ""),
                 tokenBudget,
                 0);
@@ -90,12 +99,16 @@ public class AgentContextBuilder {
             env = env.withHistory(trimmed);
         }
 
+        env = trimLoreToBudget(env, tokenBudget);
+
         int estimatedTokens = estimateTokens(assembleSystemPrompt(env));
         env = env.withEstimatedTokens(estimatedTokens);
-        log.info("Agent context built: room='{}', members={}, history={}, estimatedTokens={}/{}",
+        log.info("Agent context built: room='{}', members={}, history={}, loreMatched={}, loreDropped={}, estimatedTokens={}/{}",
                 env.roomMetadata().name(),
                 env.roomMetadata().memberCount(),
                 env.conversationHistory().size(),
+                env.loreBook().matched().size(),
+                env.loreBook().dropped().size(),
                 estimatedTokens,
                 tokenBudget);
         return env;
@@ -103,27 +116,48 @@ public class AgentContextBuilder {
 
     public String assembleSystemPrompt(AgentContextEnvelope env) {
         String template = env.agentIdentity().systemPromptTemplate();
-        if (template != null && !template.isBlank()) {
+        if (!env.characterCard().hasCard() && template != null && !template.isBlank()) {
             return substituteTemplate(template, env);
         }
 
         StringBuilder prompt = new StringBuilder();
-        prompt.append("[ROLE: Agent identity]\n")
-                .append("You are ")
-                .append(env.agentIdentity().displayName())
-                .append(", a helpful agent inside the PM chat group room \"")
-                .append(env.roomMetadata().name())
-                .append("\".\n");
-        if (hasText(env.agentIdentity().baseSystemPrompt())) {
-            prompt.append(env.agentIdentity().baseSystemPrompt()).append("\n");
-        }
-        if (hasText(env.roomMetadata().topic())) {
-            prompt.append(env.roomMetadata().topic()).append("\n");
+        if (env.characterCard().hasCard()) {
+            // Character-card persona wins over system_prompt_template because the
+            // template is a generic room envelope, while the card is the bot's
+            // explicit identity. We still compose the room envelope below.
+            prompt.append("[PERSONA]\n");
+            appendIfPresent(prompt, env.characterCard().persona());
+            appendIfPresent(prompt, env.characterCard().scenario());
+            appendIfPresent(prompt, env.characterCard().systemPrompt());
+        } else {
+            prompt.append("[ROLE: Agent identity]\n")
+                    .append("You are ")
+                    .append(env.agentIdentity().displayName())
+                    .append(", a helpful agent inside the PM chat group room \"")
+                    .append(env.roomMetadata().name())
+                    .append("\".\n");
+            if (hasText(env.agentIdentity().baseSystemPrompt())) {
+                prompt.append(env.agentIdentity().baseSystemPrompt()).append("\n");
+            }
+            if (hasText(env.roomMetadata().topic())) {
+                prompt.append(env.roomMetadata().topic()).append("\n");
+            }
         }
 
         prompt.append("\n[BEHAVIOR RULES]\n");
         for (String rule : env.behaviorRules()) {
             prompt.append("- ").append(rule).append("\n");
+        }
+
+        if (env.characterCard().hasCard()) {
+            prompt.append("\n[LORE BOOK]\n");
+            if (env.loreBook().matched().isEmpty()) {
+                prompt.append("(none matched)\n");
+            } else {
+                for (LoreBookEntry entry : env.loreBook().matched()) {
+                    prompt.append("- ").append(entry.content()).append("\n");
+                }
+            }
         }
 
         prompt.append("\n[ROOM CONTEXT]\n");
@@ -268,6 +302,110 @@ public class AgentContextBuilder {
                 .replace("{{task}}", env.taskText());
     }
 
+    private CharacterCardSection buildCharacterCardSection(BotConfig bot) {
+        if (bot == null || !hasText(bot.getCharacterCardJson())) {
+            return CharacterCardSection.empty();
+        }
+        return new CharacterCardSection(
+                true,
+                firstText(bot.getCharacterPersona()),
+                firstText(bot.getCharacterScenario()),
+                firstText(bot.getCharacterSystemPrompt()),
+                firstText(bot.getCharacterPostHistoryInstructions()));
+    }
+
+    private LoreBookSection matchLoreBook(BotConfig bot, List<HistoricalMessage> history, int maxEntries) {
+        if (bot == null || !hasText(bot.getCharacterBookJson()) || history.isEmpty()) {
+            return LoreBookSection.empty();
+        }
+        List<String> haystack = history.stream()
+                .skip(Math.max(0, history.size() - LORE_SCAN_HISTORY_LIMIT))
+                .map(HistoricalMessage::content)
+                .filter(AgentContextBuilder::hasText)
+                .map(String::toLowerCase)
+                .toList();
+        if (haystack.isEmpty()) {
+            return LoreBookSection.empty();
+        }
+
+        List<LoreBookEntry> matched = new ArrayList<>();
+        try {
+            JsonNode entries = objectMapper.readTree(bot.getCharacterBookJson()).path("entries");
+            if (!entries.isArray()) {
+                return LoreBookSection.empty();
+            }
+            int fallbackOrder = 0;
+            for (JsonNode entry : entries) {
+                if (entry.has("enabled") && !entry.path("enabled").asBoolean()) {
+                    continue;
+                }
+                String content = entry.path("content").asText("");
+                if (!hasText(content)) {
+                    continue;
+                }
+                if (keysMatch(entry.path("keys"), haystack)) {
+                    int insertionOrder = entry.has("insertion_order")
+                            ? entry.path("insertion_order").asInt(fallbackOrder)
+                            : fallbackOrder;
+                    matched.add(new LoreBookEntry(insertionOrder, content));
+                }
+                fallbackOrder++;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to parse character book for bot {}: {}",
+                    bot.getId(), e.getMessage());
+            return LoreBookSection.empty();
+        }
+
+        matched.sort((left, right) -> Integer.compare(left.insertionOrder(), right.insertionOrder()));
+        if (matched.size() <= maxEntries) {
+            return new LoreBookSection(List.copyOf(matched), List.of());
+        }
+        List<LoreBookEntry> kept = new ArrayList<>(matched.subList(0, maxEntries));
+        List<LoreBookEntry> dropped = new ArrayList<>(matched.subList(maxEntries, matched.size()));
+        return new LoreBookSection(List.copyOf(kept), List.copyOf(dropped));
+    }
+
+    private boolean keysMatch(JsonNode keysNode, List<String> haystack) {
+        if (!keysNode.isArray()) {
+            return false;
+        }
+        for (JsonNode keyNode : keysNode) {
+            String key = keyNode.asText("").toLowerCase();
+            if (!hasText(key)) {
+                continue;
+            }
+            for (String content : haystack) {
+                if (content.contains(key)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private AgentContextEnvelope trimLoreToBudget(AgentContextEnvelope env, int tokenBudget) {
+        if (!env.characterCard().hasCard() || env.loreBook().matched().isEmpty()) {
+            return env;
+        }
+        AgentContextEnvelope current = env;
+        while (!current.loreBook().matched().isEmpty()
+                && estimateTokens(assembleSystemPrompt(current)) > tokenBudget) {
+            List<LoreBookEntry> kept = new ArrayList<>(current.loreBook().matched());
+            LoreBookEntry dropped = kept.remove(kept.size() - 1);
+            List<LoreBookEntry> droppedAll = new ArrayList<>(current.loreBook().dropped());
+            droppedAll.add(0, dropped);
+            current = current.withLoreBook(new LoreBookSection(List.copyOf(kept), List.copyOf(droppedAll)));
+        }
+        return current;
+    }
+
+    private static void appendIfPresent(StringBuilder prompt, String value) {
+        if (hasText(value)) {
+            prompt.append(value).append("\n\n");
+        }
+    }
+
     private static List<String> defaultBehaviorRules() {
         return List.of(
                 "Respond concisely in the language the user wrote in.",
@@ -343,6 +481,33 @@ public class AgentContextBuilder {
             boolean roomCreator) {
     }
 
+    public record CharacterCardSection(
+            boolean hasCard,
+            String persona,
+            String scenario,
+            String systemPrompt,
+            String postHistoryInstructions) {
+        static CharacterCardSection empty() {
+            return new CharacterCardSection(false, "", "", "", "");
+        }
+    }
+
+    public record LoreBookEntry(int insertionOrder, String content) {
+    }
+
+    public record LoreBookSection(
+            List<LoreBookEntry> matched,
+            List<LoreBookEntry> dropped) {
+        public LoreBookSection {
+            matched = List.copyOf(matched);
+            dropped = List.copyOf(dropped);
+        }
+
+        static LoreBookSection empty() {
+            return new LoreBookSection(List.of(), List.of());
+        }
+    }
+
     @Getter
     public static final class AgentContextEnvelope {
         private final AgentIdentity agentIdentity;
@@ -350,6 +515,8 @@ public class AgentContextBuilder {
         private final List<HistoricalMessage> conversationHistory;
         private final InitiatorInfo initiator;
         private final List<String> behaviorRules;
+        private final CharacterCardSection characterCard;
+        private final LoreBookSection loreBook;
         private final String taskText;
         private final int maxContextTokensEstimate;
         private final int estimatedTokens;
@@ -360,6 +527,8 @@ public class AgentContextBuilder {
                 List<HistoricalMessage> conversationHistory,
                 InitiatorInfo initiator,
                 List<String> behaviorRules,
+                CharacterCardSection characterCard,
+                LoreBookSection loreBook,
                 String taskText,
                 int maxContextTokensEstimate,
                 int estimatedTokens) {
@@ -368,9 +537,25 @@ public class AgentContextBuilder {
             this.conversationHistory = List.copyOf(conversationHistory);
             this.initiator = initiator;
             this.behaviorRules = List.copyOf(behaviorRules);
+            this.characterCard = characterCard != null ? characterCard : CharacterCardSection.empty();
+            this.loreBook = loreBook != null ? loreBook : LoreBookSection.empty();
             this.taskText = taskText;
             this.maxContextTokensEstimate = maxContextTokensEstimate;
             this.estimatedTokens = estimatedTokens;
+        }
+
+        AgentContextEnvelope(
+                AgentIdentity agentIdentity,
+                RoomMetadata roomMetadata,
+                List<HistoricalMessage> conversationHistory,
+                InitiatorInfo initiator,
+                List<String> behaviorRules,
+                String taskText,
+                int maxContextTokensEstimate,
+                int estimatedTokens) {
+            this(agentIdentity, roomMetadata, conversationHistory, initiator, behaviorRules,
+                    CharacterCardSection.empty(), LoreBookSection.empty(), taskText,
+                    maxContextTokensEstimate, estimatedTokens);
         }
 
         public AgentIdentity agentIdentity() {
@@ -393,6 +578,14 @@ public class AgentContextBuilder {
             return behaviorRules;
         }
 
+        public CharacterCardSection characterCard() {
+            return characterCard;
+        }
+
+        public LoreBookSection loreBook() {
+            return loreBook;
+        }
+
         public String taskText() {
             return taskText;
         }
@@ -412,6 +605,8 @@ public class AgentContextBuilder {
                     history,
                     initiator,
                     behaviorRules,
+                    characterCard,
+                    loreBook,
                     taskText,
                     maxContextTokensEstimate,
                     estimatedTokens);
@@ -424,9 +619,25 @@ public class AgentContextBuilder {
                     conversationHistory,
                     initiator,
                     behaviorRules,
+                    characterCard,
+                    loreBook,
                     taskText,
                     maxContextTokensEstimate,
                     tokens);
+        }
+
+        AgentContextEnvelope withLoreBook(LoreBookSection newLoreBook) {
+            return new AgentContextEnvelope(
+                    agentIdentity,
+                    roomMetadata,
+                    conversationHistory,
+                    initiator,
+                    behaviorRules,
+                    characterCard,
+                    newLoreBook,
+                    taskText,
+                    maxContextTokensEstimate,
+                    estimatedTokens);
         }
     }
 }

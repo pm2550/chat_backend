@@ -22,6 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import org.mockito.ArgumentCaptor;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -146,6 +148,53 @@ class AgentExecutionLoopTest {
         assertEquals("handled error", result.finalContent());
         assertTrue(result.toolCallsMade().get(0).error());
         verify(llmService, times(2)).chat(any(BotConfig.class), anyList(), anyList());
+    }
+
+    @Test
+    void postHistoryInstructionsAreInjectedBeforeUserTaskOnEveryIteration() {
+        envelope = new AgentContextBuilder.AgentContextEnvelope(
+                new AgentContextBuilder.AgentIdentity("Agent", "", "base", null),
+                new AgentContextBuilder.RoomMetadata(true, "Room", "", 1, List.of("Alice"), null),
+                List.of(),
+                new AgentContextBuilder.InitiatorInfo("Alice", "member", false),
+                List.of("Be concise"),
+                new AgentContextBuilder.CharacterCardSection(
+                        true,
+                        "Persona",
+                        "",
+                        "",
+                        "Reply in character after reading history."),
+                AgentContextBuilder.LoreBookSection.empty(),
+                "please help",
+                6000,
+                20);
+        when(contextBuilder.assembleSystemPrompt(envelope)).thenReturn("system prompt");
+        when(llmService.chat(any(BotConfig.class), anyList(), anyList()))
+                .thenReturn(new BotDto.LLMResponse("", 5, "m",
+                        List.of(new BotDto.ToolCall("call-1", "echo", "{\"value\":\"hello\"}"))))
+                .thenReturn(new BotDto.LLMResponse("done", 7, "m"));
+
+        loop.runLoop(task, envelope);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BotDto.ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
+        verify(llmService, times(2)).chat(eq(bot), captor.capture(), anyList());
+        for (List<BotDto.ChatMessage> callMessages : captor.getAllValues()) {
+            int postIndex = indexOf(callMessages, "system", "Reply in character after reading history.");
+            int userIndex = indexOf(callMessages, "user", "please help");
+            assertTrue(postIndex >= 0, "post-history instruction missing");
+            assertTrue(userIndex >= 0, "user task missing");
+            assertTrue(postIndex < userIndex, "post-history instruction must appear before user task");
+        }
+    }
+
+    private int indexOf(List<BotDto.ChatMessage> messages, String role, String content) {
+        for (int i = 0; i < messages.size(); i++) {
+            if (role.equals(messages.get(i).getRole()) && content.equals(messages.get(i).getContent())) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private AgentTask task(BotConfig bot) {
