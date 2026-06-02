@@ -56,6 +56,7 @@ public class BotService {
     private final AgentTaskRepository agentTaskRepository;
     private final BotRateLimitService botRateLimitService;
     private final RichContentSanitizer richContentSanitizer;
+    private final BotWebhookService botWebhookService;
     // Lazy to break the cycle: AgentExecutionLoop -> AgentToolDispatcher ->
     // RawWebSocketHandler -> BotService.
     private final ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
@@ -291,6 +292,13 @@ public class BotService {
             if (shouldRespond) {
                 try {
                     BotConfig config = crb.getBotConfig();
+                    // External bridge: if this bot has an active webhook subscription, forward
+                    // the event to the external bot (it replies via the inbound gateway) and
+                    // skip the in-app LLM entirely.
+                    if (botWebhookService.dispatchIfSubscribed(config, chatRoomId, messageContent, senderId)) {
+                        log.info("机器人 {} 已转发到外部 webhook (聊天室 {})", config.getBotName(), chatRoomId);
+                        continue;
+                    }
                     String replyContent;
                     if (agentToolRegistry.hasExplicitToolWhitelist(config)) {
                         // Tool-enabled bots run the full multi-turn agent loop

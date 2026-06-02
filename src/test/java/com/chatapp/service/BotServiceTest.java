@@ -47,6 +47,7 @@ class BotServiceTest {
     @Mock private AgentContextBuilder agentContextBuilder;
     @Mock private AgentTaskRepository agentTaskRepository;
     @Mock private BotRateLimitService botRateLimitService;
+    @Mock private BotWebhookService botWebhookService;
     @Mock private ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
 
     @InjectMocks private BotService service;

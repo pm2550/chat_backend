@@ -5,6 +5,7 @@ import com.chatapp.dto.BotDto;
 import com.chatapp.dto.UserDto;
 import com.chatapp.service.BotService;
 import com.chatapp.service.BotTokenService;
+import com.chatapp.service.BotWebhookService;
 import com.chatapp.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +24,7 @@ public class BotController {
     private final BotService botService;
     private final UserService userService;
     private final BotTokenService botTokenService;
+    private final BotWebhookService botWebhookService;
 
     /** (Re)generate this bot's inbound gateway token. Returns the raw token ONCE. */
     @PostMapping("/{botId}/token/rotate")
@@ -34,6 +36,40 @@ public class BotController {
         return ResponseEntity.ok(ApiResponse.success(
                 "令牌已生成（仅显示一次，请妥善保存）",
                 Map.<String, Object>of("token", rawToken)));
+    }
+
+    /** Register an outbound webhook so this bot's room events are pushed to an external URL. */
+    @PostMapping("/{botId}/webhooks")
+    public ResponseEntity<ApiResponse<BotWebhookService.WebhookView>> registerWebhook(
+            @PathVariable Long botId,
+            @RequestBody Map<String, Object> body,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        BotWebhookService.WebhookView view = botWebhookService.register(
+                botId,
+                currentUser.getId(),
+                body.get("callbackUrl") != null ? body.get("callbackUrl").toString() : null,
+                body.get("secret") != null ? body.get("secret").toString() : null,
+                body.get("eventTypes") != null ? body.get("eventTypes").toString() : null,
+                body.get("chatRoomId") != null ? Long.valueOf(body.get("chatRoomId").toString()) : null);
+        return ResponseEntity.ok(ApiResponse.success("webhook 已注册", view));
+    }
+
+    @GetMapping("/{botId}/webhooks")
+    public ResponseEntity<ApiResponse<List<BotWebhookService.WebhookView>>> listWebhooks(
+            @PathVariable Long botId,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        return ResponseEntity.ok(ApiResponse.success(botWebhookService.list(botId, currentUser.getId())));
+    }
+
+    @DeleteMapping("/webhooks/{subscriptionId}")
+    public ResponseEntity<ApiResponse<Void>> deleteWebhook(
+            @PathVariable Long subscriptionId,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        botWebhookService.delete(subscriptionId, currentUser.getId());
+        return ResponseEntity.ok(ApiResponse.<Void>success("webhook 已删除", null));
     }
 
     @PostMapping

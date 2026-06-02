@@ -56,6 +56,7 @@ class BotServiceAgentRoutingTest {
     @Mock private AgentTaskRepository agentTaskRepository;
     @Mock private BotRateLimitService botRateLimitService;
     @Mock private RichContentSanitizer richContentSanitizer;
+    @Mock private BotWebhookService botWebhookService;
     @Mock private ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
     @Mock private AgentExecutionLoop agentExecutionLoop;
 
@@ -125,6 +126,21 @@ class BotServiceAgentRoutingTest {
         assertEquals("final answer from loop", captor.getValue().getContent());
         assertEquals(bot, captor.getValue().getBotConfig());
         assertEquals(1, result.size());
+    }
+
+    @Test
+    @DisplayName("webhook-subscribed bot forwards externally and skips the LLM")
+    void webhookSubscribedBotForwardsAndSkipsLlm() {
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(botWebhookService.dispatchIfSubscribed(eq(bot), eq(100L), any(), eq(1L))).thenReturn(true);
+
+        List<Message> result = service.processMessageForBots(100L, "hey bot", 1L);
+
+        verify(botWebhookService).dispatchIfSubscribed(eq(bot), eq(100L), any(), eq(1L));
+        verify(llmService, never()).chat(any(), any());
+        verify(agentExecutionLoopProvider, never()).getObject();
+        verify(messageRepository, never()).save(any()); // external bot replies via the inbound gateway
+        assertEquals(0, result.size());
     }
 
     @Test
