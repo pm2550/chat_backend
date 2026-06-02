@@ -36,7 +36,8 @@ class ProviderCredentialServiceTest {
         service = new ProviderCredentialService(
                 credentialRepository,
                 userRepository,
-                new CredentialCryptoService("test-master-key-material-32-bytes-long"));
+                new CredentialCryptoService("test-master-key-material-32-bytes-long"),
+                new OutboundUrlPolicy());
         owner = new User();
         owner.setId(1L);
         owner.setUsername("alice");
@@ -55,7 +56,9 @@ class ProviderCredentialServiceTest {
                 BotConfig.LLMProvider.OPENAI,
                 "prod openai",
                 "sk-secret",
-                "main");
+                "main",
+                null,
+                null);
 
         ProviderCredentialDto.Response response = service.create(1L, request);
 
@@ -69,6 +72,63 @@ class ProviderCredentialServiceTest {
         assertThat(saved.getEncryptedSecret()).startsWith("v1:");
         assertThat(saved.getEncryptedSecret()).doesNotContain("sk-secret");
         assertThat(service.decrypt(saved)).isEqualTo("sk-secret");
+    }
+
+    @Test
+    void createValidatesAndStoresBaseUrlAndModelOverride() {
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(credentialRepository.save(any(ProviderCredential.class))).thenAnswer(inv -> {
+            ProviderCredential c = inv.getArgument(0);
+            c.setId(20L);
+            return c;
+        });
+
+        ProviderCredentialDto.CreateRequest request = new ProviderCredentialDto.CreateRequest(
+                BotConfig.LLMProvider.OPENAI,
+                "openrouter",
+                "sk-x",
+                "memo",
+                "https://openrouter.ai/api/v1",
+                "anthropic/claude");
+
+        ProviderCredentialDto.Response response = service.create(1L, request);
+
+        assertThat(response.getBaseUrl()).isEqualTo("https://openrouter.ai/api/v1");
+        assertThat(response.getModelOverride()).isEqualTo("anthropic/claude");
+    }
+
+    @Test
+    void createRejectsInternalBaseUrlAsSsrf() {
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+
+        ProviderCredentialDto.CreateRequest request = new ProviderCredentialDto.CreateRequest(
+                BotConfig.LLMProvider.OPENAI,
+                "evil",
+                "sk-x",
+                null,
+                "http://10.1.2.3/v1",
+                null);
+
+        assertThatThrownBy(() -> service.create(1L, request))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(credentialRepository, org.mockito.Mockito.never()).save(any());
+    }
+
+    @Test
+    void createAllowsAllowlistedInternalBaseUrl() {
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(credentialRepository.save(any(ProviderCredential.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ProviderCredentialDto.CreateRequest request = new ProviderCredentialDto.CreateRequest(
+                BotConfig.LLMProvider.DASHSCOPE,
+                "self-proxy",
+                "x",
+                null,
+                "http://localhost/dashscope/v1",
+                null);
+
+        ProviderCredentialDto.Response response = service.create(1L, request);
+        assertThat(response.getBaseUrl()).isEqualTo("http://localhost/dashscope/v1");
     }
 
     @Test

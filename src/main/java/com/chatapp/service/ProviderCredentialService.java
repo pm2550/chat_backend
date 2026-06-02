@@ -20,6 +20,7 @@ public class ProviderCredentialService {
     private final ProviderCredentialRepository credentialRepository;
     private final UserRepository userRepository;
     private final CredentialCryptoService cryptoService;
+    private final OutboundUrlPolicy outboundUrlPolicy;
 
     @Transactional
     public ProviderCredentialDto.Response create(Long ownerId, ProviderCredentialDto.CreateRequest request) {
@@ -32,6 +33,7 @@ public class ProviderCredentialService {
         credential.setLabel(normalizeLabel(request.getLabel()));
         setSecret(credential, request.getSecret());
         credential.setMemo(request.getMemo());
+        applyEndpoint(credential, request.getBaseUrl(), request.getModelOverride());
         credential.setIsActive(true);
 
         return toDto(credentialRepository.save(credential));
@@ -73,6 +75,7 @@ public class ProviderCredentialService {
         if (request.getMemo() != null) {
             credential.setMemo(request.getMemo());
         }
+        applyEndpoint(credential, request.getBaseUrl(), request.getModelOverride());
         return toDto(credentialRepository.save(credential));
     }
 
@@ -122,9 +125,32 @@ public class ProviderCredentialService {
                 credential.getSecretLast4(),
                 credential.getIsActive(),
                 credential.getMemo(),
+                credential.getBaseUrl(),
+                credential.getModelOverride(),
                 credential.getCreatedAt(),
                 credential.getUpdatedAt()
         );
+    }
+
+    /**
+     * Applies an optional endpoint override + default model. {@code null} leaves the
+     * field unchanged; blank clears it. A non-blank base_url is validated as a
+     * user-supplied outbound URL (SSRF guard) before being stored.
+     */
+    private void applyEndpoint(ProviderCredential credential, String baseUrl, String modelOverride) {
+        if (baseUrl != null) {
+            String trimmed = baseUrl.trim();
+            if (trimmed.isEmpty()) {
+                credential.setBaseUrl(null);
+            } else {
+                outboundUrlPolicy.assertAllowed(trimmed, OutboundUrlPolicy.Caller.USER_SUPPLIED);
+                credential.setBaseUrl(trimmed);
+            }
+        }
+        if (modelOverride != null) {
+            String trimmed = modelOverride.trim();
+            credential.setModelOverride(trimmed.isEmpty() ? null : trimmed);
+        }
     }
 
     private void setSecret(ProviderCredential credential, String secret) {

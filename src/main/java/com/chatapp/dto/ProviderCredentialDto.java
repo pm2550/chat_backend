@@ -21,6 +21,8 @@ public class ProviderCredentialDto {
         private String secretLast4;
         private Boolean isActive;
         private String memo;
+        private String baseUrl;
+        private String modelOverride;
         private LocalDateTime createdAt;
         private LocalDateTime updatedAt;
     }
@@ -39,6 +41,8 @@ public class ProviderCredentialDto {
         private String secret;
 
         private String memo;
+        private String baseUrl;
+        private String modelOverride;
     }
 
     @Data
@@ -49,5 +53,7 @@ public class ProviderCredentialDto {
         private String secret;
         private Boolean isActive;
         private String memo;
+        private String baseUrl;
+        private String modelOverride;
     }
 }

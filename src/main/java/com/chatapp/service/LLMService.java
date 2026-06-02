@@ -86,32 +86,33 @@ public class LLMService {
         return switch (botConfig.getLlmProvider()) {
             case OPENAI -> callOpenAICompatible(
                     requireApiKey(resolveApiKey(botConfig, openaiApiKey), "OpenAI"),
-                    openaiBaseUrl,
+                    resolveBaseUrl(botConfig, openaiBaseUrl),
                     resolveModel(botConfig, openaiModel),
                     messages, botConfig, tools);
             case CLAUDE -> callClaude(
                     requireApiKey(resolveApiKey(botConfig, claudeApiKey), "Claude"),
-                    claudeBaseUrl,
+                    resolveBaseUrl(botConfig, claudeBaseUrl),
                     resolveModel(botConfig, claudeModel),
                     messages, botConfig, tools);
             case DEEPSEEK -> callOpenAICompatible(
                     requireApiKey(resolveApiKey(botConfig, deepseekApiKey), "DeepSeek"),
-                    deepseekBaseUrl,
+                    resolveBaseUrl(botConfig, deepseekBaseUrl),
                     resolveModel(botConfig, deepseekModel),
                     messages, botConfig, tools);
             case OLLAMA -> callOllama(
+                    resolveBaseUrl(botConfig, ollamaBaseUrl),
                     resolveModel(botConfig, ollamaModel),
                     messages, botConfig, tools);
             case HERMES -> callOpenAICompatible(
                     requireApiKey(resolveApiKey(botConfig, hermesApiKey), "Hermes"),
-                    hermesBaseUrl,
+                    resolveBaseUrl(botConfig, hermesBaseUrl),
                     resolveModel(botConfig, hermesModel),
                     messages, botConfig, tools);
             // DashScope chat goes through the OpenAI-compatible proxy. The proxy is
             // typically keyless, so a blank key is allowed (Authorization is omitted).
             case DASHSCOPE -> callOpenAICompatible(
                     resolveApiKey(botConfig, dashscopeApiKey),
-                    dashscopeBaseUrl,
+                    resolveBaseUrl(botConfig, dashscopeBaseUrl),
                     resolveModel(botConfig, dashscopeModel),
                     messages, botConfig, tools);
         };
@@ -290,7 +291,7 @@ public class LLMService {
         }
     }
 
-    private BotDto.LLMResponse callOllama(String model, List<BotDto.ChatMessage> messages, BotConfig config, List<Tool> tools) {
+    private BotDto.LLMResponse callOllama(String baseUrl, String model, List<BotDto.ChatMessage> messages, BotConfig config, List<Tool> tools) {
         try {
             ObjectNode requestBody = objectMapper.createObjectNode();
             requestBody.put("model", model);
@@ -325,7 +326,7 @@ public class LLMService {
             options.put("temperature", config.getTemperature() != null ? config.getTemperature() : 0.7);
 
             Request request = new Request.Builder()
-                    .url(ollamaBaseUrl + "/api/chat")
+                    .url(baseUrl + "/api/chat")
                     .header("Content-Type", "application/json")
                     .post(RequestBody.create(objectMapper.writeValueAsString(requestBody),
                             MediaType.parse("application/json")))
@@ -419,6 +420,27 @@ public class LLMService {
         if (config.getModelName() != null && !config.getModelName().isEmpty()) {
             return config.getModelName();
         }
+        if (config.getProviderCredential() != null) {
+            String override = config.getProviderCredential().getModelOverride();
+            if (override != null && !override.isBlank()) {
+                return override.trim();
+            }
+        }
         return defaultModel;
+    }
+
+    /**
+     * A vault credential may carry a base_url that overrides the server default,
+     * letting a user point an OpenAI-compatible key at any gateway (OpenRouter /
+     * dashscope-proxy / Ollama). Falls back to the server-configured endpoint.
+     */
+    String resolveBaseUrl(BotConfig config, String defaultBaseUrl) {
+        if (config.getProviderCredential() != null) {
+            String baseUrl = config.getProviderCredential().getBaseUrl();
+            if (baseUrl != null && !baseUrl.isBlank()) {
+                return baseUrl.trim();
+            }
+        }
+        return defaultBaseUrl;
     }
 }

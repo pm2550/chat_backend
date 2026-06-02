@@ -65,6 +65,14 @@ public class ProviderCredential {
     @Column(columnDefinition = "TEXT")
     private String memo;
 
+    /** Optional OpenAI-compatible endpoint override (e.g. OpenRouter / dashscope-proxy / Ollama). */
+    @Column(name = "base_url", length = 500)
+    private String baseUrl;
+
+    /** Optional default model for this key, used when a bot does not set its own model name. */
+    @Column(name = "model_override", length = 120)
+    private String modelOverride;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

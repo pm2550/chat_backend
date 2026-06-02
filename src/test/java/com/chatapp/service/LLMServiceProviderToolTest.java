@@ -2,6 +2,7 @@ package com.chatapp.service;
 
 import com.chatapp.dto.BotDto;
 import com.chatapp.entity.BotConfig;
+import com.chatapp.entity.ProviderCredential;
 import com.chatapp.service.tool.Tool;
 import com.chatapp.service.tool.ToolContext;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -156,6 +157,44 @@ class LLMServiceProviderToolTest {
             // No Authorization header sent for the keyless proxy.
             assertNull(authHeader.get());
             assertFalse("__unset__".equals(authHeader.get()));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void credentialBaseUrlOverridesServerDefault() throws Exception {
+        StringBuilder captured = new StringBuilder();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            captured.append("hit");
+            byte[] body = """
+                    {"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"total_tokens":3}}
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            LLMService service = new LLMService(objectMapper, mock(ProviderCredentialService.class));
+            // Server default endpoint is intentionally unreachable; the credential base_url must win.
+            ReflectionTestUtils.setField(service, "openaiApiKey", "default-key");
+            ReflectionTestUtils.setField(service, "openaiBaseUrl", "http://127.0.0.1:1/should-not-be-used");
+
+            ProviderCredential cred = new ProviderCredential();
+            cred.setIsActive(true);
+            cred.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1");
+
+            BotConfig bot = new BotConfig();
+            bot.setLlmProvider(BotConfig.LLMProvider.OPENAI);
+            bot.setProviderCredential(cred);
+
+            BotDto.LLMResponse response = service.chat(bot, List.of(new BotDto.ChatMessage("user", "hi")));
+
+            assertEquals("ok", response.getContent());
+            assertEquals("hit", captured.toString());
         } finally {
             server.stop(0);
         }
