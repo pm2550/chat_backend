@@ -33,6 +33,14 @@ public class Message {
     @Column(name = "message_type", nullable = false)
     private MessageType messageType = MessageType.TEXT;
 
+    /**
+     * Rendering format for the {@code content} body. {@code null} = legacy PLAIN.
+     * Only bot/agent/system messages may carry a non-PLAIN value; user messages stay PLAIN.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "content_format", length = 16)
+    private ContentFormat contentFormat;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "sender_id", nullable = false)
     private User sender;
@@ -173,6 +181,16 @@ public class Message {
         public String getDescription() {
             return description;
         }
+    }
+
+    /**
+     * 内容渲染格式。PLAIN = 纯文本（默认）; MARKDOWN = 已净化的 GFM（表格/标题/列表/代码/链接，无原始 HTML）;
+     * CARD = 预留的封闭式卡片 JSON（尚未实现渲染）。
+     */
+    public enum ContentFormat {
+        PLAIN,
+        MARKDOWN,
+        CARD
     }
 
     /**

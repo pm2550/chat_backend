@@ -55,6 +55,7 @@ class BotServiceAgentRoutingTest {
     @Mock private AgentContextBuilder agentContextBuilder;
     @Mock private AgentTaskRepository agentTaskRepository;
     @Mock private BotRateLimitService botRateLimitService;
+    @Mock private RichContentSanitizer richContentSanitizer;
     @Mock private ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
     @Mock private AgentExecutionLoop agentExecutionLoop;
 
@@ -140,6 +141,25 @@ class BotServiceAgentRoutingTest {
         verify(messageRepository, never()).save(any());
         verify(chatRoomRepository, never()).findById(anyLong());
         assertEquals(0, result.size());
+    }
+
+    @Test
+    @DisplayName("a markdown-shaped bot reply is sanitized and marked MARKDOWN")
+    void markdownBotReplyGetsContentFormat() {
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(agentToolRegistry.hasExplicitToolWhitelist(bot)).thenReturn(false);
+        String md = "| a | b |\n|---|---|\n| 1 | 2 |";
+        when(llmService.chat(eq(bot), any())).thenReturn(new BotDto.LLMResponse(md, 5, "m"));
+        when(richContentSanitizer.sanitizeMarkdown(md)).thenReturn(md);
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.processMessageForBots(100L, "table please", 1L);
+
+        ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
+        verify(messageRepository).save(captor.capture());
+        assertEquals(Message.ContentFormat.MARKDOWN, captor.getValue().getContentFormat());
     }
 
     @Test

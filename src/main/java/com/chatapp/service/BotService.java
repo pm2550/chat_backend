@@ -36,6 +36,10 @@ import java.util.regex.Pattern;
 public class BotService {
 
     private static final Pattern URL_PATTERN = Pattern.compile("(https?://[^\\s)\\]\"'<>]+)");
+    // Conservative GFM signals — only fire on table separator / heading / code fence,
+    // never on stray * or _ in casual prose (rendering is also gated to bot messages).
+    private static final Pattern MD_HEADING = Pattern.compile("(?m)^#{1,6}\\s+\\S");
+    private static final Pattern MD_TABLE_SEP = Pattern.compile("(?m)^\\s*\\|?[ :|-]*-{2,}[ :|-]*\\|?\\s*$");
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
     private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
@@ -51,6 +55,7 @@ public class BotService {
     private final AgentContextBuilder agentContextBuilder;
     private final AgentTaskRepository agentTaskRepository;
     private final BotRateLimitService botRateLimitService;
+    private final RichContentSanitizer richContentSanitizer;
     // Lazy to break the cycle: AgentExecutionLoop -> AgentToolDispatcher ->
     // RawWebSocketHandler -> BotService.
     private final ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
@@ -422,7 +427,12 @@ public class BotService {
             message.setFileName(attachment.fileName());
             message.setFileType(attachment.fileType());
         } else {
-            message.setContent(content);
+            if (looksLikeMarkdown(content)) {
+                message.setContent(richContentSanitizer.sanitizeMarkdown(content));
+                message.setContentFormat(Message.ContentFormat.MARKDOWN);
+            } else {
+                message.setContent(content);
+            }
             message.setMessageType(Message.MessageType.TEXT);
         }
         message.setChatRoom(chatRoom);
@@ -436,6 +446,20 @@ public class BotService {
         message.setSender(botUser);
         message.setMessageStatus(Message.MessageStatus.SENT);
         return messageRepository.save(message);
+    }
+
+    /** Bot reply is treated as markdown only on strong GFM signals (table/heading/code fence). */
+    private boolean looksLikeMarkdown(String content) {
+        if (content == null || content.isBlank()) {
+            return false;
+        }
+        if (content.contains("```")) {
+            return true;
+        }
+        if (MD_HEADING.matcher(content).find()) {
+            return true;
+        }
+        return content.contains("|") && MD_TABLE_SEP.matcher(content).find();
     }
 
     private BotMediaAttachment extractMediaAttachment(String content) {

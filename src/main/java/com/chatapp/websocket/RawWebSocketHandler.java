@@ -695,6 +695,9 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             }
         }
         json.put("type", m.getMessageType() != null ? m.getMessageType().name() : "TEXT");
+        if (m.getContentFormat() != null) {
+            json.put("contentFormat", m.getContentFormat().name());
+        }
         json.put("status", m.getMessageStatus() != null ? m.getMessageStatus().name() : "SENT");
         if (m.getCreatedAt() != null) {
             json.put("timestamp", m.getCreatedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));

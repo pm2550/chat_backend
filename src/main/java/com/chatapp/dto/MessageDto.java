@@ -23,6 +23,7 @@ public class MessageDto {
     private Long id;
     private String content;
     private Message.MessageType messageType;
+    private Message.ContentFormat contentFormat;
     private Message.MessageStatus messageStatus;
     private UserDto sender;
     private Long senderId;
@@ -79,6 +80,7 @@ public class MessageDto {
         dto.setId(message.getId());
         dto.setContent(message.getContent());
         dto.setMessageType(message.getMessageType());
+        dto.setContentFormat(message.getContentFormat());
         dto.setMessageStatus(message.getMessageStatus());
 
         UserDto sender = toUserDto(message.getSender());
