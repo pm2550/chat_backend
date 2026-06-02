@@ -470,6 +470,206 @@ public class WorkspaceService {
         return WorkspaceDto.FileDto.fromEntity(saved);
     }
 
+    // ---- F6 slice 2: bot-principal access + file ops (backs the agent workspace tools) ----
+
+    /**
+     * Effective access a BOT has on a workspace. Unlike users, a bot is never an owner or
+     * member — its only access source is an explicit {@link WorkspacePermission} with
+     * {@link WorkspacePermission.PrincipalType#BOT}, and only when the workspace has
+     * botAccessEnabled. An inactive/unknown bot (or a bot-access-disabled workspace) gets NONE.
+     */
+    public WorkspacePermission.AccessLevel effectiveBotAccess(Workspace workspace, Long botId) {
+        if (!botGateOpen(workspace, botId)) {
+            return WorkspacePermission.AccessLevel.NONE;
+        }
+        return explicitAccess(workspace.getId(), WorkspacePermission.ResourceType.WORKSPACE,
+                null, WorkspacePermission.PrincipalType.BOT, botId);
+    }
+
+    /**
+     * Master bot-access gate: the bot must exist + be active AND the workspace must have
+     * botAccessEnabled. ALL bot access (workspace- and resource-level) is denied unless this
+     * is open — so an explicit grant can never bypass a disabled botAccessEnabled flag.
+     */
+    private boolean botGateOpen(Workspace workspace, Long botId) {
+        if (botId == null) {
+            return false;
+        }
+        BotConfig bot = botConfigRepository.findById(botId).orElse(null);
+        if (bot == null || Boolean.FALSE.equals(bot.getIsActive())) {
+            return false;
+        }
+        return Boolean.TRUE.equals(workspace.getBotAccessEnabled());
+    }
+
+    private boolean hasBotResourceAccess(Workspace workspace, Long resourceId,
+            WorkspacePermission.ResourceType resourceType, Long botId,
+            WorkspacePermission.AccessLevel required) {
+        if (!botGateOpen(workspace, botId)) {
+            return false; // master gate — never escalate past a disabled flag / inactive bot
+        }
+        WorkspacePermission.AccessLevel level = explicitAccess(workspace.getId(),
+                WorkspacePermission.ResourceType.WORKSPACE, null,
+                WorkspacePermission.PrincipalType.BOT, botId);
+        if (resourceType != WorkspacePermission.ResourceType.WORKSPACE) {
+            level = max(level, explicitAccess(workspace.getId(), resourceType, resourceId,
+                    WorkspacePermission.PrincipalType.BOT, botId));
+        }
+        return level.allows(required);
+    }
+
+    private void requireBotResourceAccess(Workspace workspace, Long resourceId,
+            WorkspacePermission.ResourceType resourceType, Long botId,
+            WorkspacePermission.AccessLevel required) {
+        if (!hasBotResourceAccess(workspace, resourceId, resourceType, botId, required)) {
+            throw new AccessDeniedException("机器人没有该工作区资源的权限");
+        }
+    }
+
+    private BotConfig requireBotWithOwner(Long botId) {
+        BotConfig bot = botConfigRepository.findById(botId)
+                .orElseThrow(() -> new IllegalArgumentException("Bot 不存在"));
+        if (bot.getCreatedBy() == null) {
+            // created_by / uploaded_by are NOT NULL FKs to users; a bot file is attributed
+            // to the bot's owner (sourceBot records that the bot authored it).
+            throw new IllegalStateException("Bot 缺少归属用户，无法写入工作区");
+        }
+        return bot;
+    }
+
+    /** Bot write gate: EDIT on the target resource + no lock bypass (bots never bypass locks). */
+    private void requireBotWritable(Workspace workspace, WorkspaceFolder folder, WorkspaceFile file, Long botId) {
+        WorkspacePermission.ResourceType type = file != null ? WorkspacePermission.ResourceType.FILE
+                : folder != null ? WorkspacePermission.ResourceType.FOLDER
+                : WorkspacePermission.ResourceType.WORKSPACE;
+        Long resourceId = file != null ? file.getId() : folder != null ? folder.getId() : null;
+        requireBotResourceAccess(workspace, resourceId, type, botId, WorkspacePermission.AccessLevel.EDIT);
+        if (Boolean.TRUE.equals(workspace.getIsLocked())) {
+            throw new AccessDeniedException("工作区已锁定，机器人无法写入");
+        }
+        if (folder != null && Boolean.TRUE.equals(folder.getIsLocked())) {
+            throw new AccessDeniedException("文件夹已锁定");
+        }
+        if (file != null && Boolean.TRUE.equals(file.getIsLocked())) {
+            throw new AccessDeniedException("文件已锁定");
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public List<WorkspaceDto.FileDto> listFilesForBot(Long workspaceId, Long botId, Long folderId) {
+        Workspace workspace = loadWorkspace(workspaceId);
+        WorkspaceFolder folder = folderId == null ? null : loadFolder(workspaceId, folderId);
+        requireBotResourceAccess(workspace, folder != null ? folder.getId() : null,
+                folder != null ? WorkspacePermission.ResourceType.FOLDER : WorkspacePermission.ResourceType.WORKSPACE,
+                botId, WorkspacePermission.AccessLevel.VIEW);
+        List<WorkspaceFile> files = folder == null
+                ? workspaceFileRepository.findByWorkspaceIdAndFolderIsNullAndIsDeletedFalseOrderByUpdatedAtDesc(workspaceId)
+                : workspaceFileRepository.findByWorkspaceIdAndFolderIdAndIsDeletedFalseOrderByUpdatedAtDesc(workspaceId, folder.getId());
+        return files.stream()
+                .filter(f -> hasBotResourceAccess(workspace, f.getId(),
+                        WorkspacePermission.ResourceType.FILE, botId, WorkspacePermission.AccessLevel.VIEW))
+                .map(WorkspaceDto.FileDto::fromEntity)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public WorkspaceDto.TextContent readTextForBot(Long workspaceId, Long fileId, Long botId) throws IOException {
+        Workspace workspace = loadWorkspace(workspaceId);
+        WorkspaceFile file = loadFile(workspaceId, fileId);
+        requireBotResourceAccess(workspace, fileId, WorkspacePermission.ResourceType.FILE,
+                botId, WorkspacePermission.AccessLevel.VIEW);
+        if (!isPreviewable(file)) {
+            throw new IllegalArgumentException("该文件不是可读取的文本类型");
+        }
+        if (safeSize(file.getFileSize()) > MAX_EDITABLE_TEXT_BYTES) {
+            throw new IllegalArgumentException("文件过大，无法读取为文本");
+        }
+        byte[] bytes = fileStorageService.getWorkspaceFile(file.getStorageProvider(), storageKey(file));
+        return new WorkspaceDto.TextContent(file.getId(), file.getDisplayName(), file.getMimeType(),
+                file.getCurrentVersion(), new String(bytes, StandardCharsets.UTF_8));
+    }
+
+    @Transactional
+    public WorkspaceDto.FileDto createTextFileForBot(Long workspaceId, Long botId, Long folderId,
+            String fileName, String content, String versionNote) throws IOException {
+        Workspace workspace = loadWorkspace(workspaceId);
+        BotConfig bot = requireBotWithOwner(botId);
+        WorkspaceFolder folder = folderId == null ? null : loadFolder(workspaceId, folderId);
+        requireBotWritable(workspace, folder, null, botId);
+        String safeFileName = generatedFileName(fileName);
+        byte[] bytes = content == null ? new byte[0] : content.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_EDITABLE_TEXT_BYTES) {
+            throw new IllegalArgumentException("文本内容过大");
+        }
+        WorkspaceFileScanService.ScanResult scan = workspaceFileScanService.scan(safeFileName, bytes);
+        assertWithinQuota(workspace, bytes.length);
+        FileStorageService.StoredFile storedFile = fileStorageService.uploadWorkspaceFile(
+                safeFileName, "text/plain; charset=utf-8", bytes);
+
+        User owner = bot.getCreatedBy();
+        WorkspaceFile file = new WorkspaceFile();
+        file.setWorkspace(workspace);
+        file.setFolder(folder);
+        file.setDisplayName(storedFile.originalFileName());
+        file.setCurrentStorageName(storedFile.storageFileName());
+        file.setMimeType(storedFile.contentType());
+        file.setFileSize(storedFile.size());
+        file.setCreatedBy(owner);
+        file.setSourceBot(bot);
+        file.setSourceType(WorkspaceFile.SourceType.BOT);
+        file.setBotAccessEnabled(true); // a bot-authored file stays bot-readable/editable
+        file.setScanStatus(scan.status());
+        file.setScanSummary(scan.summary());
+        file.setScannedAt(scan.scannedAt());
+        file.setStorageProvider(storedFile.storageProvider());
+        file.setObjectKey(storedFile.objectKey());
+        WorkspaceFile savedFile = workspaceFileRepository.save(file);
+        saveVersion(savedFile, 1, storedFile, bytes, owner, bot, versionNote, scan);
+        adjustWorkspaceUsage(workspace, storedFile.size());
+        auditLogService.record(owner, "WORKSPACE_FILE_BOT_CREATE", "WORKSPACE_FILE",
+                savedFile.getId(), null, savedFile.getDisplayName() + " (bot " + bot.getId() + ")");
+        return WorkspaceDto.FileDto.fromEntity(savedFile);
+    }
+
+    @Transactional
+    public WorkspaceDto.FileDto saveTextVersionForBot(Long workspaceId, Long fileId, Long botId,
+            String content, String versionNote) throws IOException {
+        Workspace workspace = loadWorkspace(workspaceId);
+        WorkspaceFile file = loadFile(workspaceId, fileId);
+        BotConfig bot = requireBotWithOwner(botId);
+        requireBotWritable(workspace, file.getFolder(), file, botId);
+        byte[] bytes = content == null ? new byte[0] : content.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_EDITABLE_TEXT_BYTES) {
+            throw new IllegalArgumentException("文本内容过大");
+        }
+        String fileName = file.getDisplayName() == null || file.getDisplayName().isBlank()
+                ? "edited.txt" : file.getDisplayName();
+        WorkspaceFileScanService.ScanResult scan = workspaceFileScanService.scan(fileName, bytes);
+        long delta = bytes.length - safeSize(file.getFileSize());
+        assertWithinQuota(workspace, delta);
+        FileStorageService.StoredFile storedFile = fileStorageService.uploadWorkspaceFile(
+                fileName,
+                file.getMimeType() == null || file.getMimeType().isBlank()
+                        ? "text/plain; charset=utf-8" : file.getMimeType(),
+                bytes);
+        int nextVersion = Optional.ofNullable(file.getCurrentVersion()).orElse(0) + 1;
+        User owner = bot.getCreatedBy();
+        saveVersion(file, nextVersion, storedFile, bytes, owner, bot, versionNote, scan);
+        file.setCurrentStorageName(storedFile.storageFileName());
+        file.setFileSize(storedFile.size());
+        file.setCurrentVersion(nextVersion);
+        file.setScanStatus(scan.status());
+        file.setScanSummary(scan.summary());
+        file.setScannedAt(scan.scannedAt());
+        file.setStorageProvider(storedFile.storageProvider());
+        file.setObjectKey(storedFile.objectKey());
+        WorkspaceFile saved = workspaceFileRepository.save(file);
+        adjustWorkspaceUsage(workspace, delta);
+        auditLogService.record(owner, "WORKSPACE_FILE_BOT_EDIT", "WORKSPACE_FILE",
+                saved.getId(), null, saved.getDisplayName() + "#" + nextVersion + " (bot " + bot.getId() + ")");
+        return WorkspaceDto.FileDto.fromEntity(saved);
+    }
+
     @Transactional(readOnly = true)
     public List<WorkspaceDto.VersionDto> listVersions(Long workspaceId, Long fileId, Long actorId) {
         Workspace workspace = loadWorkspace(workspaceId);

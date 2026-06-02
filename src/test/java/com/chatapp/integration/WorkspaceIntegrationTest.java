@@ -1,5 +1,7 @@
 package com.chatapp.integration;
 
+import com.chatapp.dto.WorkspaceDto;
+import com.chatapp.entity.WorkspaceFile;
 import com.chatapp.service.AgentGatewayService;
 import com.chatapp.service.CloudStorageService;
 import com.chatapp.service.LLMService;
@@ -51,6 +53,9 @@ class WorkspaceIntegrationTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private com.chatapp.service.WorkspaceService workspaceService;
 
     @MockBean
     private TokenBlacklistService tokenBlacklistService;
@@ -367,6 +372,62 @@ class WorkspaceIntegrationTest {
         mockMvc.perform(get("/api/v1/workspaces/" + workspaceId + "/files/" + fileId + "/text")
                 .header("Authorization", "Bearer " + outsiderToken))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("F6 slice 2: a bot granted workspace access can create/read/list/version files")
+    void botWithWorkspacePermissionCanReadAndWrite() throws Exception {
+        Object[] owner = createUserAndLogin("wsbottools");
+        String ownerToken = (String) owner[0];
+        Long botId = createBot(ownerToken);
+        Long workspaceId = createWorkspace(ownerToken, "Bot tools vault", "SERVICE", true); // botAccess on
+
+        // Before any grant, the bot has no access -> denied.
+        org.springframework.security.access.AccessDeniedException denied =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        org.springframework.security.access.AccessDeniedException.class,
+                        () -> workspaceService.createTextFileForBot(
+                                workspaceId, botId, null, "bot.txt", "blocked", "v1"));
+        org.junit.jupiter.api.Assertions.assertTrue(denied.getMessage().contains("机器人"));
+
+        // Grant the BOT principal EDIT on the workspace.
+        grantPermission(ownerToken, workspaceId, "WORKSPACE", null, "BOT", botId, "EDIT");
+
+        // Now the bot can create, read, list and version a text file.
+        WorkspaceDto.FileDto created = workspaceService.createTextFileForBot(
+                workspaceId, botId, null, "bot.txt", "from the bot", "v1");
+        org.junit.jupiter.api.Assertions.assertEquals(WorkspaceFile.SourceType.BOT, created.getSourceType());
+        org.junit.jupiter.api.Assertions.assertEquals(botId, created.getSourceBotId());
+
+        WorkspaceDto.TextContent read =
+                workspaceService.readTextForBot(workspaceId, created.getId(), botId);
+        org.junit.jupiter.api.Assertions.assertEquals("from the bot", read.getContent());
+
+        org.junit.jupiter.api.Assertions.assertTrue(
+                workspaceService.listFilesForBot(workspaceId, botId, null).stream()
+                        .anyMatch(f -> f.getId().equals(created.getId())));
+
+        WorkspaceDto.FileDto v2 = workspaceService.saveTextVersionForBot(
+                workspaceId, created.getId(), botId, "edited by the bot", "v2");
+        org.junit.jupiter.api.Assertions.assertEquals(2, v2.getCurrentVersion());
+        org.junit.jupiter.api.Assertions.assertEquals("bot.txt", v2.getDisplayName()); // name preserved
+    }
+
+    @Test
+    @DisplayName("F6 slice 2: bot access is denied when the workspace has botAccess disabled")
+    void botAccessDeniedWhenWorkspaceBotAccessDisabled() throws Exception {
+        Object[] owner = createUserAndLogin("wsbotflag");
+        String ownerToken = (String) owner[0];
+        Long botId = createBot(ownerToken);
+        Long workspaceId = createWorkspace(ownerToken, "No bot tools vault", "SERVICE", false); // botAccess OFF
+
+        // Even with an explicit grant, the workspace-level botAccessEnabled=false short-circuits.
+        grantPermission(ownerToken, workspaceId, "WORKSPACE", null, "BOT", botId, "EDIT");
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                org.springframework.security.access.AccessDeniedException.class,
+                () -> workspaceService.createTextFileForBot(
+                        workspaceId, botId, null, "bot.txt", "blocked", "v1"));
     }
 
     @Test
