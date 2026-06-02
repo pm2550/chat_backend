@@ -330,7 +330,7 @@ public class AgentContextBuilder {
 
         List<LoreBookEntry> matched = new ArrayList<>();
         try {
-            JsonNode entries = objectMapper.readTree(bot.getCharacterBookJson()).path("entries");
+            JsonNode entries = readJsonMaybeQuoted(bot.getCharacterBookJson()).path("entries");
             if (!entries.isArray()) {
                 return LoreBookSection.empty();
             }
@@ -398,6 +398,14 @@ public class AgentContextBuilder {
             current = current.withLoreBook(new LoreBookSection(List.copyOf(kept), List.copyOf(droppedAll)));
         }
         return current;
+    }
+
+    private JsonNode readJsonMaybeQuoted(String value) throws Exception {
+        JsonNode root = objectMapper.readTree(value);
+        if (root.isTextual() && hasText(root.asText())) {
+            return objectMapper.readTree(root.asText());
+        }
+        return root;
     }
 
     private static void appendIfPresent(StringBuilder prompt, String value) {
