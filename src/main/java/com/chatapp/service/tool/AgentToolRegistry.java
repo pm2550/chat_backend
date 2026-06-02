@@ -37,6 +37,20 @@ public class AgentToolRegistry {
         return Optional.ofNullable(toolsByName.get(name));
     }
 
+    /**
+     * True only when the bot has an EXPLICIT, non-empty enabled_tools whitelist that
+     * resolves to at least one registered tool. A null/blank whitelist returns false
+     * (even though {@link #listToolsForBot} would then expose all tools) so that a
+     * plain persona bot with no tool opt-in is NOT routed through the agent loop.
+     */
+    public boolean hasExplicitToolWhitelist(BotConfig bot) {
+        Set<String> whitelist = enabledTools(bot);
+        if (whitelist == null || whitelist.isEmpty()) {
+            return false;
+        }
+        return whitelist.stream().anyMatch(toolsByName::containsKey);
+    }
+
     public List<Tool> listToolsForBot(BotConfig bot) {
         Set<String> whitelist = enabledTools(bot);
         if (whitelist == null) {

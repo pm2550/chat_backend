@@ -87,6 +87,15 @@ llm:
   ollama:
     base-url: http://localhost:11434
     model: llama3
+  dashscope:
+    api-key:
+    base-url: http://localhost/dashscope/v1
+    model: qwen-plus
+
+bot:
+  rate-limit:
+    agent-runs-per-minute: 1000
+    web-search-per-minute: 1000
 
 logging:
   level:

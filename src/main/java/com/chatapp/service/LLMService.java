@@ -58,6 +58,16 @@ public class LLMService {
     @Value("${llm.hermes.model:hermes-agent}")
     private String hermesModel;
 
+    // DashScope chat is routed through an OpenAI-compatible endpoint (the owner's
+    // self-hosted dashscope-proxy by default, which is keyless). DashScope image
+    // generation is unaffected — it keeps using its own per-user credential path.
+    @Value("${llm.dashscope.api-key:}")
+    private String dashscopeApiKey;
+    @Value("${llm.dashscope.base-url:http://localhost/dashscope/v1}")
+    private String dashscopeBaseUrl;
+    @Value("${llm.dashscope.model:qwen-plus}")
+    private String dashscopeModel;
+
     public LLMService(ObjectMapper objectMapper, ProviderCredentialService providerCredentialService) {
         this.objectMapper = objectMapper;
         this.providerCredentialService = providerCredentialService;
@@ -97,7 +107,13 @@ public class LLMService {
                     hermesBaseUrl,
                     resolveModel(botConfig, hermesModel),
                     messages, botConfig, tools);
-            case DASHSCOPE -> throw new IllegalArgumentException("DashScope 当前仅用于图片生成凭据");
+            // DashScope chat goes through the OpenAI-compatible proxy. The proxy is
+            // typically keyless, so a blank key is allowed (Authorization is omitted).
+            case DASHSCOPE -> callOpenAICompatible(
+                    resolveApiKey(botConfig, dashscopeApiKey),
+                    dashscopeBaseUrl,
+                    resolveModel(botConfig, dashscopeModel),
+                    messages, botConfig, tools);
         };
     }
 
@@ -133,25 +149,19 @@ public class LLMService {
             }
 
             if (tools != null && !tools.isEmpty()) {
-                ArrayNode toolsArray = requestBody.putArray("tools");
-                for (Tool tool : tools) {
-                    ObjectNode toolNode = toolsArray.addObject();
-                    toolNode.put("type", "function");
-                    ObjectNode functionNode = toolNode.putObject("function");
-                    functionNode.put("name", tool.name());
-                    functionNode.put("description", tool.description());
-                    functionNode.set("parameters", tool.parametersSchema());
-                }
+                putToolDefinitions(requestBody, tools);
                 requestBody.put("tool_choice", "auto");
             }
 
-            Request request = new Request.Builder()
+            Request.Builder requestBuilder = new Request.Builder()
                     .url(baseUrl + "/chat/completions")
-                    .header("Authorization", "Bearer " + apiKey)
                     .header("Content-Type", "application/json")
                     .post(RequestBody.create(objectMapper.writeValueAsString(requestBody),
-                            MediaType.parse("application/json")))
-                    .build();
+                            MediaType.parse("application/json")));
+            if (apiKey != null && !apiKey.isBlank()) {
+                requestBuilder.header("Authorization", "Bearer " + apiKey);
+            }
+            Request request = requestBuilder.build();
 
             try (Response response = httpClient.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
@@ -177,6 +187,22 @@ public class LLMService {
         } catch (IOException e) {
             log.error("LLM API call failed: {}", e.getMessage());
             throw new RuntimeException("LLM服务调用失败", e);
+        }
+    }
+
+    /**
+     * Serializes the tool list into the OpenAI-style {@code tools} array shared by
+     * the OpenAI-compatible providers and Ollama ({@code /api/chat} accepts the same shape).
+     */
+    private void putToolDefinitions(ObjectNode requestBody, List<Tool> tools) {
+        ArrayNode toolsArray = requestBody.putArray("tools");
+        for (Tool tool : tools) {
+            ObjectNode toolNode = toolsArray.addObject();
+            toolNode.put("type", "function");
+            ObjectNode functionNode = toolNode.putObject("function");
+            functionNode.put("name", tool.name());
+            functionNode.put("description", tool.description());
+            functionNode.set("parameters", tool.parametersSchema());
         }
     }
 
@@ -265,9 +291,6 @@ public class LLMService {
     }
 
     private BotDto.LLMResponse callOllama(String model, List<BotDto.ChatMessage> messages, BotConfig config, List<Tool> tools) {
-        if (tools != null && !tools.isEmpty()) {
-            throw new UnsupportedOperationException("Ollama tool calls are not implemented in PM chat yet");
-        }
         try {
             ObjectNode requestBody = objectMapper.createObjectNode();
             requestBody.put("model", model);
@@ -277,7 +300,25 @@ public class LLMService {
             for (BotDto.ChatMessage msg : messages) {
                 ObjectNode msgNode = messagesArray.addObject();
                 msgNode.put("role", msg.getRole());
-                msgNode.put("content", msg.getContent());
+                msgNode.put("content", msg.getContent() != null ? msg.getContent() : "");
+                if (msg.getName() != null) {
+                    // Ollama identifies the tool a result belongs to via tool_name.
+                    msgNode.put("tool_name", msg.getName());
+                }
+                if (msg.getToolCalls() != null && !msg.getToolCalls().isEmpty()) {
+                    ArrayNode toolCalls = msgNode.putArray("tool_calls");
+                    for (BotDto.ToolCall toolCall : msg.getToolCalls()) {
+                        ObjectNode callNode = toolCalls.addObject();
+                        ObjectNode function = callNode.putObject("function");
+                        function.put("name", toolCall.getName());
+                        // Ollama expects arguments as a JSON object, not a string.
+                        function.set("arguments", parseArgumentsToNode(toolCall.getArgumentsJson()));
+                    }
+                }
+            }
+
+            if (tools != null && !tools.isEmpty()) {
+                putToolDefinitions(requestBody, tools);
             }
 
             ObjectNode options = requestBody.putObject("options");
@@ -296,18 +337,62 @@ public class LLMService {
                 }
 
                 JsonNode responseJson = objectMapper.readTree(response.body().string());
-                String content = responseJson.path("message").path("content").asText();
+                JsonNode messageNode = responseJson.path("message");
+                String content = messageNode.path("content").asText("");
+                int tokens = responseJson.path("prompt_eval_count").asInt(0)
+                        + responseJson.path("eval_count").asInt(0);
 
                 BotDto.LLMResponse llmResponse = new BotDto.LLMResponse();
                 llmResponse.setContent(content);
-                llmResponse.setTokensUsed(0);
+                llmResponse.setTokensUsed(tokens);
                 llmResponse.setModel(model);
+                llmResponse.setToolCalls(parseOllamaToolCalls(messageNode.path("tool_calls")));
                 return llmResponse;
             }
         } catch (IOException e) {
             log.error("Ollama API call failed: {}", e.getMessage());
             throw new RuntimeException("Ollama服务调用失败", e);
         }
+    }
+
+    private JsonNode parseArgumentsToNode(String argumentsJson) {
+        if (argumentsJson == null || argumentsJson.isBlank()) {
+            return objectMapper.createObjectNode();
+        }
+        try {
+            return objectMapper.readTree(argumentsJson);
+        } catch (IOException e) {
+            return objectMapper.createObjectNode();
+        }
+    }
+
+    /**
+     * Ollama returns tool_calls under {@code message.tool_calls} with an
+     * {@code arguments} object (not a JSON string) and frequently without an id.
+     * Normalize both into {@link BotDto.ToolCall}.
+     */
+    private List<BotDto.ToolCall> parseOllamaToolCalls(JsonNode toolCallsNode) {
+        if (toolCallsNode == null || !toolCallsNode.isArray() || toolCallsNode.isEmpty()) {
+            return List.of();
+        }
+        ArrayList<BotDto.ToolCall> toolCalls = new ArrayList<>();
+        int index = 0;
+        for (JsonNode toolCallNode : toolCallsNode) {
+            JsonNode function = toolCallNode.path("function");
+            JsonNode argumentsNode = function.path("arguments");
+            String argumentsJson = argumentsNode.isMissingNode() || argumentsNode.isNull()
+                    ? "{}"
+                    : (argumentsNode.isTextual() ? argumentsNode.asText() : argumentsNode.toString());
+            String id = toolCallNode.path("id").asText("");
+            if (id.isBlank()) {
+                id = "ollama-call-" + (++index);
+            }
+            toolCalls.add(new BotDto.ToolCall(
+                    id,
+                    function.path("name").asText(""),
+                    argumentsJson));
+        }
+        return toolCalls;
     }
 
     String resolveApiKey(BotConfig config, String defaultKey) {

@@ -2,16 +2,19 @@ package com.chatapp.service;
 
 import com.chatapp.dto.BotDto;
 import com.chatapp.entity.*;
+import com.chatapp.repository.AgentTaskRepository;
 import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.UserRepository;
 import com.chatapp.repository.MessageRepository;
+import com.chatapp.service.tool.AgentToolRegistry;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -44,6 +47,13 @@ public class BotService {
     private final MessageRepository messageRepository;
     private final LLMService llmService;
     private final ProviderCredentialService providerCredentialService;
+    private final AgentToolRegistry agentToolRegistry;
+    private final AgentContextBuilder agentContextBuilder;
+    private final AgentTaskRepository agentTaskRepository;
+    private final BotRateLimitService botRateLimitService;
+    // Lazy to break the cycle: AgentExecutionLoop -> AgentToolDispatcher ->
+    // RawWebSocketHandler -> BotService.
+    private final ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
 
     @Transactional
     public BotDto createBot(Long creatorId, BotDto.CreateRequest request) {
@@ -274,23 +284,96 @@ public class BotService {
             if (shouldRespond) {
                 try {
                     BotConfig config = crb.getBotConfig();
-                    List<BotDto.ChatMessage> chatMessages = buildContext(crb, messageContent);
-                    BotDto.LLMResponse response = llmService.chat(config, chatMessages);
-
-                    // Save bot response as a message
-                    Message botMessage = saveBotMessage(chatRoomId, crb, response.getContent());
-                    if (botMessage != null) {
-                        botMessages.add(botMessage);
+                    String replyContent;
+                    if (agentToolRegistry.hasExplicitToolWhitelist(config)) {
+                        // Tool-enabled bots run the full multi-turn agent loop
+                        // (room history + tools), not a single LLM call.
+                        replyContent = respondViaAgentLoop(chatRoomId, crb, messageContent, senderId);
+                    } else {
+                        // Persona / tool-less bots keep the lightweight one-shot path.
+                        List<BotDto.ChatMessage> chatMessages = buildContext(crb, messageContent);
+                        BotDto.LLMResponse response = llmService.chat(config, chatMessages);
+                        replyContent = response.getContent();
+                        log.info("机器人 {} 在聊天室 {} 回复了消息 (tokens: {})",
+                                config.getBotName(), chatRoomId, response.getTokensUsed());
                     }
 
-                    log.info("机器人 {} 在聊天室 {} 回复了消息 (tokens: {})",
-                            config.getBotName(), chatRoomId, response.getTokensUsed());
+                    if (replyContent != null) {
+                        Message botMessage = saveBotMessage(chatRoomId, crb, replyContent);
+                        if (botMessage != null) {
+                            botMessages.add(botMessage);
+                        }
+                    }
                 } catch (Exception e) {
                     log.error("机器人 {} 处理消息失败: {}", crb.getBotConfig().getBotName(), e.getMessage());
                 }
             }
         }
         return botMessages;
+    }
+
+    /**
+     * Runs the multi-turn agent loop for a tool-enabled room bot, persisting a
+     * transient {@link AgentTask} for audit/observability. Returns the final answer,
+     * or {@code null} when the per-(room,bot) rate limit is exceeded.
+     */
+    private String respondViaAgentLoop(Long chatRoomId, ChatRoomBot crb, String messageContent, Long senderId) {
+        BotConfig config = crb.getBotConfig();
+        if (!botRateLimitService.tryAcquireAgentRun(chatRoomId, config.getId())) {
+            log.warn("机器人 {} 在聊天室 {} 的 agent 运行被限流，跳过本次回复", config.getBotName(), chatRoomId);
+            return null;
+        }
+
+        ChatRoom chatRoom = chatRoomRepository.findById(chatRoomId)
+                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
+        User requester = senderId != null ? userRepository.findById(senderId).orElse(null) : null;
+        if (requester == null) {
+            Long fallbackId = config.getCreatedBy() != null
+                    ? config.getCreatedBy().getId()
+                    : chatRoom.getCreatedBy().getId();
+            requester = userRepository.findById(fallbackId)
+                    .orElseThrow(() -> new RuntimeException("任务发起人不存在"));
+        }
+
+        AgentTask task = new AgentTask();
+        task.setChatRoom(chatRoom);
+        task.setRequestedBy(requester);
+        task.setBotConfig(config);
+        task.setPrompt(cleanMentions(messageContent, crb));
+        task.setStatus(AgentTask.Status.RUNNING);
+        task = agentTaskRepository.save(task);
+
+        try {
+            AgentContextBuilder.AgentContextEnvelope envelope = agentContextBuilder.buildContext(task);
+            AgentExecutionLoop.AgentLoopResult result =
+                    agentExecutionLoopProvider.getObject().runLoop(task, envelope);
+            String finalContent = result.finalContent() != null && !result.finalContent().isBlank()
+                    ? result.finalContent()
+                    : "任务已完成";
+            task.setResult(finalContent);
+            task.setStatus(AgentTask.Status.SUCCEEDED);
+            task.setCompletedAt(LocalDateTime.now());
+            agentTaskRepository.save(task);
+            log.info("机器人 {} 在聊天室 {} 通过 agent loop 回复 (reason={} iterations={} toolCalls={})",
+                    config.getBotName(), chatRoomId, result.terminationReason(),
+                    result.iterations(), result.toolCallsMade().size());
+            return finalContent;
+        } catch (RuntimeException e) {
+            task.setStatus(AgentTask.Status.FAILED);
+            task.setErrorMessage(e.getMessage());
+            task.setCompletedAt(LocalDateTime.now());
+            agentTaskRepository.save(task);
+            throw e;
+        }
+    }
+
+    private String cleanMentions(String userMessage, ChatRoomBot crb) {
+        BotConfig config = crb.getBotConfig();
+        String cleaned = userMessage
+                .replaceAll("@" + Pattern.quote(config.getBotName()) + "\\s*", "")
+                .replaceAll("@" + Pattern.quote(roomDisplayName(crb)) + "\\s*", "")
+                .trim();
+        return cleaned.isEmpty() ? "你好" : cleaned;
     }
 
     private List<BotDto.ChatMessage> buildContext(ChatRoomBot crb, String userMessage) {
@@ -311,13 +394,7 @@ public class BotService {
         }
 
         // Clean @mention from message
-        String cleanMessage = userMessage
-                .replaceAll("@" + Pattern.quote(config.getBotName()) + "\\s*", "")
-                .replaceAll("@" + Pattern.quote(roomDisplayName(crb)) + "\\s*", "")
-                .trim();
-        if (cleanMessage.isEmpty()) {
-            cleanMessage = "你好";
-        }
+        String cleanMessage = cleanMentions(userMessage, crb);
         messages.add(new BotDto.ChatMessage("user", cleanMessage));
         if (config.getCharacterPostHistoryInstructions() != null
                 && !config.getCharacterPostHistoryInstructions().isBlank()) {

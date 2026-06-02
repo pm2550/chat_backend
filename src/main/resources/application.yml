@@ -165,6 +165,22 @@ llm:
     api-key: ${HERMES_API_KEY:}
     base-url: ${HERMES_BASE_URL:http://127.0.0.1:8642/v1}
     model: ${HERMES_MODEL:hermes-agent}
+  dashscope:
+    # Chat is routed through an OpenAI-compatible proxy (self-hosted dashscope-proxy is keyless).
+    # Image generation is unaffected and keeps using its own per-user DashScope credential.
+    api-key: ${DASHSCOPE_API_KEY:}
+    base-url: ${DASHSCOPE_BASE_URL:http://localhost/dashscope/v1}
+    model: ${DASHSCOPE_MODEL:qwen-plus}
+
+# Per-bot / per-room rate limiting for agent runs (bucket4j; <=0 disables a limit).
+bot:
+  rate-limit:
+    agent-runs-per-minute: ${BOT_AGENT_RUNS_PER_MINUTE:30}
+    web-search-per-minute: ${BOT_WEB_SEARCH_PER_MINUTE:60}
+
+# SSRF policy: internal hosts a user-supplied URL (webhook/base_url/media) may target.
+outbound-url:
+  owner-allowed-internal-hosts: ${OUTBOUND_URL_ALLOWED_INTERNAL_HOSTS:127.0.0.1,localhost,172.17.0.1}
 
 agent:
   gateway:
