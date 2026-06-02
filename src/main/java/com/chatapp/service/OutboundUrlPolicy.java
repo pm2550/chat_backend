@@ -101,11 +101,7 @@ public class OutboundUrlPolicy {
     private boolean resolvesToInternalAddress(String host) {
         try {
             for (InetAddress address : InetAddress.getAllByName(host)) {
-                if (address.isAnyLocalAddress()
-                        || address.isLoopbackAddress()
-                        || address.isLinkLocalAddress()   // includes 169.254.x metadata range
-                        || address.isSiteLocalAddress()   // 10/8, 172.16/12, 192.168/16
-                        || address.isMulticastAddress()) {
+                if (isInternalAddress(address)) {
                     return true;
                 }
             }
@@ -114,6 +110,26 @@ public class OutboundUrlPolicy {
             // Cannot verify the host is public — treat as unsafe.
             throw new IllegalArgumentException("url 主机无法解析");
         }
+    }
+
+    /**
+     * True if {@code address} is an internal/private/metadata target that a
+     * user-supplied URL must not reach. Exposed so callers that resolve DNS at
+     * connection time (e.g. a custom OkHttp {@code Dns}) can re-validate the exact
+     * IP they are about to connect to — defeating DNS-rebinding TOCTOU where the
+     * host resolves public at validation time and private at connect time.
+     */
+    public boolean isInternalAddress(InetAddress address) {
+        return address.isAnyLocalAddress()
+                || address.isLoopbackAddress()
+                || address.isLinkLocalAddress()   // includes 169.254.x metadata range
+                || address.isSiteLocalAddress()   // 10/8, 172.16/12, 192.168/16
+                || address.isMulticastAddress();
+    }
+
+    /** True if {@code host} is on the owner-curated internal allowlist (case-insensitive). */
+    public boolean isHostAllowlisted(String host) {
+        return host != null && allowedInternalHosts().contains(host.toLowerCase(Locale.ROOT));
     }
 
     private Set<String> allowedInternalHosts() {

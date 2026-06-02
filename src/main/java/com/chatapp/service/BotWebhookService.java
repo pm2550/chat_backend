@@ -6,8 +6,8 @@ import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.BotWebhookSubscriptionRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import okhttp3.Dns;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -19,14 +19,17 @@ import org.springframework.transaction.annotation.Transactional;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.net.InetAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -36,7 +39,6 @@ import java.util.concurrent.TimeUnit;
  * what makes a bot "externally driven" — no BRIDGE enum value is needed.
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class BotWebhookService {
 
@@ -49,17 +51,43 @@ public class BotWebhookService {
     private final CredentialCryptoService cryptoService;
     private final ObjectMapper objectMapper;
 
-    private final OkHttpClient httpClient = new OkHttpClient.Builder()
-            .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(8, TimeUnit.SECONDS)
-            .writeTimeout(5, TimeUnit.SECONDS)
-            .followRedirects(false)
-            .build();
-    private final ExecutorService executor = Executors.newFixedThreadPool(4, r -> {
-        Thread t = new Thread(r, "bot-webhook-dispatch");
-        t.setDaemon(true);
-        return t;
-    });
+    // SSRF: a custom Dns re-validates the IP we actually connect to (defeats DNS
+    // rebinding — a host that resolved public at register time cannot resolve private
+    // now). Built in the constructor so the lambda binds the already-assigned policy
+    // parameter (a field initializer would run before the injected field is set).
+    private final OkHttpClient httpClient;
+
+    // Bounded queue + capped pool: a slow/hung external endpoint or a burst of events
+    // can no longer pile up unbounded tasks and OOM the JVM. Overflow is dropped with a
+    // warning rather than blocking the chat message thread (no silent cap).
+    private final ExecutorService executor = new ThreadPoolExecutor(
+            2, 4, 30L, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(1024),
+            r -> {
+                Thread t = new Thread(r, "bot-webhook-dispatch");
+                t.setDaemon(true);
+                return t;
+            },
+            (r, ex) -> log.warn("bot-webhook dispatch queue full (cap=1024) — dropping a delivery to avoid OOM"));
+
+    public BotWebhookService(BotWebhookSubscriptionRepository subscriptionRepository,
+                             BotConfigRepository botConfigRepository,
+                             OutboundUrlPolicy outboundUrlPolicy,
+                             CredentialCryptoService cryptoService,
+                             ObjectMapper objectMapper) {
+        this.subscriptionRepository = subscriptionRepository;
+        this.botConfigRepository = botConfigRepository;
+        this.outboundUrlPolicy = outboundUrlPolicy;
+        this.cryptoService = cryptoService;
+        this.objectMapper = objectMapper;
+        this.httpClient = new OkHttpClient.Builder()
+                .connectTimeout(5, TimeUnit.SECONDS)
+                .readTimeout(8, TimeUnit.SECONDS)
+                .writeTimeout(5, TimeUnit.SECONDS)
+                .followRedirects(false)
+                .dns(hostname -> guardedLookup(outboundUrlPolicy, hostname))
+                .build();
+    }
 
     // ---- CRUD (owner-gated) ----
 
@@ -178,6 +206,30 @@ public class BotWebhookService {
             }
         }
         subscriptionRepository.save(sub);
+    }
+
+    /**
+     * SSRF-guarded DNS resolution used by the webhook client. Resolves {@code hostname}
+     * and rejects (via {@link UnknownHostException}) if any resolved address is internal
+     * and the host is not on the owner allowlist. Because OkHttp connects only to the
+     * addresses this returns, validating them here closes the DNS-rebinding window that a
+     * register-time-only check leaves open. Package-private + static for direct testing.
+     */
+    static List<InetAddress> guardedLookup(OutboundUrlPolicy policy, String hostname)
+            throws UnknownHostException {
+        List<InetAddress> resolved = Dns.SYSTEM.lookup(hostname);
+        if (policy.isHostAllowlisted(hostname)) {
+            return resolved; // owner-curated internal host (127.0.0.1 / localhost / 172.17.0.1)
+        }
+        List<InetAddress> safe = new ArrayList<>(resolved.size());
+        for (InetAddress a : resolved) {
+            if (policy.isInternalAddress(a)) {
+                throw new UnknownHostException(
+                        "blocked internal address " + a.getHostAddress() + " for host " + hostname);
+            }
+            safe.add(a);
+        }
+        return safe;
     }
 
     private String hmacSha256Hex(String secret, String data) {
