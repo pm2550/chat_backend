@@ -1,5 +1,8 @@
 package com.chatapp.service;
 
+import com.chatapp.dto.BotDto;
+import com.chatapp.entity.AgentTask;
+import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.ChatRoomMember;
 import com.chatapp.entity.MemoryEntry;
@@ -8,9 +11,13 @@ import com.chatapp.integration.TestConfig;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MemoryEntryRepository;
 import com.chatapp.repository.UserRepository;
+import com.chatapp.service.tool.AgentToolDispatcher;
+import com.chatapp.service.tool.AgentToolRegistry;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -27,6 +34,12 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest(properties = {
         "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.amqp.RabbitAutoConfiguration,org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration,org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration",
@@ -45,6 +58,7 @@ class AgentContextBuilderMemoryIntegrationTest {
     @Autowired private ChatRoomRepository chatRoomRepository;
     @Autowired private UserRepository userRepository;
     @Autowired private EntityManager entityManager;
+    @Autowired private AgentContextBuilder agentContextBuilder;
 
     @MockBean private FileStorageService fileStorageService;
     @MockBean private TokenBlacklistService tokenBlacklistService;
@@ -81,6 +95,63 @@ class AgentContextBuilderMemoryIntegrationTest {
         assertTrue(ids.contains(fixture.ownerPrivateMemory().getId()));
         assertFalse(ids.contains(fixture.peerPrivateMemory().getId()));
         assertEquals(2, ids.size());
+    }
+
+    @Test
+    @Transactional
+    @DisplayName("LLM system prompt includes ROOM memory and excludes PRIVATE memory")
+    void llmSystemPromptIncludesRoomMemoryAndExcludesPrivateMemory() {
+        Fixture fixture = createFixture();
+        ChatRoom room = chatRoomRepository.findById(fixture.roomId()).orElseThrow();
+        User owner = userRepository.findById(fixture.ownerId()).orElseThrow();
+        BotConfig bot = new BotConfig();
+        bot.setId(7001L);
+        bot.setBotName("Memory Agent");
+        bot.setSystemPrompt("Use supplied room memory only.");
+        bot.setIncludeRoomMetadata(true);
+        bot.setIncludeMemorySection(true);
+        bot.setMaxHistoryMessages(20);
+        bot.setMaxContextTokensEstimate(6000);
+        bot.setMaxAgentIterations(1);
+        bot.setMaxAgentWallclockMs(30000);
+        bot.setMaxAgentTotalTokens(50000);
+
+        AgentTask task = new AgentTask();
+        task.setId(8801L);
+        task.setBotConfig(bot);
+        task.setChatRoom(room);
+        task.setRequestedBy(owner);
+        task.setPrompt("Use Shared room fact from memory.");
+
+        AgentContextBuilder.AgentContextEnvelope envelope = agentContextBuilder.buildContext(task);
+        AgentToolRegistry registry = mock(AgentToolRegistry.class);
+        AgentToolDispatcher dispatcher = mock(AgentToolDispatcher.class);
+        AgentExecutionLoop loop = new AgentExecutionLoop(
+                llmService,
+                registry,
+                dispatcher,
+                agentContextBuilder,
+                new ObjectMapper());
+        when(registry.listToolsForBot(bot)).thenReturn(List.of());
+        when(llmService.chat(eq(bot), anyList(), anyList()))
+                .thenReturn(new BotDto.LLMResponse("ok", 3, "test"));
+
+        loop.runLoop(task, envelope);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BotDto.ChatMessage>> messagesCaptor =
+                ArgumentCaptor.forClass(List.class);
+        verify(llmService).chat(eq(bot), messagesCaptor.capture(), anyList());
+        String systemPrompt = messagesCaptor.getValue().stream()
+                .filter(message -> "system".equals(message.getRole()))
+                .findFirst()
+                .orElseThrow()
+                .getContent();
+
+        assertTrue(systemPrompt.contains("[MEMORY]"));
+        assertTrue(systemPrompt.contains("Shared room fact"));
+        assertFalse(systemPrompt.contains("Owner-only private fact"));
+        assertFalse(systemPrompt.contains("Peer-only private fact"));
     }
 
     private Fixture createFixture() {
