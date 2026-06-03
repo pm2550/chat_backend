@@ -6,7 +6,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -45,9 +47,27 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(ApiResponse.badRequest(ex.getMessage()));
     }
 
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMalformedJson(HttpMessageNotReadableException ex) {
+        log.warn("请求体解析失败: {}", ex.getMostSpecificCause().getMessage());
+        return ResponseEntity.badRequest().body(ApiResponse.badRequest("请求格式错误，请检查 JSON 字段和值"));
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        log.warn("请求参数类型错误: {}={}", ex.getName(), ex.getValue());
+        return ResponseEntity.badRequest().body(ApiResponse.badRequest("请求参数类型错误"));
+    }
+
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ApiResponse<Void>> handleMaxUploadSize(MaxUploadSizeExceededException ex) {
         return ResponseEntity.badRequest().body(ApiResponse.badRequest("文件大小超过限制"));
+    }
+
+    @ExceptionHandler(PointsException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePointsException(PointsException ex) {
+        return ResponseEntity.status(ex.getStatus())
+                .body(ApiResponse.error(ex.getStatus().value(), ex.getMessage()));
     }
 
     @ExceptionHandler(RuntimeException.class)

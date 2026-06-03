@@ -23,6 +23,7 @@ import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 /**
  * 用户实体类
@@ -32,6 +33,7 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@ToString(exclude = {"password", "roles"})
 public class User {
 
     @Id
@@ -60,6 +62,15 @@ public class User {
     @Column(columnDefinition = "TEXT")
     private String bio;
 
+    @Column(length = 50)
+    private String title;
+
+    @Column(name = "title_color", length = 20)
+    private String titleColor;
+
+    @Column(name = "title_effect", length = 30)
+    private String titleEffect = "none";
+
     @Enumerated(EnumType.STRING)
     @Column(name = "online_status")
     private OnlineStatus onlineStatus = OnlineStatus.OFFLINE;
@@ -79,6 +90,7 @@ public class User {
     private LocalDateTime updatedAt;
 
     // 用户角色
+    @JsonIgnore
     @ElementCollection(fetch = FetchType.EAGER)
     @Enumerated(EnumType.STRING)
     @CollectionTable(name = "user_roles", joinColumns = @JoinColumn(name = "user_id"))
@@ -123,4 +135,4 @@ public class User {
             return description;
         }
     }
-} 
+}

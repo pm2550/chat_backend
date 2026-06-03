@@ -1,9 +1,15 @@
 package com.chatapp.controller;
 
+import com.chatapp.dto.MessageDto;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
+import com.chatapp.service.AuditLogService;
+import com.chatapp.service.BotService;
+import com.chatapp.service.FileStorageService;
 import com.chatapp.service.MessageService;
+import com.chatapp.service.MessageReactionService;
 import com.chatapp.service.UserService;
+import com.chatapp.websocket.RawWebSocketHandler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -13,10 +19,12 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 消息控制器
@@ -29,6 +37,11 @@ public class MessageController {
 
     private final MessageService messageService;
     private final UserService userService;
+    private final FileStorageService fileStorageService;
+    private final RawWebSocketHandler rawWebSocketHandler;
+    private final BotService botService;
+    private final AuditLogService auditLogService;
+    private final MessageReactionService messageReactionService;
 
     /**
      * 发送文本消息
@@ -37,16 +50,46 @@ public class MessageController {
     public ResponseEntity<?> sendMessage(@RequestBody SendMessageRequest request, Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
-            Message message = messageService.sendMessage(
-                currentUser.getId(),
-                request.getChatRoomId(),
-                request.getContent(),
-                Message.MessageType.TEXT
-            );
+            Message.MessageType messageType = request.getMessageType() != null
+                    ? request.getMessageType()
+                    : Message.MessageType.TEXT;
+            Message message = messageType == Message.MessageType.STICKER
+                    ? messageService.sendStickerMessage(
+                        currentUser.getId(),
+                        request.getChatRoomId(),
+                        request.getStickerId(),
+                        Boolean.TRUE.equals(request.getIsAnonymous()))
+                    : Boolean.TRUE.equals(request.getIsAnonymous())
+                    ? messageService.sendAnonymousEncryptedMessage(
+                        currentUser.getId(),
+                        request.getChatRoomId(),
+                        request.getContent(),
+                        request.getEncryptedContent(),
+                        request.getEncryptionVersion(),
+                        messageType)
+                    : messageService.sendEncryptedMessage(
+                        currentUser.getId(),
+                        request.getChatRoomId(),
+                        request.getContent(),
+                        request.getEncryptedContent(),
+                        request.getEncryptionVersion(),
+                        messageType);
             
             Map<String, Object> response = new HashMap<>();
             response.put("message", "消息发送成功");
-            response.put("data", message);
+            response.put("data", MessageDto.fromEntity(message));
+
+            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            auditLogService.record(
+                    currentUser,
+                    "MESSAGE_SEND",
+                    "MESSAGE",
+                    message.getId(),
+                    request.getChatRoomId(),
+                    message.getMessageType().name());
+            if (request.getEncryptedContent() == null || request.getEncryptedContent().isBlank()) {
+                processBotsAndBroadcast(message, currentUser.getId());
+            }
             
             return ResponseEntity.ok(response);
         } catch (Exception e) {
@@ -59,34 +102,52 @@ public class MessageController {
      * 发送文件消息
      */
     @PostMapping("/file")
-    public ResponseEntity<?> sendFileMessage(@RequestBody SendFileMessageRequest request, Authentication auth) {
+    public ResponseEntity<?> sendFileMessage(
+            @RequestParam("chatRoomId") Long chatRoomId,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "messageType", required = false) Message.MessageType requestedMessageType,
+            @RequestParam(value = "encryptedContent", required = false) String encryptedContent,
+            @RequestParam(value = "encryptionVersion", required = false) Integer encryptionVersion,
+            Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
-            
-            Message.MessageType messageType = Message.MessageType.FILE;
-            if (request.getFileType() != null) {
-                if (request.getFileType().startsWith("image/")) {
-                    messageType = Message.MessageType.IMAGE;
-                } else if (request.getFileType().startsWith("video/")) {
-                    messageType = Message.MessageType.VIDEO;
-                } else if (request.getFileType().startsWith("audio/")) {
-                    messageType = Message.MessageType.AUDIO;
-                }
+            messageService.validateCanSendMessage(currentUser.getId(), chatRoomId);
+            String fileUrl = fileStorageService.uploadChatFile(file);
+            String fileName = file.getOriginalFilename();
+            if (fileName == null || fileName.isBlank()) {
+                fileName = "file";
             }
+            String contentType = file.getContentType();
+
+            Message.MessageType messageType = requestedMessageType != null
+                    ? normalizeAttachmentMessageType(requestedMessageType)
+                    : inferAttachmentMessageType(fileName, contentType);
             
             Message message = messageService.sendFileMessage(
                 currentUser.getId(),
-                request.getChatRoomId(),
-                request.getFileName(),
-                request.getFileUrl(),
-                request.getFileType(),
-                request.getFileSize(),
-                messageType
+                chatRoomId,
+                fileName,
+                fileUrl,
+                contentType,
+                file.getSize(),
+                messageType,
+                encryptedContent,
+                encryptionVersion
             );
             
             Map<String, Object> response = new HashMap<>();
             response.put("message", "文件消息发送成功");
-            response.put("data", message);
+            response.put("data", MessageDto.fromEntity(message));
+
+            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            auditLogService.record(
+                    currentUser,
+                    "FILE_SEND",
+                    "MESSAGE",
+                    message.getId(),
+                    chatRoomId,
+                    fileName);
+            processBotsAndBroadcast(message, currentUser.getId());
             
             return ResponseEntity.ok(response);
         } catch (Exception e) {
@@ -112,7 +173,10 @@ public class MessageController {
             
             Map<String, Object> response = new HashMap<>();
             response.put("message", "回复消息发送成功");
-            response.put("data", message);
+            response.put("data", MessageDto.fromEntity(message));
+
+            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            processBotsAndBroadcast(message, currentUser.getId());
             
             return ResponseEntity.ok(response);
         } catch (Exception e) {
@@ -137,7 +201,7 @@ public class MessageController {
             Page<Message> messages = messageService.getChatRoomMessages(chatRoomId, currentUser.getId(), pageable);
             
             Map<String, Object> response = new HashMap<>();
-            response.put("messages", messages.getContent());
+            response.put("messages", toMessageDtos(messages.getContent(), currentUser.getId()));
             response.put("currentPage", messages.getNumber());
             response.put("totalPages", messages.getTotalPages());
             response.put("totalElements", messages.getTotalElements());
@@ -164,12 +228,47 @@ public class MessageController {
             List<Message> messages = messageService.getRecentMessages(chatRoomId, currentUser.getId(), limit);
             
             Map<String, Object> response = new HashMap<>();
-            response.put("messages", messages);
+            response.put("messages", toMessageDtos(messages, currentUser.getId()));
             response.put("count", messages.size());
             
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             log.error("获取最新消息失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 获取聊天室文件中心消息（图片/通用文件）。
+     */
+    @GetMapping("/chat-room/{chatRoomId}/files")
+    public ResponseEntity<?> getChatRoomFileMessages(
+            @PathVariable Long chatRoomId,
+            @RequestParam(required = false) String messageType,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Message.MessageType type = parseAttachmentType(messageType);
+
+            Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
+            Page<Message> messages = messageService.getChatRoomFileMessages(
+                    chatRoomId,
+                    currentUser.getId(),
+                    type,
+                    pageable);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("messages", toMessageDtos(messages.getContent(), currentUser.getId()));
+            response.put("currentPage", messages.getNumber());
+            response.put("totalPages", messages.getTotalPages());
+            response.put("totalElements", messages.getTotalElements());
+            response.put("hasNext", messages.hasNext());
+            response.put("hasPrevious", messages.hasPrevious());
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("获取聊天室文件失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
@@ -190,6 +289,20 @@ public class MessageController {
         }
     }
 
+    @GetMapping("/{messageId}/read-by")
+    public ResponseEntity<?> getMessageReadBy(@PathVariable Long messageId, Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            return ResponseEntity.ok(Map.of(
+                    "message", "已读详情",
+                    "data", messageService.getReadReceipts(messageId, currentUser.getId())
+            ));
+        } catch (Exception e) {
+            log.error("获取已读详情失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
     /**
      * 标记聊天室所有消息为已读
      */
@@ -197,11 +310,44 @@ public class MessageController {
     public ResponseEntity<?> markAllMessagesAsRead(@PathVariable Long chatRoomId, Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
-            messageService.markAllMessagesAsRead(chatRoomId, currentUser.getId());
+            Message lastMessage = messageService.markAllMessagesAsRead(chatRoomId, currentUser.getId());
+            rawWebSocketHandler.broadcastReadReceipt(
+                    chatRoomId,
+                    currentUser.getId(),
+                    lastMessage != null ? lastMessage.getId() : null);
+            auditLogService.record(
+                    currentUser,
+                    "MESSAGE_READ_ALL",
+                    "CHAT_ROOM",
+                    chatRoomId,
+                    chatRoomId,
+                    null);
             
             return ResponseEntity.ok(Map.of("message", "所有消息已标记为已读"));
         } catch (Exception e) {
             log.error("标记所有消息已读失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 清空当前用户在聊天室内的可见历史，不删除其他成员的消息记录。
+     */
+    @DeleteMapping("/chat-room/{chatRoomId}/clear")
+    public ResponseEntity<?> clearChatHistory(@PathVariable Long chatRoomId, Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            messageService.clearChatHistoryForUser(chatRoomId, currentUser.getId());
+            auditLogService.record(
+                    currentUser,
+                    "CHAT_HISTORY_CLEAR",
+                    "CHAT_ROOM",
+                    chatRoomId,
+                    chatRoomId,
+                    null);
+            return ResponseEntity.ok(Map.of("message", "聊天记录已清空"));
+        } catch (Exception e) {
+            log.error("清空聊天记录失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
@@ -213,11 +359,134 @@ public class MessageController {
     public ResponseEntity<?> recallMessage(@PathVariable Long messageId, Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
-            messageService.recallMessage(messageId, currentUser.getId());
-            
-            return ResponseEntity.ok(Map.of("message", "消息已撤回"));
+            Message message = messageService.recallMessage(messageId, currentUser.getId());
+
+            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            auditLogService.record(
+                    currentUser,
+                    "MESSAGE_RECALL",
+                    "MESSAGE",
+                    messageId,
+                    message.getChatRoom().getId(),
+                    null);
+
+            return ResponseEntity.ok(Map.of(
+                "message", "消息已撤回",
+                "data", MessageDto.fromEntity(message)
+            ));
         } catch (Exception e) {
             log.error("撤回消息失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PutMapping("/{messageId}")
+    public ResponseEntity<?> editMessage(
+            @PathVariable Long messageId,
+            @RequestBody EditMessageRequest request,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Message message = messageService.editMessage(messageId, currentUser.getId(), request.getContent());
+            rawWebSocketHandler.broadcastMessage(message);
+            auditLogService.record(
+                    currentUser,
+                    "MESSAGE_EDIT",
+                    "MESSAGE",
+                    messageId,
+                    message.getChatRoom().getId(),
+                    null);
+            return ResponseEntity.ok(Map.of(
+                    "message", "消息已编辑",
+                    "data", MessageDto.fromEntity(message)
+            ));
+        } catch (Exception e) {
+            log.error("编辑消息失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{messageId}/forward")
+    public ResponseEntity<?> forwardMessage(
+            @PathVariable Long messageId,
+            @RequestBody ForwardMessageRequest request,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Message message = messageService.forwardMessage(messageId, currentUser.getId(), request.getTargetChatRoomId());
+            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            auditLogService.record(
+                    currentUser,
+                    "MESSAGE_FORWARD",
+                    "MESSAGE",
+                    messageId,
+                    message.getChatRoom().getId(),
+                    "targetRoom=" + request.getTargetChatRoomId());
+            return ResponseEntity.ok(Map.of(
+                    "message", "消息已转发",
+                    "data", MessageDto.fromEntity(message)
+            ));
+        } catch (Exception e) {
+            log.error("转发消息失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{messageId}/star")
+    public ResponseEntity<?> starMessage(@PathVariable Long messageId, Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Message message = messageService.starMessage(messageId, currentUser.getId());
+            rawWebSocketHandler.broadcastMessageAction(
+                    message.getChatRoom().getId(),
+                    "star_added",
+                    Map.of("messageId", messageId, "userId", currentUser.getId()));
+            return ResponseEntity.ok(Map.of(
+                    "message", "消息已收藏",
+                    "data", MessageDto.fromEntity(message)
+            ));
+        } catch (Exception e) {
+            log.error("收藏消息失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/{messageId}/star")
+    public ResponseEntity<?> unstarMessage(@PathVariable Long messageId, Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Message message = messageService.unstarMessage(messageId, currentUser.getId());
+            rawWebSocketHandler.broadcastMessageAction(
+                    message.getChatRoom().getId(),
+                    "star_removed",
+                    Map.of("messageId", messageId, "userId", currentUser.getId()));
+            return ResponseEntity.ok(Map.of(
+                    "message", "消息已取消收藏",
+                    "data", MessageDto.fromEntity(message)
+            ));
+        } catch (Exception e) {
+            log.error("取消收藏失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/starred")
+    public ResponseEntity<?> getStarredMessages(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
+            Page<Message> messages = messageService.getStarredMessages(currentUser.getId(), pageable);
+            return ResponseEntity.ok(Map.of(
+                    "messages", toMessageDtos(messages.getContent(), currentUser.getId()),
+                    "currentPage", messages.getNumber(),
+                    "totalPages", messages.getTotalPages(),
+                    "totalElements", messages.getTotalElements()
+            ));
+        } catch (Exception e) {
+            log.error("获取收藏消息失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
@@ -229,9 +498,21 @@ public class MessageController {
     public ResponseEntity<?> deleteMessage(@PathVariable Long messageId, Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
-            messageService.deleteMessage(messageId, currentUser.getId());
-            
-            return ResponseEntity.ok(Map.of("message", "消息已删除"));
+            Message message = messageService.deleteMessage(messageId, currentUser.getId());
+
+            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            auditLogService.record(
+                    currentUser,
+                    "MESSAGE_DELETE",
+                    "MESSAGE",
+                    messageId,
+                    message.getChatRoom().getId(),
+                    null);
+
+            return ResponseEntity.ok(Map.of(
+                "message", "消息已删除",
+                "data", MessageDto.fromEntity(message)
+            ));
         } catch (Exception e) {
             log.error("删除消息失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -255,7 +536,7 @@ public class MessageController {
             Page<Message> messages = messageService.searchMessages(chatRoomId, currentUser.getId(), keyword, pageable);
             
             Map<String, Object> response = new HashMap<>();
-            response.put("messages", messages.getContent());
+            response.put("messages", toMessageDtos(messages.getContent(), currentUser.getId()));
             response.put("keyword", keyword);
             response.put("currentPage", messages.getNumber());
             response.put("totalPages", messages.getTotalPages());
@@ -311,7 +592,7 @@ public class MessageController {
             response.put("chatRoomId", chatRoomId);
             response.put("totalCount", stats.getTotalCount());
             response.put("unreadCount", stats.getUnreadCount());
-            response.put("lastMessage", stats.getLastMessage());
+            response.put("lastMessage", MessageDto.fromEntity(stats.getLastMessage()));
             
             return ResponseEntity.ok(response);
         } catch (Exception e) {
@@ -324,32 +605,27 @@ public class MessageController {
     public static class SendMessageRequest {
         private Long chatRoomId;
         private String content;
+        private Message.MessageType messageType;
+        private String encryptedContent;
+        private Integer encryptionVersion;
+        private Boolean isAnonymous;
+        private Long stickerId;
         
         // Getters and Setters
         public Long getChatRoomId() { return chatRoomId; }
         public void setChatRoomId(Long chatRoomId) { this.chatRoomId = chatRoomId; }
         public String getContent() { return content; }
         public void setContent(String content) { this.content = content; }
-    }
-
-    public static class SendFileMessageRequest {
-        private Long chatRoomId;
-        private String fileName;
-        private String fileUrl;
-        private String fileType;
-        private Long fileSize;
-        
-        // Getters and Setters
-        public Long getChatRoomId() { return chatRoomId; }
-        public void setChatRoomId(Long chatRoomId) { this.chatRoomId = chatRoomId; }
-        public String getFileName() { return fileName; }
-        public void setFileName(String fileName) { this.fileName = fileName; }
-        public String getFileUrl() { return fileUrl; }
-        public void setFileUrl(String fileUrl) { this.fileUrl = fileUrl; }
-        public String getFileType() { return fileType; }
-        public void setFileType(String fileType) { this.fileType = fileType; }
-        public Long getFileSize() { return fileSize; }
-        public void setFileSize(Long fileSize) { this.fileSize = fileSize; }
+        public Message.MessageType getMessageType() { return messageType; }
+        public void setMessageType(Message.MessageType messageType) { this.messageType = messageType; }
+        public String getEncryptedContent() { return encryptedContent; }
+        public void setEncryptedContent(String encryptedContent) { this.encryptedContent = encryptedContent; }
+        public Integer getEncryptionVersion() { return encryptionVersion; }
+        public void setEncryptionVersion(Integer encryptionVersion) { this.encryptionVersion = encryptionVersion; }
+        public Boolean getIsAnonymous() { return isAnonymous; }
+        public void setIsAnonymous(Boolean isAnonymous) { this.isAnonymous = isAnonymous; }
+        public Long getStickerId() { return stickerId; }
+        public void setStickerId(Long stickerId) { this.stickerId = stickerId; }
     }
 
     public static class ReplyMessageRequest {
@@ -365,4 +641,97 @@ public class MessageController {
         public String getContent() { return content; }
         public void setContent(String content) { this.content = content; }
     }
-} 
+
+    public static class EditMessageRequest {
+        private String content;
+
+        public String getContent() { return content; }
+        public void setContent(String content) { this.content = content; }
+    }
+
+    public static class ForwardMessageRequest {
+        private Long targetChatRoomId;
+
+        public Long getTargetChatRoomId() { return targetChatRoomId; }
+        public void setTargetChatRoomId(Long targetChatRoomId) { this.targetChatRoomId = targetChatRoomId; }
+    }
+
+    private boolean isImageFile(String fileName, String contentType) {
+        if (contentType != null && contentType.toLowerCase().startsWith("image/")) {
+            return true;
+        }
+        String lower = fileName.toLowerCase();
+        return lower.endsWith(".jpg")
+            || lower.endsWith(".jpeg")
+            || lower.endsWith(".png")
+            || lower.endsWith(".gif")
+            || lower.endsWith(".webp");
+    }
+
+    private Message.MessageType parseAttachmentType(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        Message.MessageType type = Message.MessageType.valueOf(value.trim().toUpperCase());
+        if (type != Message.MessageType.IMAGE
+                && type != Message.MessageType.FILE
+                && type != Message.MessageType.VOICE
+                && type != Message.MessageType.AUDIO
+                && type != Message.MessageType.VIDEO) {
+            throw new IllegalArgumentException("仅支持附件消息类型");
+        }
+        return type;
+    }
+
+    private Message.MessageType inferAttachmentMessageType(String fileName, String contentType) {
+        if (isImageFile(fileName, contentType)) {
+            return Message.MessageType.IMAGE;
+        }
+        if (contentType != null) {
+            String lowerType = contentType.toLowerCase();
+            if (lowerType.startsWith("audio/")) {
+                return Message.MessageType.VOICE;
+            }
+            if (lowerType.startsWith("video/")) {
+                return Message.MessageType.VIDEO;
+            }
+        }
+        String lower = fileName.toLowerCase();
+        if (lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".wav")
+                || lower.endsWith(".aac") || lower.endsWith(".ogg") || lower.endsWith(".webm")) {
+            return Message.MessageType.VOICE;
+        }
+        if (lower.endsWith(".mp4") || lower.endsWith(".mov")) {
+            return Message.MessageType.VIDEO;
+        }
+        return Message.MessageType.FILE;
+    }
+
+    private Message.MessageType normalizeAttachmentMessageType(Message.MessageType requested) {
+        return switch (requested) {
+            case IMAGE, FILE, VOICE, AUDIO, VIDEO -> requested;
+            default -> throw new IllegalArgumentException("不支持的附件消息类型: " + requested);
+        };
+    }
+
+    private List<MessageDto> toMessageDtos(List<Message> messages) {
+        return messages.stream()
+                .map(MessageDto::fromEntity)
+                .collect(Collectors.toList());
+    }
+
+    private List<MessageDto> toMessageDtos(List<Message> messages, Long currentUserId) {
+        return messageReactionService.attachAggregates(toMessageDtos(messages), currentUserId);
+    }
+
+    private void processBotsAndBroadcast(Message message, Long senderId) {
+        if (message.getMessageType() != Message.MessageType.TEXT) {
+            return;
+        }
+        List<Message> botMessages = botService.processMessageForBots(
+                message.getChatRoom().getId(),
+                message.getContent(),
+                senderId);
+        botMessages.forEach(rawWebSocketHandler::broadcastMessage);
+    }
+}

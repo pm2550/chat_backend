@@ -4,6 +4,8 @@ import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 
@@ -34,8 +36,25 @@ public class ChatRoomBot {
     @Column(name = "trigger_keywords", length = 500)
     private String triggerKeywords;
 
+    @Column(name = "room_nickname", length = 100)
+    private String roomNickname;
+
+    @Column(name = "room_prompt_suffix", columnDefinition = "TEXT")
+    private String roomPromptSuffix;
+
+    @Column(name = "enabled_in_room")
+    private Boolean enabledInRoom = true;
+
     @Column(name = "is_active")
     private Boolean isActive = true;
+
+    // F5 Slice 2: moderation powers a room OWNER granted this bot in this room.
+    // varchar column + @JdbcTypeCode(VARCHAR) keeps @Enumerated(STRING) validate-safe.
+    // Monotonic: KICK implies MUTE (see ordinal-based check in ModerationService).
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "moderation_grant", nullable = false, length = 16)
+    private ModerationGrant moderationGrant = ModerationGrant.NONE;
 
     @Column(name = "added_at")
     private LocalDateTime addedAt = LocalDateTime.now();
@@ -44,5 +63,12 @@ public class ChatRoomBot {
         MENTION,    // @机器人 触发
         KEYWORD,    // 关键词触发
         ALL         // 所有消息都触发
+    }
+
+    /** Order matters: a higher grant implies all lower ones (NONE < MUTE < KICK). */
+    public enum ModerationGrant {
+        NONE,
+        MUTE,
+        KICK
     }
 }

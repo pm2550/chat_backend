@@ -2,6 +2,7 @@ package com.chatapp.repository;
 
 import com.chatapp.entity.Friendship;
 import com.chatapp.entity.User;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -19,14 +20,33 @@ public interface FriendshipRepository extends JpaRepository<Friendship, Long> {
     /**
      * 查找两个用户之间的好友关系
      */
+    @EntityGraph(attributePaths = {"user", "friend"})
     @Query("SELECT f FROM Friendship f WHERE " +
            "(f.user.id = :userId AND f.friend.id = :friendId) OR " +
            "(f.user.id = :friendId AND f.friend.id = :userId)")
     Optional<Friendship> findFriendshipBetween(@Param("userId") Long userId, @Param("friendId") Long friendId);
 
     /**
+     * 查找指定方向的好友关系。
+     */
+    @EntityGraph(attributePaths = {"user", "friend"})
+    @Query("SELECT f FROM Friendship f WHERE f.user.id = :userId AND f.friend.id = :friendId")
+    Optional<Friendship> findDirectFriendship(@Param("userId") Long userId, @Param("friendId") Long friendId);
+
+    /**
+     * 查找发送给当前用户的待处理好友请求。
+     */
+    @EntityGraph(attributePaths = {"user", "friend"})
+    @Query("SELECT f FROM Friendship f WHERE " +
+           "f.user.id = :senderId AND f.friend.id = :receiverId AND f.status = 'PENDING'")
+    Optional<Friendship> findPendingRequestFromSenderToReceiver(
+            @Param("senderId") Long senderId,
+            @Param("receiverId") Long receiverId);
+
+    /**
      * 查找用户的所有好友（已接受的好友关系）
      */
+    @EntityGraph(attributePaths = {"user", "friend"})
     @Query("SELECT f FROM Friendship f WHERE " +
            "(f.user.id = :userId OR f.friend.id = :userId) AND " +
            "f.status = 'ACCEPTED' AND f.isBlocked = false")
@@ -35,18 +55,21 @@ public interface FriendshipRepository extends JpaRepository<Friendship, Long> {
     /**
      * 查找用户发送的好友请求（待处理）
      */
+    @EntityGraph(attributePaths = {"user", "friend"})
     @Query("SELECT f FROM Friendship f WHERE f.user.id = :userId AND f.status = 'PENDING'")
     List<Friendship> findPendingRequestsByUserId(@Param("userId") Long userId);
 
     /**
      * 查找用户收到的好友请求（待处理）
      */
+    @EntityGraph(attributePaths = {"user", "friend"})
     @Query("SELECT f FROM Friendship f WHERE f.friend.id = :userId AND f.status = 'PENDING'")
     List<Friendship> findPendingRequestsForUserId(@Param("userId") Long userId);
 
     /**
      * 查找用户的所有好友关系（包括所有状态）
      */
+    @EntityGraph(attributePaths = {"user", "friend"})
     @Query("SELECT f FROM Friendship f WHERE f.user.id = :userId OR f.friend.id = :userId")
     List<Friendship> findAllFriendshipsByUserId(@Param("userId") Long userId);
 
@@ -69,6 +92,7 @@ public interface FriendshipRepository extends JpaRepository<Friendship, Long> {
     /**
      * 查找被屏蔽的用户
      */
+    @EntityGraph(attributePaths = {"user", "friend"})
     @Query("SELECT f FROM Friendship f WHERE " +
            "(f.user.id = :userId OR f.friend.id = :userId) AND " +
            "f.isBlocked = true")
@@ -85,6 +109,7 @@ public interface FriendshipRepository extends JpaRepository<Friendship, Long> {
     /**
      * 查找置顶的好友
      */
+    @EntityGraph(attributePaths = {"user", "friend"})
     @Query("SELECT f FROM Friendship f WHERE " +
            "(f.user.id = :userId OR f.friend.id = :userId) AND " +
            "f.status = 'ACCEPTED' AND f.isBlocked = false AND f.isPinned = true")
@@ -93,9 +118,10 @@ public interface FriendshipRepository extends JpaRepository<Friendship, Long> {
     /**
      * 根据备注名搜索好友
      */
+    @EntityGraph(attributePaths = {"user", "friend"})
     @Query("SELECT f FROM Friendship f WHERE " +
            "(f.user.id = :userId OR f.friend.id = :userId) AND " +
            "f.status = 'ACCEPTED' AND f.isBlocked = false AND " +
            "f.friendAlias LIKE %:alias%")
     List<Friendship> findFriendsByAlias(@Param("userId") Long userId, @Param("alias") String alias);
-} 
+}

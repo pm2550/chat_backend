@@ -6,6 +6,7 @@ import com.chatapp.entity.DeviceToken;
 import com.chatapp.entity.User;
 import com.chatapp.repository.AppVersionRepository;
 import com.chatapp.repository.UserRepository;
+import com.chatapp.websocket.RawWebSocketHandler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,6 +30,7 @@ public class AppVersionService {
 
     private final AppVersionRepository versionRepository;
     private final UserRepository userRepository;
+    private final RawWebSocketHandler webSocketHandler;
 
     @Value("${app.version.storage-path:./uploads/app-releases/}")
     private String storagePath;
@@ -106,7 +108,25 @@ public class AppVersionService {
                 version.getPlatform(), version.getVersionName(), version.getVersionCode(),
                 publisher.getUsername());
 
+        try {
+            webSocketHandler.broadcastAppUpdate(version);
+        } catch (Exception e) {
+            log.warn("版本发布成功但 WebSocket 更新推送失败: {}", e.getMessage());
+        }
+
         return toDto(version);
+    }
+
+    /**
+     * Publish a version from CI using a system/admin publisher identity.
+     */
+    @Transactional
+    public AppVersionDto publishVersionFromCi(AppVersionDto.PublishRequest request,
+                                             MultipartFile artifact) throws IOException {
+        User publisher = userRepository.findByUsername("system")
+                .or(() -> userRepository.findFirstByRolesContainingOrderByIdAsc(User.Role.ADMIN))
+                .orElseThrow(() -> new RuntimeException("未找到 system 或 ADMIN 发布用户"));
+        return publishVersion(request, artifact, publisher.getId());
     }
 
     public Path getArtifactPath(String platform, String filename) {

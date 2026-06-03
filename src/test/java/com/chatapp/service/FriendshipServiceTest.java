@@ -52,6 +52,7 @@ class FriendshipServiceTest {
         when(friendshipRepository.areFriends(1L, 2L)).thenReturn(false);
         when(friendshipRepository.hasPendingRequest(1L, 2L)).thenReturn(false);
         when(friendshipRepository.hasPendingRequest(2L, 1L)).thenReturn(false);
+        when(friendshipRepository.findDirectFriendship(1L, 2L)).thenReturn(Optional.empty());
         when(friendshipRepository.save(any(Friendship.class))).thenAnswer(inv -> inv.getArgument(0));
 
         Friendship result = service.sendFriendRequest(1L, 2L);
@@ -91,8 +92,9 @@ class FriendshipServiceTest {
         when(friendshipRepository.hasPendingRequest(1L, 2L)).thenReturn(false);
         when(friendshipRepository.hasPendingRequest(2L, 1L)).thenReturn(true);
         // service then calls acceptFriendRequest(userId=1, friendId=2)
-        // which looks up findFriendshipBetween(1, 2)
-        when(friendshipRepository.findFriendshipBetween(1L, 2L)).thenReturn(Optional.of(pending));
+        // which now looks up the exact pending request bob→alice.
+        when(friendshipRepository.findPendingRequestFromSenderToReceiver(2L, 1L))
+                .thenReturn(Optional.of(pending));
         when(friendshipRepository.save(any(Friendship.class))).thenAnswer(inv -> inv.getArgument(0));
 
         Friendship result = service.sendFriendRequest(1L, 2L);
@@ -100,12 +102,32 @@ class FriendshipServiceTest {
     }
 
     @Test
+    @DisplayName("sendFriendRequest reopens a previously declined direct request")
+    void send_reopens_declined_direct_request() {
+        Friendship declined = new Friendship(alice, bob);
+        declined.decline();
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(bob));
+        when(friendshipRepository.areFriends(1L, 2L)).thenReturn(false);
+        when(friendshipRepository.hasPendingRequest(1L, 2L)).thenReturn(false);
+        when(friendshipRepository.hasPendingRequest(2L, 1L)).thenReturn(false);
+        when(friendshipRepository.findDirectFriendship(1L, 2L)).thenReturn(Optional.of(declined));
+        when(friendshipRepository.save(any(Friendship.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Friendship result = service.sendFriendRequest(1L, 2L);
+
+        assertEquals(Friendship.FriendshipStatus.PENDING, result.getStatus());
+        assertNull(result.getAcceptedAt());
+    }
+
+    @Test
     @DisplayName("acceptFriendRequest only works for receiver")
     void accept_wrong_receiver_rejected() {
         Friendship pending = new Friendship(alice, bob);
-        when(friendshipRepository.findFriendshipBetween(1L, 2L)).thenReturn(Optional.of(pending));
+        when(friendshipRepository.findPendingRequestFromSenderToReceiver(2L, 1L))
+                .thenReturn(Optional.empty());
         // alice trying to accept her own outgoing request
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(RuntimeException.class,
                 () -> service.acceptFriendRequest(1L, 2L));
     }
 
@@ -113,7 +135,8 @@ class FriendshipServiceTest {
     @DisplayName("acceptFriendRequest succeeds for receiver")
     void accept_success() {
         Friendship pending = new Friendship(alice, bob);
-        when(friendshipRepository.findFriendshipBetween(2L, 1L)).thenReturn(Optional.of(pending));
+        when(friendshipRepository.findPendingRequestFromSenderToReceiver(1L, 2L))
+                .thenReturn(Optional.of(pending));
         when(friendshipRepository.save(any(Friendship.class))).thenAnswer(inv -> inv.getArgument(0));
 
         Friendship result = service.acceptFriendRequest(2L, 1L);
@@ -125,7 +148,8 @@ class FriendshipServiceTest {
     @DisplayName("declineFriendRequest flips state to DECLINED")
     void decline_success() {
         Friendship pending = new Friendship(alice, bob);
-        when(friendshipRepository.findFriendshipBetween(2L, 1L)).thenReturn(Optional.of(pending));
+        when(friendshipRepository.findPendingRequestFromSenderToReceiver(1L, 2L))
+                .thenReturn(Optional.of(pending));
 
         service.declineFriendRequest(2L, 1L);
         assertEquals(Friendship.FriendshipStatus.DECLINED, pending.getStatus());

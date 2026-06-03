@@ -1,18 +1,31 @@
 package com.chatapp.service;
 
+import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
+import com.chatapp.entity.ChatRoomBot;
 import com.chatapp.entity.ChatRoomMember;
+import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
+import com.chatapp.repository.BotConfigRepository;
+import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
+import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.UserRepository;
+import com.chatapp.util.ChatCustomizationPresets;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -26,6 +39,10 @@ public class ChatRoomService {
 
     private final ChatRoomRepository chatRoomRepository;
     private final UserRepository userRepository;
+    private final MessageRepository messageRepository;
+    private final FileStorageService fileStorageService;
+    private final BotConfigRepository botConfigRepository;
+    private final ChatRoomBotRepository chatRoomBotRepository;
 
     /**
      * 创建私聊房间
@@ -54,6 +71,7 @@ public class ChatRoomService {
         chatRoom.setMaxMembers(2);
 
         chatRoom = chatRoomRepository.save(chatRoom);
+        ensureSystemAgentBinding(chatRoom);
 
         // 添加成员
         addMemberToRoom(chatRoom.getId(), userId, ChatRoomMember.MemberRole.MEMBER);
@@ -81,9 +99,10 @@ public class ChatRoomService {
         chatRoom.setMaxMembers(500);
 
         chatRoom = chatRoomRepository.save(chatRoom);
+        ensureSystemAgentBinding(chatRoom);
 
-        // 添加创建者为管理员
-        addMemberToRoom(chatRoom.getId(), creatorId, ChatRoomMember.MemberRole.ADMIN);
+        // 添加创建者为群主（OWNER，高于管理员）
+        addMemberToRoom(chatRoom.getId(), creatorId, ChatRoomMember.MemberRole.OWNER);
 
         // 添加其他成员
         if (memberIds != null) {
@@ -97,6 +116,31 @@ public class ChatRoomService {
         log.info("创建群聊房间: {} (创建者: {}, 成员数: {})", 
                 chatRoom.getId(), creatorId, memberIds != null ? memberIds.size() : 1);
         return chatRoom;
+    }
+
+    private void ensureSystemAgentBinding(ChatRoom chatRoom) {
+        if (chatRoom == null || chatRoom.getId() == null) {
+            return;
+        }
+        Optional<BotConfig> agent =
+                botConfigRepository.findFirstByBotNameAndCreatedByIsNullOrderByIdAsc("Agent");
+        if (agent != null) {
+            agent.ifPresent(bot -> ensureRoomBot(chatRoom, bot));
+        }
+    }
+
+    private void ensureRoomBot(ChatRoom chatRoom, BotConfig agent) {
+        chatRoomBotRepository.findByChatRoomIdAndBotConfigId(chatRoom.getId(), agent.getId())
+                .orElseGet(() -> {
+                    ChatRoomBot binding = new ChatRoomBot();
+                    binding.setChatRoom(chatRoom);
+                    binding.setBotConfig(agent);
+                    binding.setTriggerMode(ChatRoomBot.TriggerMode.MENTION);
+                    binding.setRoomNickname(agent.getBotName());
+                    binding.setEnabledInRoom(true);
+                    binding.setIsActive(true);
+                    return chatRoomBotRepository.save(binding);
+                });
     }
 
     /**
@@ -117,7 +161,7 @@ public class ChatRoomService {
         }
 
         // 检查成员数量限制
-        int currentMemberCount = chatRoom.getMemberCount();
+        long currentMemberCount = chatRoomRepository.countChatRoomMembers(roomId);
         if (currentMemberCount >= chatRoom.getMaxMembers()) {
             throw new IllegalArgumentException("聊天室已满");
         }
@@ -144,6 +188,10 @@ public class ChatRoomService {
         if (chatRoom.getRoomType() == ChatRoom.RoomType.PRIVATE) {
             throw new IllegalArgumentException("无法退出私聊");
         }
+        // F5: 唯一群主不能直接退出（否则群将无主，无法再转让/管理/解散），需先转让群主或解散群聊
+        if (chatRoomRepository.isOwner(roomId, userId) && chatRoomRepository.countOwners(roomId) <= 1) {
+            throw new IllegalArgumentException("群主退出前需先转让群主或解散群聊");
+        }
 
         // 移除成员
         chatRoomRepository.removeMember(roomId, userId);
@@ -164,7 +212,8 @@ public class ChatRoomService {
         member.setChatRoom(chatRoom);
         member.setUser(user);
         member.setMemberRole(role);
-        member.setIsAdmin(role == ChatRoomMember.MemberRole.ADMIN);
+        member.setIsAdmin(role == ChatRoomMember.MemberRole.ADMIN
+                || role == ChatRoomMember.MemberRole.OWNER);
 
         chatRoom.getMembers().add(member);
         chatRoomRepository.save(chatRoom);
@@ -174,7 +223,8 @@ public class ChatRoomService {
      * 获取用户的聊天室列表
      */
     public Page<ChatRoom> getUserChatRooms(Long userId, Pageable pageable) {
-        return chatRoomRepository.findByUserId(userId, pageable);
+        Pageable unsortedPageable = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());
+        return chatRoomRepository.findByUserId(userId, unsortedPageable);
     }
 
     /**
@@ -182,6 +232,104 @@ public class ChatRoomService {
      */
     public List<ChatRoomMember> getChatRoomMembers(Long roomId) {
         return chatRoomRepository.findMembersByRoomId(roomId);
+    }
+
+    /**
+     * 获取当前用户的房间通知偏好。
+     */
+    public ChatRoomMember getNotificationSettings(Long roomId, Long userId) {
+        if (!chatRoomRepository.isMember(roomId, userId)) {
+            throw new IllegalArgumentException("不是聊天室成员");
+        }
+        return chatRoomRepository.findMember(roomId, userId)
+                .orElseThrow(() -> new RuntimeException("聊天室成员不存在"));
+    }
+
+    /**
+     * 更新当前用户的房间通知偏好。
+     */
+    public ChatRoomMember updateNotificationSettings(Long roomId, Long userId, Boolean muted, Boolean pinned) {
+        if (!chatRoomRepository.isMember(roomId, userId)) {
+            throw new IllegalArgumentException("不是聊天室成员");
+        }
+        if (muted != null) {
+            chatRoomRepository.updateNotificationMuted(roomId, userId, muted);
+        }
+        if (pinned != null) {
+            chatRoomRepository.updatePinned(roomId, userId, pinned);
+        }
+        log.info("用户 {} 更新聊天室 {} 偏好: muted={}, pinned={}", userId, roomId, muted, pinned);
+        return getNotificationSettings(roomId, userId);
+    }
+
+    /**
+     * 更新群名片。成员可以修改自己的群昵称，管理员可以修改成员昵称和群头衔。
+     */
+    public ChatRoomMember updateMemberProfile(
+            Long roomId,
+            Long operatorId,
+            Long targetUserId,
+            String nickname,
+            String memberTitle) {
+        if (!chatRoomRepository.isMember(roomId, operatorId)) {
+            throw new IllegalArgumentException("不是聊天室成员");
+        }
+        if (!chatRoomRepository.isMember(roomId, targetUserId)) {
+            throw new IllegalArgumentException("目标用户不是聊天室成员");
+        }
+
+        boolean isSelf = operatorId.equals(targetUserId);
+        boolean operatorIsAdmin = chatRoomRepository.isAdmin(roomId, operatorId);
+        if (!isSelf && !operatorIsAdmin) {
+            throw new IllegalArgumentException("无权限修改其他成员名片");
+        }
+        if (memberTitle != null && !operatorIsAdmin) {
+            throw new IllegalArgumentException("只有管理员可以设置群头衔");
+        }
+
+        ChatRoomMember member = chatRoomRepository.findMember(roomId, targetUserId)
+                .orElseThrow(() -> new RuntimeException("聊天室成员不存在"));
+
+        if (nickname != null) {
+            String trimmed = nickname.trim();
+            member.setNickname(trimmed.isEmpty() ? null : trimmed);
+        }
+        if (memberTitle != null) {
+            String trimmed = memberTitle.trim();
+            member.setMemberTitle(trimmed.isEmpty() ? null : trimmed);
+        }
+
+        log.info("用户 {} 更新用户 {} 在聊天室 {} 的群名片", operatorId, targetUserId, roomId);
+        return member;
+    }
+
+    /**
+     * 管理员邀请成员加入群聊
+     */
+    public void addMember(Long roomId, Long operatorId, Long targetUserId) {
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
+
+        if (chatRoom.getRoomType() == ChatRoom.RoomType.PRIVATE || chatRoom.getIsPrivate()) {
+            throw new IllegalArgumentException("私聊不能邀请成员");
+        }
+
+        if (!chatRoomRepository.isAdmin(roomId, operatorId)) {
+            throw new IllegalArgumentException("无权限邀请成员");
+        }
+
+        if (chatRoomRepository.isMember(roomId, targetUserId)) {
+            throw new IllegalArgumentException("用户已经是聊天室成员");
+        }
+
+        long currentMemberCount = chatRoomRepository.countChatRoomMembers(roomId);
+        if (currentMemberCount >= chatRoom.getMaxMembers()) {
+            throw new IllegalArgumentException("聊天室已满");
+        }
+
+        addMemberToRoom(roomId, targetUserId, ChatRoomMember.MemberRole.MEMBER);
+
+        log.info("用户 {} 邀请用户 {} 加入聊天室 {}", operatorId, targetUserId, roomId);
     }
 
     /**
@@ -210,6 +358,26 @@ public class ChatRoomService {
      * 更新聊天室信息
      */
     public ChatRoom updateChatRoom(Long roomId, Long userId, String name, String description, String avatarUrl) {
+        return updateChatRoom(
+                roomId,
+                userId,
+                name,
+                description,
+                avatarUrl,
+                null,
+                false);
+    }
+
+    /**
+     * 部分更新聊天室信息，公告变更会写入一条系统消息。
+     */
+    public ChatRoom updateChatRoom(Long roomId,
+                                   Long userId,
+                                   String name,
+                                   String description,
+                                   String avatarUrl,
+                                   String announcement,
+                                   boolean announcementProvided) {
         ChatRoom chatRoom = chatRoomRepository.findById(roomId)
                 .orElseThrow(() -> new RuntimeException("聊天室不存在"));
 
@@ -228,11 +396,111 @@ public class ChatRoomService {
         if (avatarUrl != null) {
             chatRoom.setAvatarUrl(avatarUrl);
         }
+        if (announcementProvided) {
+            String nextAnnouncement = announcement == null ? "" : announcement.trim();
+            String previousAnnouncement = chatRoom.getAnnouncement() == null
+                    ? ""
+                    : chatRoom.getAnnouncement().trim();
+            if (!previousAnnouncement.equals(nextAnnouncement)) {
+                chatRoom.setAnnouncement(nextAnnouncement);
+                chatRoom.setAnnouncementUpdatedAt(LocalDateTime.now());
+                chatRoom.setAnnouncementUpdatedBy(userId);
+                User operator = userRepository.findById(userId)
+                        .orElseThrow(() -> new RuntimeException("用户不存在"));
+                createAnnouncementSystemMessage(chatRoom, operator, nextAnnouncement);
+            }
+        }
 
         chatRoom = chatRoomRepository.save(chatRoom);
 
         log.info("更新聊天室 {} 信息 (操作者: {})", roomId, userId);
         return chatRoom;
+    }
+
+    public ChatRoom updateRoomBackgroundPreset(Long roomId, Long operatorId, String preset) {
+        ChatRoom chatRoom = getRoomForBackgroundMutation(roomId, operatorId);
+        String normalizedPreset = ChatCustomizationPresets.requireBackground(preset);
+        String previousUrl = chatRoom.getCustomBackgroundUrl();
+        chatRoom.setCustomBackgroundPreset(normalizedPreset);
+        chatRoom.setCustomBackgroundUrl(null);
+        chatRoom = chatRoomRepository.save(chatRoom);
+        if (previousUrl != null && !previousUrl.isBlank()) {
+            fileStorageService.deleteFile(previousUrl);
+        }
+        log.info("用户 {} 设置聊天室 {} 背景预设 {}", operatorId, roomId, normalizedPreset);
+        return chatRoom;
+    }
+
+    public ChatRoom uploadRoomBackground(Long roomId, Long operatorId, MultipartFile file) throws IOException {
+        ChatRoom chatRoom = getRoomForBackgroundMutation(roomId, operatorId);
+        String previousUrl = chatRoom.getCustomBackgroundUrl();
+        String backgroundUrl = fileStorageService.uploadChatBackground(file);
+        chatRoom.setCustomBackgroundUrl(backgroundUrl);
+        chatRoom = chatRoomRepository.save(chatRoom);
+        if (previousUrl != null && !previousUrl.isBlank()) {
+            fileStorageService.deleteFile(previousUrl);
+        }
+        log.info("用户 {} 上传聊天室 {} 背景", operatorId, roomId);
+        return chatRoom;
+    }
+
+    public ChatRoom uploadRoomAvatar(Long roomId, Long operatorId, MultipartFile file) throws IOException {
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
+        if (chatRoom.getRoomType() == ChatRoom.RoomType.PRIVATE || Boolean.TRUE.equals(chatRoom.getIsPrivate())) {
+            throw new AccessDeniedException("私聊不能设置群头像");
+        }
+        if (!chatRoomRepository.isAdmin(roomId, operatorId)) {
+            throw new AccessDeniedException("只有管理员可以修改群头像");
+        }
+
+        String previousUrl = chatRoom.getAvatarUrl();
+        String avatarUrl = fileStorageService.uploadAvatar(file);
+        chatRoom.setAvatarUrl(avatarUrl);
+        chatRoom = chatRoomRepository.save(chatRoom);
+        if (previousUrl != null && !previousUrl.isBlank()) {
+            fileStorageService.deleteFile(previousUrl);
+        }
+        log.info("用户 {} 上传聊天室 {} 群头像", operatorId, roomId);
+        return chatRoom;
+    }
+
+    public ChatRoom clearRoomBackground(Long roomId, Long operatorId) {
+        ChatRoom chatRoom = getRoomForBackgroundMutation(roomId, operatorId);
+        String previousUrl = chatRoom.getCustomBackgroundUrl();
+        chatRoom.setCustomBackgroundPreset(null);
+        chatRoom.setCustomBackgroundUrl(null);
+        chatRoom = chatRoomRepository.save(chatRoom);
+        if (previousUrl != null && !previousUrl.isBlank()) {
+            fileStorageService.deleteFile(previousUrl);
+        }
+        log.info("用户 {} 清除聊天室 {} 背景覆盖", operatorId, roomId);
+        return chatRoom;
+    }
+
+    private ChatRoom getRoomForBackgroundMutation(Long roomId, Long operatorId) {
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
+        if (!chatRoomRepository.isAdmin(roomId, operatorId)) {
+            throw new AccessDeniedException("只有管理员可以修改房间背景");
+        }
+        return chatRoom;
+    }
+
+    private void createAnnouncementSystemMessage(ChatRoom chatRoom, User operator, String announcement) {
+        String preview = announcement == null || announcement.isBlank()
+                ? "公告已清空"
+                : announcement.length() > 80 ? announcement.substring(0, 80) + "..." : announcement;
+
+        Message message = new Message();
+        message.setChatRoom(chatRoom);
+        message.setSender(operator);
+        message.setMessageType(Message.MessageType.SYSTEM);
+        message.setMessageStatus(Message.MessageStatus.SENT);
+        message.setContent("📢 群公告已更新：" + preview);
+        message.setCreatedAt(LocalDateTime.now());
+        messageRepository.save(message);
+        chatRoomRepository.incrementUnreadForRoomMembersExcept(chatRoom.getId(), operator.getId());
     }
 
     /**
@@ -250,6 +518,10 @@ public class ChatRoomService {
         // 检查目标用户是否是成员
         if (!chatRoomRepository.isMember(roomId, targetUserId)) {
             throw new IllegalArgumentException("目标用户不是聊天室成员");
+        }
+        // F5: 群主身份只能通过转让变更，不能被 toggle-admin 降级（否则会出现无群主的群）
+        if (chatRoomRepository.isOwner(roomId, targetUserId)) {
+            throw new IllegalArgumentException("不能更改群主的管理员状态，请使用转让群主功能");
         }
 
         // 切换管理员状态
@@ -274,11 +546,72 @@ public class ChatRoomService {
         if (chatRoom.getCreatedBy().getId().equals(targetUserId)) {
             throw new IllegalArgumentException("不能踢出聊天室创建者");
         }
+        // F5: 不能踢出群主（即使群主已通过转让变更，不再等于 createdBy）
+        if (chatRoomRepository.isOwner(roomId, targetUserId)) {
+            throw new IllegalArgumentException("不能踢出群主");
+        }
+        // F5: 只有群主能移除管理员（管理员之间不能互踢）
+        if (chatRoomRepository.isAdmin(roomId, targetUserId)
+                && !chatRoomRepository.isOwner(roomId, operatorId)) {
+            throw new IllegalArgumentException("只有群主可以移除管理员");
+        }
 
         // 移除成员
         chatRoomRepository.removeMember(roomId, targetUserId);
 
         log.info("用户 {} 踢出了用户 {} (聊天室: {})", operatorId, targetUserId, roomId);
+    }
+
+    /**
+     * 转让群主。仅当前群主可操作；新群主必须是聊天室成员。原群主降为管理员，目标升为群主
+     * （同一事务原子完成，保证始终恰好一个群主）。
+     */
+    public void transferOwnership(Long roomId, Long currentOwnerId, Long newOwnerId) {
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
+        if (chatRoom.getRoomType() == ChatRoom.RoomType.PRIVATE) {
+            throw new IllegalArgumentException("私聊不能转让群主");
+        }
+        if (!chatRoomRepository.isOwner(roomId, currentOwnerId)) {
+            throw new AccessDeniedException("只有群主可以转让群主身份");
+        }
+        if (currentOwnerId.equals(newOwnerId)) {
+            throw new IllegalArgumentException("新群主不能是当前群主");
+        }
+        if (!chatRoomRepository.isMember(roomId, newOwnerId)) {
+            throw new IllegalArgumentException("目标用户不是聊天室成员");
+        }
+        chatRoomRepository.assignMemberRole(roomId, currentOwnerId, ChatRoomMember.MemberRole.ADMIN, true);
+        chatRoomRepository.assignMemberRole(roomId, newOwnerId, ChatRoomMember.MemberRole.OWNER, true);
+        log.info("聊天室 {} 群主由 {} 转让给 {}", roomId, currentOwnerId, newOwnerId);
+    }
+
+    /**
+     * 设置成员角色（ADMIN/MODERATOR/MEMBER）。仅群主可操作。不能用此方法设 OWNER（请用
+     * {@link #transferOwnership}），也不能改动现任群主的角色。
+     */
+    public void setMemberRole(Long roomId, Long operatorId, Long targetUserId,
+                              ChatRoomMember.MemberRole newRole) {
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
+        if (chatRoom.getRoomType() == ChatRoom.RoomType.PRIVATE) {
+            throw new IllegalArgumentException("私聊不能设置成员角色");
+        }
+        if (!chatRoomRepository.isOwner(roomId, operatorId)) {
+            throw new AccessDeniedException("只有群主可以管理成员角色");
+        }
+        if (newRole == null || newRole == ChatRoomMember.MemberRole.OWNER) {
+            throw new IllegalArgumentException("请使用转让群主功能设置群主");
+        }
+        if (!chatRoomRepository.isMember(roomId, targetUserId)) {
+            throw new IllegalArgumentException("目标用户不是聊天室成员");
+        }
+        if (chatRoomRepository.isOwner(roomId, targetUserId)) {
+            throw new IllegalArgumentException("不能直接降级群主，请先转让群主");
+        }
+        boolean isAdmin = newRole == ChatRoomMember.MemberRole.ADMIN;
+        chatRoomRepository.assignMemberRole(roomId, targetUserId, newRole, isAdmin);
+        log.info("聊天室 {} 群主 {} 将成员 {} 角色设为 {}", roomId, operatorId, targetUserId, newRole);
     }
 
     /**
@@ -308,18 +641,18 @@ public class ChatRoomService {
         ChatRoom chatRoom = chatRoomRepository.findById(roomId)
                 .orElseThrow(() -> new RuntimeException("聊天室不存在"));
 
-        // 只有创建者可以删除聊天室
-        if (!chatRoom.getCreatedBy().getId().equals(userId)) {
-            throw new IllegalArgumentException("只有创建者可以删除聊天室");
-        }
-
-        // 私聊不能删除
+        // 私聊不能删除（先于群主校验，给出正确的提示，且私聊无群主）
         if (chatRoom.getRoomType() == ChatRoom.RoomType.PRIVATE) {
             throw new IllegalArgumentException("私聊不能删除");
+        }
+
+        // 只有群主可以删除聊天室（群主可能已通过转让变更，不再等于 createdBy）
+        if (!chatRoomRepository.isOwner(roomId, userId)) {
+            throw new IllegalArgumentException("只有群主可以删除聊天室");
         }
 
         chatRoomRepository.delete(chatRoom);
 
         log.info("用户 {} 删除了聊天室 {}", userId, roomId);
     }
-} 
+}

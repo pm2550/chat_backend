@@ -1,17 +1,23 @@
 package com.chatapp.controller;
 
+import com.chatapp.entity.Message;
+import com.chatapp.entity.User;
+import com.chatapp.repository.ChatRoomRepository;
+import com.chatapp.repository.MessageRepository;
+import com.chatapp.service.AuditLogService;
 import com.chatapp.service.FileStorageService;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.chatapp.service.UserService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.util.Optional;
 
 /**
  * 文件访问控制器
@@ -19,10 +25,14 @@ import java.nio.file.Paths;
 @RestController
 @RequestMapping("/api/files")
 @CrossOrigin(origins = "*")
+@RequiredArgsConstructor
 public class FileController {
 
-    @Autowired
-    private FileStorageService fileStorageService;
+    private final FileStorageService fileStorageService;
+    private final MessageRepository messageRepository;
+    private final ChatRoomRepository chatRoomRepository;
+    private final UserService userService;
+    private final AuditLogService auditLogService;
 
     /**
      * 获取头像文件
@@ -46,13 +56,68 @@ public class FileController {
     }
 
     /**
+     * 获取聊天背景文件。背景属于展示素材，和头像一样允许浏览器直接加载。
+     */
+    @GetMapping("/background/{fileName}")
+    public ResponseEntity<ByteArrayResource> getBackground(@PathVariable String fileName) {
+        try {
+            byte[] fileData = fileStorageService.getFile("background", fileName);
+            ByteArrayResource resource = new ByteArrayResource(fileData);
+            String contentType = getContentType(fileName);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType(contentType))
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + fileName + "\"")
+                    .body(resource);
+        } catch (IOException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    /**
      * 获取聊天文件
      */
     @GetMapping("/chat/{fileName}")
-    public ResponseEntity<ByteArrayResource> getChatFile(@PathVariable String fileName) {
+    public ResponseEntity<ByteArrayResource> getChatFile(
+            @PathVariable String fileName,
+            Authentication auth) {
+        return getMessageScopedFile(fileName, "/api/files/chat/" + fileName, "chat", auth);
+    }
+
+    @GetMapping("/image-gen/{fileName}")
+    public ResponseEntity<ByteArrayResource> getGeneratedImage(
+            @PathVariable String fileName,
+            Authentication auth) {
+        return getMessageScopedFile(fileName, "/api/files/image-gen/" + fileName, "image-gen", auth);
+    }
+
+    private ResponseEntity<ByteArrayResource> getMessageScopedFile(
+            String fileName,
+            String fileUrl,
+            String storageType,
+            Authentication auth) {
         try {
-            byte[] fileData = fileStorageService.getFile("chat", fileName);
+            if (auth == null || auth.getName() == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+            }
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Optional<Message> message = messageRepository.findFirstByFileUrlAndIsDeletedFalse(fileUrl);
+            if (message.isEmpty()) {
+                return ResponseEntity.notFound().build();
+            }
+            Long roomId = message.get().getChatRoom().getId();
+            if (!chatRoomRepository.isMember(roomId, currentUser.getId())) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+            }
+
+            byte[] fileData = fileStorageService.getFile(storageType, fileName);
             ByteArrayResource resource = new ByteArrayResource(fileData);
+            auditLogService.record(
+                    currentUser,
+                    "FILE_DOWNLOAD",
+                    "MESSAGE",
+                    message.get().getId(),
+                    roomId,
+                    fileName);
             
             // 确定文件类型
             String contentType = getContentType(fileName);
@@ -98,4 +163,4 @@ public class FileController {
                 return "application/octet-stream";
         }
     }
-} 
+}

@@ -73,6 +73,31 @@ jwt:
 
 # File upload configuration
 file:
+  storage:
+    upload-dir: ${FILE_UPLOAD_PATH:uploads}
+    avatar-dir: avatars
+    chat-file-dir: chat-files
+    workspace-file-dir: workspace-files
+    background-dir: backgrounds
+    workspace-provider: ${WORKSPACE_STORAGE_PROVIDER:LOCAL}
+    workspace-endpoint: ${WORKSPACE_STORAGE_ENDPOINT:}
+    workspace-access-key: ${WORKSPACE_STORAGE_ACCESS_KEY:}
+    workspace-secret-key: ${WORKSPACE_STORAGE_SECRET_KEY:}
+    workspace-bucket: ${WORKSPACE_STORAGE_BUCKET:pm-chat-workspace}
+    workspace-region: ${WORKSPACE_STORAGE_REGION:}
+    workspace-secure: ${WORKSPACE_STORAGE_SECURE:true}
+    workspace-prefix: ${WORKSPACE_STORAGE_PREFIX:workspace-files/}
+    scan-mode: ${WORKSPACE_FILE_SCAN_MODE:basic}
+    scan-fail-open: ${WORKSPACE_FILE_SCAN_FAIL_OPEN:false}
+    clamav-host: ${CLAMAV_HOST:127.0.0.1}
+    clamav-port: ${CLAMAV_PORT:3310}
+    clamav-timeout-ms: ${CLAMAV_TIMEOUT_MS:5000}
+    max-file-size: 52428800
+    max-avatar-size: 5242880
+    max-background-size: 2097152
+    allowed-avatar-types: jpg,jpeg,png,gif,webp
+    allowed-background-types: jpg,jpeg,png,webp
+    allowed-chat-file-types: jpg,jpeg,png,gif,webp,pdf,doc,docx,txt,zip,rar,mp3,m4a,wav,aac,ogg,webm,mp4,mov
   upload:
     path: ${FILE_UPLOAD_PATH:./uploads/}
     avatar-path: ${FILE_UPLOAD_PATH:./uploads/}avatars/
@@ -86,7 +111,7 @@ websocket:
 
 # CORS configuration
 cors:
-  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:8080,http://localhost:5000}
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:*,http://127.0.0.1:*}
   allowed-methods: GET,POST,PUT,DELETE,OPTIONS
   allowed-headers: Authorization,Content-Type,X-Requested-With
   max-age: 3600
@@ -95,15 +120,32 @@ cors:
 app:
   version:
     storage-path: ${APP_VERSION_STORAGE_PATH:./uploads/app-releases/}
+    publish-token: ${PMCHAT_PUBLISH_TOKEN:}
     max-artifact-size: 524288000  # 500MB
+  webrtc:
+    ice-servers: ${WEBRTC_ICE_SERVERS:stun:192.9.134.169:3478,turn:192.9.134.169:3478?transport=udp,turn:192.9.134.169:3478?transport=tcp}
+    turn-static-auth-secret: ${TURN_STATIC_AUTH_SECRET:}
+    turn-ttl-seconds: ${TURN_TTL_SECONDS:1800}
+
+# TURN REST API credentials for browser WebRTC fallback relay.
+turn:
+  server-host: ${TURN_SERVER_HOST:192.9.134.169}
+  server-port: ${TURN_SERVER_PORT:3478}
+  shared-secret: ${TURN_STATIC_AUTH_SECRET:}
+  credential-ttl-seconds: ${TURN_CREDENTIAL_TTL_SECONDS:1800}
+
+provider-vault:
+  # Base64 or raw secret material. If blank, the service derives from jwt.secret.
+  master-key: ${PROVIDER_VAULT_MASTER_KEY:${JWT_SECRET:}}
 
 # Rate limiting
 rate-limit:
   requests-per-minute: ${RATE_LIMIT_RPM:60}
-  auth-requests-per-minute: ${RATE_LIMIT_AUTH_RPM:10}
+  auth-requests-per-minute: ${RATE_LIMIT_AUTH_RPM:60}
 
 # LLM configuration
 llm:
+  required: ${LLM_REQUIRED:false}
   openai:
     api-key: ${OPENAI_API_KEY:}
     base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
@@ -119,6 +161,45 @@ llm:
   ollama:
     base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
     model: ${OLLAMA_MODEL:llama3}
+    api-key: ${OLLAMA_API_KEY:}
+  hermes:
+    api-key: ${HERMES_API_KEY:}
+    base-url: ${HERMES_BASE_URL:http://127.0.0.1:8642/v1}
+    model: ${HERMES_MODEL:hermes-agent}
+  dashscope:
+    # Chat is routed through an OpenAI-compatible proxy (self-hosted dashscope-proxy is keyless).
+    # Image generation is unaffected and keeps using its own per-user DashScope credential.
+    api-key: ${DASHSCOPE_API_KEY:}
+    base-url: ${DASHSCOPE_BASE_URL:http://localhost/dashscope/v1}
+    model: ${DASHSCOPE_MODEL:qwen-plus}
+
+# Per-bot / per-room rate limiting for agent runs (bucket4j; <=0 disables a limit).
+bot:
+  rate-limit:
+    agent-runs-per-minute: ${BOT_AGENT_RUNS_PER_MINUTE:30}
+    web-search-per-minute: ${BOT_WEB_SEARCH_PER_MINUTE:60}
+
+# SSRF policy: internal hosts a user-supplied URL (webhook/base_url/media) may target.
+outbound-url:
+  owner-allowed-internal-hosts: ${OUTBOUND_URL_ALLOWED_INTERNAL_HOSTS:127.0.0.1,localhost,172.17.0.1}
+
+# Self-hosted aggregated search backing the bot web_search tool.
+searxng:
+  base-url: ${SEARXNG_BASE_URL:http://172.17.0.1:8888}
+
+agent:
+  gateway:
+    enabled: ${AGENT_GATEWAY_ENABLED:false}
+    provider: ${AGENT_GATEWAY_PROVIDER:generic}
+    base-url: ${AGENT_GATEWAY_BASE_URL:}
+    execute-path: ${AGENT_GATEWAY_EXECUTE_PATH:/api/v1/agent/tasks}
+    health-path: ${AGENT_GATEWAY_HEALTH_PATH:/actuator/health}
+    api-key: ${AGENT_GATEWAY_API_KEY:}
+    agent-id: ${AGENT_GATEWAY_AGENT_ID:}
+    session-key-prefix: ${AGENT_GATEWAY_SESSION_KEY_PREFIX:chatapp}
+    task-timeout-seconds: ${AGENT_GATEWAY_TASK_TIMEOUT_SECONDS:600}
+    connect-timeout-ms: ${AGENT_GATEWAY_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${AGENT_GATEWAY_READ_TIMEOUT_MS:60000}
 
 # Actuator
 management:

@@ -61,6 +61,12 @@ cors:
   allowed-headers: Authorization,Content-Type,X-Requested-With
   max-age: 3600
 
+turn:
+  server-host: 192.9.134.169
+  server-port: 3478
+  shared-secret: test-turn-secret
+  credential-ttl-seconds: 1800
+
 rate-limit:
   requests-per-minute: 1000
   auth-requests-per-minute: 100
@@ -81,6 +87,15 @@ llm:
   ollama:
     base-url: http://localhost:11434
     model: llama3
+  dashscope:
+    api-key:
+    base-url: http://localhost/dashscope/v1
+    model: qwen-plus
+
+bot:
+  rate-limit:
+    agent-runs-per-minute: 1000
+    web-search-per-minute: 1000
 
 logging:
   level:

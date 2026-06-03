@@ -21,7 +21,11 @@ public class UserDto {
     private String phone;
     private String displayName;
     private String avatarUrl;
+    private String avatarFramePreset;
     private String bio;
+    private String title;
+    private String titleColor;
+    private String titleEffect;
     private User.OnlineStatus onlineStatus;
     private LocalDateTime lastSeen;
     private Boolean isActive;
@@ -106,5 +110,15 @@ public class UserDto {
         public String getToken() {
             return accessToken;
         }
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TitleRequest {
+        @Size(max = 50, message = "头衔最大50个字符")
+        private String title;
+        private String titleColor;
+        private String titleEffect;
     }
 }

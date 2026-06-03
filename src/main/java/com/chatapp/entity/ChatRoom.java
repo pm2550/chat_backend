@@ -22,8 +22,8 @@ import java.util.Set;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-@EqualsAndHashCode(exclude = {"members", "messages", "createdBy"})
-@ToString(exclude = {"members", "messages"})
+@EqualsAndHashCode(exclude = {"members", "messages", "createdBy", "anonymousThemeConfig"})
+@ToString(exclude = {"members", "messages", "createdBy", "anonymousThemeConfig"})
 public class ChatRoom {
 
     @Id
@@ -36,6 +36,15 @@ public class ChatRoom {
     @Column(columnDefinition = "TEXT")
     private String description;
 
+    @Column(columnDefinition = "TEXT")
+    private String announcement;
+
+    @Column(name = "announcement_updated_at")
+    private LocalDateTime announcementUpdatedAt;
+
+    @Column(name = "announcement_updated_by")
+    private Long announcementUpdatedBy;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "room_type", nullable = false)
     private RoomType roomType;
@@ -43,6 +52,13 @@ public class ChatRoom {
     @Column(name = "avatar_url")
     private String avatarUrl;
 
+    @Column(name = "custom_background_preset", length = 50)
+    private String customBackgroundPreset;
+
+    @Column(name = "custom_background_url", length = 500)
+    private String customBackgroundUrl;
+
+    @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "created_by")
     private User createdBy;
@@ -61,6 +77,11 @@ public class ChatRoom {
 
     @Column(name = "anonymous_theme", length = 50)
     private String anonymousTheme = "default";
+
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "anonymous_theme_id")
+    private AnonymousTheme anonymousThemeConfig;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
@@ -103,7 +124,8 @@ public class ChatRoom {
     /**
      * 获取成员数量
      */
+    @JsonIgnore
     public int getMemberCount() {
         return members != null ? members.size() : 0;
     }
-} 
+}

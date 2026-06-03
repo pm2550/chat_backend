@@ -47,6 +47,6 @@ public class DeviceToken {
     private LocalDateTime updatedAt;
 
     public enum Platform {
-        ANDROID, IOS, WEB, WINDOWS, MACOS, HARMONY
+        ANDROID, IOS, WEB, WINDOWS, MACOS, LINUX, HARMONY
     }
 }

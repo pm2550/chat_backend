@@ -24,6 +24,11 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByUsername(String username);
 
     /**
+     * 查找第一个拥有指定角色的用户。
+     */
+    Optional<User> findFirstByRolesContainingOrderByIdAsc(User.Role role);
+
+    /**
      * 根据邮箱查找用户
      */
     Optional<User> findByEmail(String email);

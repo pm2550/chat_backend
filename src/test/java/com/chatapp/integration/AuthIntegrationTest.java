@@ -210,18 +210,20 @@ public class AuthIntegrationTest {
     }
 
     @Test
-    @DisplayName("Access protected endpoint without token returns 403")
+    @DisplayName("Access protected endpoint without token returns 401")
     void testAccessProtectedEndpointWithoutToken() throws Exception {
         mockMvc.perform(get("/api/v1/chat-rooms"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
     }
 
     @Test
-    @DisplayName("Access protected endpoint with invalid token returns 403")
+    @DisplayName("Access protected endpoint with invalid token returns 401")
     void testAccessProtectedEndpointWithInvalidToken() throws Exception {
         mockMvc.perform(get("/api/v1/chat-rooms")
                 .header("Authorization", "Bearer invalid.jwt.token"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
     }
 
     @Test

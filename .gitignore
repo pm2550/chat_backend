@@ -63,4 +63,3 @@ node_modules/
 
 # Application properties with sensitive data
 application-local.yml
-application-prod.yml 

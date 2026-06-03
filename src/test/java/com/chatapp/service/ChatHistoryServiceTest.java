@@ -85,7 +85,7 @@ class ChatHistoryServiceTest {
     }
 
     @Test
-    @DisplayName("recallMessage within 2-minute window marks recalled and sets placeholder content")
+    @DisplayName("recallMessage within 2-minute window marks recalled and sets recall content")
     void recall_within_window() {
         ChatHistory existing = new ChatHistory();
         existing.setId(10L);

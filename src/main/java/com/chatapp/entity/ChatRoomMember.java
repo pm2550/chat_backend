@@ -44,8 +44,27 @@ public class ChatRoomMember {
     @Column(name = "nickname", length = 100)
     private String nickname;
 
+    @Column(name = "member_title", length = 100)
+    private String memberTitle;
+
+    /**
+     * Legacy overloaded mute flag. KEPT as a dual-write shadow during the
+     * is_muted-split transition (V20260603_2); dropped in a follow-up migration.
+     * Prefer {@link #isBotMuted} / {@link #isNotificationMuted}.
+     */
     @Column(name = "is_muted")
     private Boolean isMuted = false;
+
+    /** Moderation / admin mute — blocks the member from SENDING messages. */
+    @Column(name = "is_bot_muted")
+    private Boolean isBotMuted = false;
+
+    /** User's own notification mute — suppresses push, never blocks sending. */
+    @Column(name = "is_notification_muted")
+    private Boolean isNotificationMuted = false;
+
+    @Column(name = "is_pinned")
+    private Boolean isPinned = false;
 
     @Column(name = "is_admin")
     private Boolean isAdmin = false;
@@ -79,4 +98,4 @@ public class ChatRoomMember {
             return description;
         }
     }
-} 
+}

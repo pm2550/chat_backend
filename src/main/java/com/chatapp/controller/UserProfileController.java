@@ -3,6 +3,7 @@ package com.chatapp.controller;
 import com.chatapp.dto.UserDto;
 import com.chatapp.dto.UserProfileUpdateRequest;
 import com.chatapp.entity.User;
+import com.chatapp.entity.UserSettings;
 import com.chatapp.service.UserProfileService;
 import com.chatapp.service.UserService;
 import lombok.RequiredArgsConstructor;
@@ -10,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.validation.Valid;
 import java.io.IOException;
@@ -200,5 +202,123 @@ public class UserProfileController {
             response.put("message", e.getMessage());
             return ResponseEntity.badRequest().body(response);
         }
+    }
+
+    /**
+     * 获取当前用户的全局通知/隐私设置。
+     */
+    @GetMapping("/settings")
+    public ResponseEntity<?> getSettings(Authentication auth) {
+        try {
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            UserSettings settings = userProfileService.getSettings(currentUser.getId());
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("data", toSettingsMap(settings));
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", false);
+            response.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    /**
+     * 更新当前用户的全局通知/隐私设置。
+     */
+    @PutMapping("/settings")
+    public ResponseEntity<?> updateSettings(
+            @RequestBody UserProfileService.UserSettingsUpdateRequest request,
+            Authentication auth) {
+        try {
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            UserSettings settings = userProfileService.updateSettings(currentUser.getId(), request);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("message", "设置已更新");
+            response.put("data", toSettingsMap(settings));
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", false);
+            response.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    /**
+     * 上传当前用户的聊天背景。上传成功后立即写入 user_settings.chat_background_custom_url。
+     */
+    @PostMapping("/chat-background")
+    public ResponseEntity<?> uploadChatBackground(
+            @RequestParam("background") MultipartFile backgroundFile,
+            Authentication auth) {
+        try {
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            UserSettings settings = userProfileService.uploadChatBackground(
+                    currentUser.getId(),
+                    backgroundFile);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("message", "聊天背景上传成功");
+            response.put("data", toSettingsMap(settings));
+            return ResponseEntity.ok(response);
+        } catch (ResponseStatusException e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", false);
+            response.put("message", e.getReason());
+            return ResponseEntity.status(e.getStatusCode()).body(response);
+        } catch (IOException e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", false);
+            response.put("message", "聊天背景上传失败: " + e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", false);
+            response.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    /**
+     * 修改当前用户密码。
+     */
+    @PostMapping("/password")
+    public ResponseEntity<?> changePassword(
+            @Valid @RequestBody UserDto.ChangePasswordRequest request,
+            Authentication auth) {
+        try {
+            UserDto currentUser = userService.findByUsername(auth.getName());
+            userService.changePassword(currentUser.getId(), request);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("message", "密码修改成功");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", false);
+            response.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    private Map<String, Object> toSettingsMap(UserSettings settings) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("messageNotificationsEnabled", Boolean.TRUE.equals(settings.getMessageNotificationsEnabled()));
+        data.put("showOnlineStatus", Boolean.TRUE.equals(settings.getShowOnlineStatus()));
+        data.put("allowFriendRequests", Boolean.TRUE.equals(settings.getAllowFriendRequests()));
+        data.put("allowDirectMessages", Boolean.TRUE.equals(settings.getAllowDirectMessages()));
+        data.put("readReceiptsEnabled", Boolean.TRUE.equals(settings.getReadReceiptsEnabled()));
+        data.put("chatBackgroundPreset", settings.getChatBackgroundPreset());
+        data.put("chatBackgroundCustomUrl", settings.getChatBackgroundCustomUrl());
+        data.put("avatarFramePreset", settings.getAvatarFramePreset());
+        data.put("bubbleStylePreset", settings.getBubbleStylePreset());
+        return data;
     }
 }

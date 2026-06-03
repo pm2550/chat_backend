@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
@@ -14,6 +15,7 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@ToString(exclude = "apiKeyEncrypted")
 public class BotConfig {
 
     @Id
@@ -33,17 +35,86 @@ public class BotConfig {
     @Column(name = "api_key_encrypted", length = 500)
     private String apiKeyEncrypted;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "provider_credential_id")
+    private ProviderCredential providerCredential;
+
     @Column(name = "model_name", length = 100)
     private String modelName;
 
     @Column(name = "system_prompt", columnDefinition = "TEXT")
     private String systemPrompt;
 
+    @Column(name = "character_card_json", columnDefinition = "JSON")
+    private String characterCardJson;
+
+    @Column(name = "character_persona", columnDefinition = "TEXT")
+    private String characterPersona;
+
+    @Column(name = "character_scenario", columnDefinition = "TEXT")
+    private String characterScenario;
+
+    @Column(name = "character_first_mes", columnDefinition = "TEXT")
+    private String characterFirstMes;
+
+    @Column(name = "character_mes_example", columnDefinition = "TEXT")
+    private String characterMesExample;
+
+    @Column(name = "character_creator_notes", columnDefinition = "TEXT")
+    private String characterCreatorNotes;
+
+    @Column(name = "character_system_prompt", columnDefinition = "TEXT")
+    private String characterSystemPrompt;
+
+    @Column(name = "character_post_history_instructions", columnDefinition = "TEXT")
+    private String characterPostHistoryInstructions;
+
+    @Column(name = "character_alternate_greetings", columnDefinition = "JSON")
+    private String characterAlternateGreetings;
+
+    @Column(name = "character_book_json", columnDefinition = "JSON")
+    private String characterBookJson;
+
     @Column(name = "temperature")
     private Double temperature = 0.7;
 
     @Column(name = "max_tokens")
     private Integer maxTokens = 2048;
+
+    @Column(name = "max_history_messages")
+    private Integer maxHistoryMessages = 20;
+
+    @Column(name = "include_room_metadata")
+    private Boolean includeRoomMetadata = true;
+
+    @Column(name = "include_memory_section")
+    private Boolean includeMemorySection = true;
+
+    @Column(name = "system_prompt_template", columnDefinition = "TEXT")
+    private String systemPromptTemplate;
+
+    @Column(name = "max_context_tokens_estimate")
+    private Integer maxContextTokensEstimate = 6000;
+
+    @Column(name = "enabled_tools", columnDefinition = "TEXT")
+    private String enabledTools;
+
+    // Inbound bot token (Phase 4 / F1): lets an external service post AS this bot.
+    // Only fingerprint + last4 are stored; the raw token is shown once on rotate.
+    @Column(name = "inbound_token_fingerprint", length = 64)
+    private String inboundTokenFingerprint;
+
+    @Column(name = "inbound_token_last4", length = 8)
+    private String inboundTokenLast4;
+
+    @Column(name = "max_agent_iterations")
+    private Integer maxAgentIterations = 8;
+
+    @Column(name = "max_agent_wallclock_ms")
+    private Integer maxAgentWallclockMs = 30000;
+
+    @Column(name = "max_agent_total_tokens")
+    private Integer maxAgentTotalTokens = 50000;
 
     @Column(name = "is_active")
     private Boolean isActive = true;
@@ -61,6 +132,6 @@ public class BotConfig {
     private LocalDateTime updatedAt;
 
     public enum LLMProvider {
-        OPENAI, CLAUDE, DEEPSEEK, OLLAMA
+        OPENAI, CLAUDE, DEEPSEEK, OLLAMA, HERMES, DASHSCOPE
     }
 }

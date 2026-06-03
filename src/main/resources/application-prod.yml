@@ -1,0 +1,123 @@
+# Production profile overrides.
+# Activate with -Dspring.profiles.active=prod or SPRING_PROFILES_ACTIVE=prod.
+#
+# Required env vars (no defaults — app fails fast if missing):
+#   DB_HOST, DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD
+#   REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
+#   RABBITMQ_HOST, RABBITMQ_PORT, RABBITMQ_USERNAME, RABBITMQ_PASSWORD
+#   JWT_SECRET                 (>= 64 chars, base64-encoded random)
+#   CORS_ALLOWED_ORIGINS       (comma-separated, NO wildcards)
+#   FILE_UPLOAD_PATH           (writable absolute path)
+#   At least one of: OPENAI_API_KEY, CLAUDE_API_KEY, DEEPSEEK_API_KEY,
+#                    OLLAMA_BASE_URL, HERMES_API_KEY + HERMES_BASE_URL,
+#                    or AGENT_GATEWAY_ENABLED=true + AGENT_GATEWAY_BASE_URL
+spring:
+  datasource:
+    # No defaults — prod infra coordinates must come from env.
+    url: jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}?createDatabaseIfNotExist=false&useUnicode=true&characterEncoding=utf8&sslMode=${DB_SSL_MODE:REQUIRED}&serverTimezone=UTC
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  flyway:
+    enabled: true
+
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      password: ${REDIS_PASSWORD}
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST}
+    port: ${RABBITMQ_PORT}
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
+
+# Force JWT secret from env, no default
+jwt:
+  secret: ${JWT_SECRET}
+
+# Force CORS to env, no wildcard fallback
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS}
+
+# WebSocket origins must be set explicitly
+websocket:
+  allowed-origins: ${WS_ALLOWED_ORIGINS}
+
+file:
+  storage:
+    upload-dir: ${FILE_UPLOAD_PATH}
+    background-dir: ${FILE_BACKGROUND_DIR:backgrounds}
+    max-background-size: ${FILE_BACKGROUND_MAX_SIZE:2097152}
+    workspace-provider: ${WORKSPACE_STORAGE_PROVIDER:LOCAL}
+    workspace-endpoint: ${WORKSPACE_STORAGE_ENDPOINT:}
+    workspace-access-key: ${WORKSPACE_STORAGE_ACCESS_KEY:}
+    workspace-secret-key: ${WORKSPACE_STORAGE_SECRET_KEY:}
+    workspace-bucket: ${WORKSPACE_STORAGE_BUCKET:pm-chat-workspace}
+    workspace-region: ${WORKSPACE_STORAGE_REGION:}
+    workspace-secure: ${WORKSPACE_STORAGE_SECURE:true}
+    workspace-prefix: ${WORKSPACE_STORAGE_PREFIX:workspace-files/}
+    scan-mode: ${WORKSPACE_FILE_SCAN_MODE:basic}
+    scan-fail-open: ${WORKSPACE_FILE_SCAN_FAIL_OPEN:false}
+    clamav-host: ${CLAMAV_HOST:127.0.0.1}
+    clamav-port: ${CLAMAV_PORT:3310}
+    clamav-timeout-ms: ${CLAMAV_TIMEOUT_MS:5000}
+
+app:
+  version:
+    publish-token: ${PMCHAT_PUBLISH_TOKEN:}
+
+llm:
+  required: ${LLM_REQUIRED:true}
+  ollama:
+    base-url: ${OLLAMA_BASE_URL:}
+  hermes:
+    api-key: ${HERMES_API_KEY:}
+    base-url: ${HERMES_BASE_URL:}
+    model: ${HERMES_MODEL:hermes-agent}
+
+agent:
+  gateway:
+    enabled: ${AGENT_GATEWAY_ENABLED:false}
+    provider: ${AGENT_GATEWAY_PROVIDER:generic}
+    base-url: ${AGENT_GATEWAY_BASE_URL:}
+    execute-path: ${AGENT_GATEWAY_EXECUTE_PATH:/api/v1/agent/tasks}
+    health-path: ${AGENT_GATEWAY_HEALTH_PATH:/actuator/health}
+    api-key: ${AGENT_GATEWAY_API_KEY:}
+    agent-id: ${AGENT_GATEWAY_AGENT_ID:}
+    session-key-prefix: ${AGENT_GATEWAY_SESSION_KEY_PREFIX:chatapp}
+    task-timeout-seconds: ${AGENT_GATEWAY_TASK_TIMEOUT_SECONDS:600}
+    connect-timeout-ms: ${AGENT_GATEWAY_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${AGENT_GATEWAY_READ_TIMEOUT_MS:60000}
+
+turn:
+  server-host: ${TURN_SERVER_HOST:192.9.134.169}
+  server-port: ${TURN_SERVER_PORT:3478}
+  shared-secret: ${TURN_STATIC_AUTH_SECRET}
+  credential-ttl-seconds: ${TURN_CREDENTIAL_TTL_SECONDS:1800}
+
+provider-vault:
+  master-key: ${PROVIDER_VAULT_MASTER_KEY:${JWT_SECRET}}
+
+# Tighter logging
+logging:
+  level:
+    com.chatapp: INFO
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN
+
+# Stricter actuator: only health publicly, others auth-gated
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
