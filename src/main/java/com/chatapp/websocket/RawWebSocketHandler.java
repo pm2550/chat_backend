@@ -616,8 +616,12 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             }
             boolean mentioned = message.getMentionedUserIds() != null
                     && message.getMentionedUserIds().contains(userId);
+            // Item 5: push suppression follows the user's OWN notification mute, not the
+            // moderation send-block. (Pre-split this read is_muted; after the split a
+            // self-muted user has is_muted=0, so reading is_muted here would wrongly
+            // resume their push notifications — must read is_notification_muted.)
             boolean muted = chatRoomRepository.findMember(chatRoomId, userId)
-                    .map(member -> Boolean.TRUE.equals(member.getIsMuted()))
+                    .map(member -> Boolean.TRUE.equals(member.getIsNotificationMuted()))
                     .orElse(false);
             if (muted && !mentioned) {
                 return;

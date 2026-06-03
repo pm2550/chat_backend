@@ -750,9 +750,11 @@ public class ChatRoomController {
         Map<String, Object> settings = new HashMap<>();
         settings.put("roomId", roomId);
         settings.put("userId", userId);
-        settings.put("muted", Boolean.TRUE.equals(member.getIsMuted()));
+        // Item 5: notification settings reflect the user's OWN notification mute,
+        // not the moderation (send-block) mute.
+        settings.put("muted", Boolean.TRUE.equals(member.getIsNotificationMuted()));
         settings.put("pinned", Boolean.TRUE.equals(member.getIsPinned()));
-        settings.put("notificationLevel", Boolean.TRUE.equals(member.getIsMuted()) ? "MUTE" : "ALL");
+        settings.put("notificationLevel", Boolean.TRUE.equals(member.getIsNotificationMuted()) ? "MUTE" : "ALL");
         return settings;
     }
 
@@ -766,7 +768,12 @@ public class ChatRoomController {
         summary.put("roleDescription", member.getMemberRole() != null ? member.getMemberRole().getDescription() : null);
         summary.put("nickname", member.getNickname());
         summary.put("memberTitle", member.getMemberTitle());
+        // Item 5: keep legacy isMuted (now reflects only moderation mutes, since the
+        // notification path no longer writes is_muted) for one release of backward compat;
+        // new clients should read the explicit isBotMuted / isNotificationMuted fields.
         summary.put("isMuted", member.getIsMuted());
+        summary.put("isBotMuted", member.getIsBotMuted());
+        summary.put("isNotificationMuted", member.getIsNotificationMuted());
         summary.put("isPinned", member.getIsPinned());
         summary.put("isAdmin", member.getIsAdmin());
         summary.put("joinedAt", member.getJoinedAt());

@@ -103,7 +103,7 @@ class MessageServiceTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(sender));
         when(chatRoomRepository.findById(10L)).thenReturn(Optional.of(room));
         when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
-        when(chatRoomRepository.isMuted(10L, 1L)).thenReturn(false);
+        when(chatRoomRepository.isBotMuted(10L, 1L)).thenReturn(false);
         when(messageRepository.save(any(Message.class))).thenAnswer(inv -> {
             Message m = inv.getArgument(0);
             m.setId(100L);
@@ -144,12 +144,32 @@ class MessageServiceTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(sender));
         when(chatRoomRepository.findById(10L)).thenReturn(Optional.of(room));
         when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
-        when(chatRoomRepository.isMuted(10L, 1L)).thenReturn(true);
+        when(chatRoomRepository.isBotMuted(10L, 1L)).thenReturn(true);
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> messageService.sendMessage(1L, 10L, "Hello", Message.MessageType.TEXT));
 
         assertTrue(ex.getMessage().contains("禁言"));
+    }
+
+    @Test
+    void validateCanSendMessage_blocksWhenBotMutedTrue() {
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(chatRoomRepository.isBotMuted(10L, 1L)).thenReturn(true);
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> messageService.validateCanSendMessage(1L, 10L));
+        assertTrue(ex.getMessage().contains("禁言"));
+    }
+
+    @Test
+    void validateCanSendMessage_doesNotBlockWhenOnlyNotificationMuted() {
+        // Item 5 bug pin: a user who self-muted notifications has is_bot_muted = false,
+        // so the send-block gate (which now reads only the moderation mute) must NOT throw.
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(chatRoomRepository.isBotMuted(10L, 1L)).thenReturn(false);
+
+        assertDoesNotThrow(() -> messageService.validateCanSendMessage(1L, 10L));
     }
 
     @Test
@@ -165,7 +185,7 @@ class MessageServiceTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(sender));
         when(chatRoomRepository.findById(10L)).thenReturn(Optional.of(room));
         when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
-        when(chatRoomRepository.isMuted(10L, 1L)).thenReturn(false);
+        when(chatRoomRepository.isBotMuted(10L, 1L)).thenReturn(false);
         when(messageRepository.save(any(Message.class))).thenAnswer(inv -> {
             Message m = inv.getArgument(0);
             m.setId(100L);
@@ -208,7 +228,7 @@ class MessageServiceTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(sender));
         when(chatRoomRepository.findById(10L)).thenReturn(Optional.of(room));
         when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
-        when(chatRoomRepository.isMuted(10L, 1L)).thenReturn(false);
+        when(chatRoomRepository.isBotMuted(10L, 1L)).thenReturn(false);
         when(messageRepository.save(any(Message.class))).thenAnswer(inv -> {
             Message m = inv.getArgument(0);
             m.setId(101L);
@@ -241,7 +261,7 @@ class MessageServiceTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(sender));
         when(chatRoomRepository.findById(10L)).thenReturn(Optional.of(room));
         when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
-        when(chatRoomRepository.isMuted(10L, 1L)).thenReturn(false);
+        when(chatRoomRepository.isBotMuted(10L, 1L)).thenReturn(false);
         when(messageRepository.save(any(Message.class))).thenAnswer(inv -> {
             Message m = inv.getArgument(0);
             if (m.getId() == null) m.setId(102L);
@@ -418,7 +438,7 @@ class MessageServiceTest {
         when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(source));
         when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
         when(chatRoomRepository.isMember(20L, 1L)).thenReturn(true);
-        when(chatRoomRepository.isMuted(20L, 1L)).thenReturn(false);
+        when(chatRoomRepository.isBotMuted(20L, 1L)).thenReturn(false);
         when(userRepository.findById(1L)).thenReturn(Optional.of(sender));
         when(chatRoomRepository.findById(20L)).thenReturn(Optional.of(targetRoom));
         when(messageRepository.save(any(Message.class))).thenAnswer(inv -> {

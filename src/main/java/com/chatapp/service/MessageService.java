@@ -256,7 +256,7 @@ public class MessageService {
         if (!chatRoomRepository.isMember(chatRoomId, senderId)) {
             throw new IllegalArgumentException("您不是该聊天室的成员");
         }
-        if (chatRoomRepository.isMuted(chatRoomId, senderId)) {
+        if (chatRoomRepository.isBotMuted(chatRoomId, senderId)) {
             throw new IllegalArgumentException("您在该聊天室中被禁言");
         }
     }

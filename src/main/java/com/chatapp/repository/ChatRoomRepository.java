@@ -61,8 +61,10 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
     @Query("SELECT COUNT(crm) > 0 FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId AND (crm.isAdmin = true OR crm.memberRole = 'ADMIN' OR crm.memberRole = 'OWNER')")
     boolean isAdmin(@Param("roomId") Long roomId, @Param("userId") Long userId);
 
-    @Query("SELECT CASE WHEN crm.isMuted = true THEN true ELSE false END FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
-    boolean isMuted(@Param("roomId") Long roomId, @Param("userId") Long userId);
+    // Item 5: the send-block gate reads ONLY the moderation mute, never the
+    // user's own notification mute. Renamed from isMuted to isBotMuted.
+    @Query("SELECT CASE WHEN crm.isBotMuted = true THEN true ELSE false END FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    boolean isBotMuted(@Param("roomId") Long roomId, @Param("userId") Long userId);
 
     @Modifying
     @Query("DELETE FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
@@ -106,8 +108,10 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
     @Query("SELECT crm FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
     Optional<ChatRoomMember> findMember(@Param("roomId") Long roomId, @Param("userId") Long userId);
 
+    // Item 5: a user muting their OWN notifications writes only is_notification_muted.
+    // It must NOT touch is_muted/is_bot_muted (that was the send-block bug).
     @Modifying
-    @Query("UPDATE ChatRoomMember crm SET crm.isMuted = :muted " +
+    @Query("UPDATE ChatRoomMember crm SET crm.isNotificationMuted = :muted " +
            "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
     int updateNotificationMuted(@Param("roomId") Long roomId,
                                 @Param("userId") Long userId,
@@ -131,8 +135,13 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
            "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
     void toggleAdminStatus(@Param("roomId") Long roomId, @Param("userId") Long userId);
 
+    // Item 5: admin toggle (moderation mute). Dual-writes both the new is_bot_muted
+    // and the legacy is_muted shadow. Both CASE branches read the SAME pre-update
+    // is_muted value (SQL evaluates all RHS against the original row), so they flip together.
     @Modifying
-    @Query("UPDATE ChatRoomMember crm SET crm.isMuted = CASE WHEN crm.isMuted = true THEN false ELSE true END " +
+    @Query("UPDATE ChatRoomMember crm SET " +
+           "crm.isMuted = CASE WHEN crm.isMuted = true THEN false ELSE true END, " +
+           "crm.isBotMuted = CASE WHEN crm.isMuted = true THEN false ELSE true END " +
            "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
     void toggleMuteStatus(@Param("roomId") Long roomId, @Param("userId") Long userId);
 
@@ -151,9 +160,10 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
     int assignMemberRole(@Param("roomId") Long roomId, @Param("userId") Long userId,
                          @Param("role") ChatRoomMember.MemberRole role, @Param("isAdmin") boolean isAdmin);
 
-    // F5 Slice 2: explicitly set (not toggle) a member's mute state — used by bot moderation.
+    // F5 Slice 2: explicitly set (not toggle) a member's moderation mute — used by bot moderation.
+    // Item 5: dual-writes the new is_bot_muted and the legacy is_muted shadow.
     @Modifying
-    @Query("UPDATE ChatRoomMember crm SET crm.isMuted = :muted " +
+    @Query("UPDATE ChatRoomMember crm SET crm.isBotMuted = :muted, crm.isMuted = :muted " +
            "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
     int setMemberMuted(@Param("roomId") Long roomId, @Param("userId") Long userId, @Param("muted") boolean muted);
 }
