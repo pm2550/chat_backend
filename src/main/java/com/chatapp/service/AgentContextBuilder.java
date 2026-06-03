@@ -22,8 +22,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -177,22 +180,10 @@ public class AgentContextBuilder {
         }
 
         if (env.memorySectionEnabled()) {
+            // Header stays inline so the extracted helper can be reused by
+            // substituteTemplate's {{memory}} placeholder without forcing a header.
             prompt.append("\n[MEMORY]\n");
-            List<MemoryItem> memories = env.memoryBook().matched();
-            if (memories.isEmpty()) {
-                prompt.append("(none matched)\n");
-            } else {
-                for (MemoryItem item : memories) {
-                    prompt.append("- ");
-                    if (item.pinned()) {
-                        prompt.append("(pinned) ");
-                    }
-                    if (hasText(item.title())) {
-                        prompt.append(item.title()).append(": ");
-                    }
-                    prompt.append(item.content() == null ? "" : item.content()).append("\n");
-                }
-            }
+            prompt.append(formatMemoryBlock(env));
         }
 
         prompt.append("\n[ROOM CONTEXT]\n");
@@ -322,19 +313,59 @@ public class AgentContextBuilder {
                 .toList();
     }
 
+    private static final Pattern TEMPLATE_TOKEN = Pattern.compile("\\{\\{(\\w+)\\}\\}");
+
     private String substituteTemplate(String template, AgentContextEnvelope env) {
-        return template
-                .replace("{{agent_display_name}}", env.agentIdentity().displayName())
-                .replace("{{room_name}}", env.roomMetadata().name())
-                .replace("{{room_topic}}", defaultString(env.roomMetadata().topic(), ""))
-                .replace("{{member_count}}", String.valueOf(env.roomMetadata().memberCount()))
-                .replace("{{member_names}}", String.join(", ", env.roomMetadata().memberNames()))
-                .replace("{{recent_conversation}}", env.conversationHistory().stream()
+        Map<String, String> values = Map.ofEntries(
+                Map.entry("agent_display_name", env.agentIdentity().displayName()),
+                Map.entry("room_name", env.roomMetadata().name()),
+                Map.entry("room_topic", defaultString(env.roomMetadata().topic(), "")),
+                Map.entry("member_count", String.valueOf(env.roomMetadata().memberCount())),
+                Map.entry("member_names", String.join(", ", env.roomMetadata().memberNames())),
+                Map.entry("recent_conversation", env.conversationHistory().stream()
                         .map(message -> message.senderName() + ": " + message.content())
-                        .collect(Collectors.joining("\n")))
-                .replace("{{initiator_display_name}}", env.initiator().displayName())
-                .replace("{{initiator_role}}", env.initiator().role())
-                .replace("{{task}}", env.taskText());
+                        .collect(Collectors.joining("\n"))),
+                Map.entry("initiator_display_name", env.initiator().displayName()),
+                Map.entry("initiator_role", env.initiator().role()),
+                Map.entry("memory", env.memorySectionEnabled() ? formatMemoryBlock(env) : ""),
+                Map.entry("task", env.taskText()));
+        // Single non-recursive pass: each placeholder is resolved exactly once, so a token
+        // that appears *inside* substituted content (e.g. memory text literally containing
+        // "{{task}}") is never re-expanded. Unknown tokens are left verbatim.
+        Matcher matcher = TEMPLATE_TOKEN.matcher(template);
+        StringBuilder out = new StringBuilder();
+        while (matcher.find()) {
+            String key = matcher.group(1);
+            String replacement = values.containsKey(key) ? values.get(key) : matcher.group(0);
+            matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(out);
+        return out.toString();
+    }
+
+    /**
+     * Renders the [MEMORY] body (no "[MEMORY]" header) so both the inline
+     * assembleSystemPrompt path and the substituteTemplate {{memory}} placeholder
+     * share one format. Returns "(none matched)\n" when no memories matched, mirroring
+     * the inline path's empty branch.
+     */
+    private String formatMemoryBlock(AgentContextEnvelope env) {
+        List<MemoryItem> memories = env.memoryBook().matched();
+        if (memories.isEmpty()) {
+            return "(none matched)\n";
+        }
+        StringBuilder block = new StringBuilder();
+        for (MemoryItem item : memories) {
+            block.append("- ");
+            if (item.pinned()) {
+                block.append("(pinned) ");
+            }
+            if (hasText(item.title())) {
+                block.append(item.title()).append(": ");
+            }
+            block.append(item.content() == null ? "" : item.content()).append("\n");
+        }
+        return block.toString();
     }
 
     private CharacterCardSection buildCharacterCardSection(BotConfig bot) {

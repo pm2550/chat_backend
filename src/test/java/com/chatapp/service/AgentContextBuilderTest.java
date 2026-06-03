@@ -411,6 +411,62 @@ class AgentContextBuilderTest {
         verify(memoryService, never()).recall(any(), any(), anyString(), anyInt());
     }
 
+    @Test
+    @DisplayName("system prompt template substitutes {{memory}} placeholder")
+    void systemPromptTemplate_substitutesMemoryPlaceholder() {
+        bot.setSystemPromptTemplate("Task={{task}}\nMEM:\n{{memory}}");
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+        when(memoryService.recall(eq(10L), isNull(), anyString(), eq(10)))
+                .thenReturn(List.of(
+                        memoryEntry(1L, "Pinned fact", "Pinned context survives", true,
+                                MemoryEntry.Visibility.ROOM),
+                        memoryEntry(2L, "Normal fact", "Normal context", false,
+                                MemoryEntry.Visibility.ROOM)));
+
+        String prompt = builder.assembleSystemPrompt(builder.buildContext(task("note")));
+
+        assertTrue(prompt.contains("Task=note"));
+        assertTrue(prompt.contains("(pinned) Pinned fact: Pinned context survives"));
+        assertTrue(prompt.contains("Normal fact: Normal context"));
+        assertFalse(prompt.contains("{{memory}}"));
+    }
+
+    @Test
+    @DisplayName("template {{memory}} respects includeMemorySection=false")
+    void systemPromptTemplate_memoryPlaceholder_respectsIncludeMemorySectionFlag() {
+        bot.setSystemPromptTemplate("Task={{task}}\nMEM:\n{{memory}}");
+        bot.setIncludeMemorySection(false);
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+
+        String prompt = builder.assembleSystemPrompt(builder.buildContext(task("note")));
+
+        assertTrue(prompt.contains("Task=note"));
+        // {{memory}} replaced with empty string when section disabled — no body, no (none matched).
+        assertFalse(prompt.contains("{{memory}}"));
+        assertFalse(prompt.contains("(none matched)"));
+        verify(memoryService, never()).recall(any(), any(), anyString(), anyInt());
+    }
+
+    @Test
+    @DisplayName("template substitution does not re-expand tokens embedded in memory content")
+    void systemPromptTemplate_memoryContentTokensAreNotReExpanded() {
+        bot.setSystemPromptTemplate("MEM:{{memory}} TASK={{task}}");
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+        when(memoryService.recall(eq(10L), isNull(), anyString(), eq(10)))
+                .thenReturn(List.of(memoryEntry(1L, "Tricky", "remember to {{task}}", false,
+                        MemoryEntry.Visibility.ROOM)));
+
+        String prompt = builder.assembleSystemPrompt(builder.buildContext(task("ping")));
+
+        // {{task}} embedded in memory content stays literal (single non-recursive pass);
+        // only the template's own {{task}} is replaced.
+        assertTrue(prompt.contains("remember to {{task}}"));
+        assertTrue(prompt.contains("TASK=ping"));
+    }
+
     private AgentTask task(String prompt) {
         AgentTask task = new AgentTask();
         task.setId(77L);
