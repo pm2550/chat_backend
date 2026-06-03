@@ -81,6 +81,40 @@ class BotGatewayServiceTest {
     }
 
     @Test
+    void postAsBotSetsRoomNicknameAsDisplayName() {
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setChatRoom(room);
+        crb.setIsActive(true);
+        crb.setRoomNickname("  助手小蓝  ");
+        when(chatRoomBotRepository.findByChatRoomIdAndBotConfigId(100L, 5L)).thenReturn(Optional.of(crb));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Message m = service.postAsBot(bot, 100L, "hi");
+
+        // Room nickname (trimmed) overrides the bot's global name.
+        assertEquals("助手小蓝", m.getBotDisplayName());
+    }
+
+    @Test
+    void postAsBotFallsBackToBotNameWhenNoRoomNickname() {
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setChatRoom(room);
+        crb.setIsActive(true);
+        when(chatRoomBotRepository.findByChatRoomIdAndBotConfigId(100L, 5L)).thenReturn(Optional.of(crb));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Message m = service.postAsBot(bot, 100L, "hi");
+
+        assertEquals("bridge-bot", m.getBotDisplayName());
+    }
+
+    @Test
     void postAsBotRejectsWhenNotBound() {
         when(chatRoomBotRepository.findByChatRoomIdAndBotConfigId(100L, 5L)).thenReturn(Optional.empty());
         assertThrows(AccessDeniedException.class, () -> service.postAsBot(bot, 100L, "hi"));

@@ -2,6 +2,7 @@ package com.chatapp.controller;
 
 import com.chatapp.dto.MessageDto;
 import com.chatapp.entity.ChatRoom;
+import com.chatapp.entity.ChatRoomBot;
 import com.chatapp.entity.ChatRoomMember;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
@@ -42,6 +43,7 @@ public class ChatRoomController {
     private final MessageService messageService;
     private final UserSettingsRepository userSettingsRepository;
     private final RawWebSocketHandler webSocketHandler;
+    private final com.chatapp.service.ModerationService moderationService;
 
     /**
      * 创建私聊
@@ -579,6 +581,91 @@ public class ChatRoomController {
             return ResponseEntity.ok(Map.of("message", "禁言状态更新成功"));
         } catch (Exception e) {
             log.error("更新禁言状态失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 转让群主（仅当前群主可操作）。body: { "newOwnerId": <id> }
+     */
+    @PostMapping("/{roomId}/transfer-ownership")
+    public ResponseEntity<?> transferOwnership(
+            @PathVariable Long roomId,
+            @RequestBody Map<String, Object> body,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Object raw = body == null ? null : body.get("newOwnerId");
+            if (raw == null) {
+                throw new IllegalArgumentException("newOwnerId 不能为空");
+            }
+            Long newOwnerId = Long.valueOf(raw.toString());
+            chatRoomService.transferOwnership(roomId, currentUser.getId(), newOwnerId);
+            return ResponseEntity.ok(Map.of("message", "群主已转让"));
+        } catch (AccessDeniedException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("转让群主失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 设置成员角色 ADMIN/MODERATOR/MEMBER（仅群主可操作）。body: { "role": "ADMIN" }
+     */
+    @PutMapping("/{roomId}/members/{userId}/role")
+    public ResponseEntity<?> setMemberRole(
+            @PathVariable Long roomId,
+            @PathVariable Long userId,
+            @RequestBody Map<String, Object> body,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Object raw = body == null ? null : body.get("role");
+            if (raw == null) {
+                throw new IllegalArgumentException("role 不能为空");
+            }
+            ChatRoomMember.MemberRole role;
+            try {
+                role = ChatRoomMember.MemberRole.valueOf(raw.toString().trim().toUpperCase());
+            } catch (IllegalArgumentException ex) {
+                throw new IllegalArgumentException("无效的角色: " + raw);
+            }
+            chatRoomService.setMemberRole(roomId, currentUser.getId(), userId, role);
+            return ResponseEntity.ok(Map.of("message", "成员角色已更新"));
+        } catch (AccessDeniedException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("设置成员角色失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 群主授予/调整房间内机器人的管理权限（NONE/MUTE/KICK）。body: { "grant": "MUTE" }
+     */
+    @PutMapping("/{roomId}/bots/{botId}/moderation-grant")
+    public ResponseEntity<?> setBotModerationGrant(
+            @PathVariable Long roomId,
+            @PathVariable Long botId,
+            @RequestBody Map<String, Object> body,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            Object raw = body == null ? null : body.get("grant");
+            ChatRoomBot.ModerationGrant grant;
+            try {
+                grant = ChatRoomBot.ModerationGrant.valueOf(
+                        raw == null ? "NONE" : raw.toString().trim().toUpperCase());
+            } catch (IllegalArgumentException ex) {
+                throw new IllegalArgumentException("无效的管理权限: " + raw);
+            }
+            moderationService.setBotModerationGrant(roomId, currentUser.getId(), botId, grant);
+            return ResponseEntity.ok(Map.of("message", "机器人管理权限已更新"));
+        } catch (AccessDeniedException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("设置机器人管理权限失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }

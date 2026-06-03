@@ -148,6 +148,147 @@ public class ChatRoomIntegrationTest {
         return ((Number) chatRoom.get("id")).longValue();
     }
 
+    @SuppressWarnings("unchecked")
+    private String memberRole(String token, Long roomId, Long userId) throws Exception {
+        MvcResult result = mockMvc.perform(get("/api/v1/chat-rooms/" + roomId + "/members")
+                .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andReturn();
+        Map<String, Object> resp = objectMapper.readValue(result.getResponse().getContentAsString(), Map.class);
+        List<Map<String, Object>> members = (List<Map<String, Object>>) resp.get("members");
+        for (Map<String, Object> m : members) {
+            if (((Number) m.get("userId")).longValue() == userId) {
+                return String.valueOf(m.get("memberRole"));
+            }
+        }
+        return null;
+    }
+
+    private String body(Map<String, Object> map) throws Exception {
+        return objectMapper.writeValueAsString(map);
+    }
+
+    @Test
+    @DisplayName("F5: creator is OWNER; only the owner can transfer ownership and manage roles")
+    void ownerRoleTransferAndRoleManagement() throws Exception {
+        Object[] owner = createUserAndLogin("f5owner");
+        String ownerTok = (String) owner[0];
+        Long ownerId = (Long) owner[1];
+        Object[] m1 = createUserAndLogin("f5m1");
+        String m1Tok = (String) m1[0];
+        Long m1Id = (Long) m1[1];
+        Object[] m2 = createUserAndLogin("f5m2");
+        Long m2Id = (Long) m2[1];
+
+        Long roomId = createGroupChat(ownerTok, "F5 room " + uniqueSuffix, "d", List.of(m1Id, m2Id));
+
+        // Creator is OWNER (no longer ADMIN); others are MEMBER.
+        org.junit.jupiter.api.Assertions.assertEquals("OWNER", memberRole(ownerTok, roomId, ownerId));
+        org.junit.jupiter.api.Assertions.assertEquals("MEMBER", memberRole(ownerTok, roomId, m1Id));
+
+        // A non-owner cannot manage roles (owner-only -> 403 Forbidden).
+        mockMvc.perform(put("/api/v1/chat-rooms/" + roomId + "/members/" + m2Id + "/role")
+                .header("Authorization", "Bearer " + m1Tok)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(Map.of("role", "ADMIN"))))
+                .andExpect(status().isForbidden());
+
+        // Owner promotes m1 to ADMIN.
+        mockMvc.perform(put("/api/v1/chat-rooms/" + roomId + "/members/" + m1Id + "/role")
+                .header("Authorization", "Bearer " + ownerTok)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(Map.of("role", "ADMIN"))))
+                .andExpect(status().isOk());
+        org.junit.jupiter.api.Assertions.assertEquals("ADMIN", memberRole(ownerTok, roomId, m1Id));
+
+        // Cannot set OWNER via the role endpoint (must transfer).
+        mockMvc.perform(put("/api/v1/chat-rooms/" + roomId + "/members/" + m1Id + "/role")
+                .header("Authorization", "Bearer " + ownerTok)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(Map.of("role", "OWNER"))))
+                .andExpect(status().isBadRequest());
+
+        // Owner transfers ownership to m1; old owner becomes ADMIN, exactly one OWNER remains.
+        mockMvc.perform(post("/api/v1/chat-rooms/" + roomId + "/transfer-ownership")
+                .header("Authorization", "Bearer " + ownerTok)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(Map.of("newOwnerId", m1Id))))
+                .andExpect(status().isOk());
+        org.junit.jupiter.api.Assertions.assertEquals("OWNER", memberRole(m1Tok, roomId, m1Id));
+        org.junit.jupiter.api.Assertions.assertEquals("ADMIN", memberRole(m1Tok, roomId, ownerId));
+
+        // The former owner can no longer transfer (no longer OWNER -> 403 Forbidden).
+        mockMvc.perform(post("/api/v1/chat-rooms/" + roomId + "/transfer-ownership")
+                .header("Authorization", "Bearer " + ownerTok)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(Map.of("newOwnerId", m2Id))))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("F5: the sole owner cannot leave (would orphan the room); toggle-admin cannot demote the owner")
+    void soleOwnerCannotLeaveAndOwnerCannotBeToggledDown() throws Exception {
+        Object[] owner = createUserAndLogin("f5leave");
+        String ownerTok = (String) owner[0];
+        Long ownerId = (Long) owner[1];
+        Object[] mate = createUserAndLogin("f5mate");
+        String mateTok = (String) mate[0];
+        Long mateId = (Long) mate[1];
+
+        Long roomId = createGroupChat(ownerTok, "F5 leave " + uniqueSuffix, "d", List.of(mateId));
+
+        // The sole owner cannot leave without transferring first.
+        mockMvc.perform(post("/api/v1/chat-rooms/" + roomId + "/leave")
+                .header("Authorization", "Bearer " + ownerTok))
+                .andExpect(status().isBadRequest());
+
+        // Promote mate to ADMIN, then mate (admin) cannot demote the owner via toggle-admin
+        // (that path would otherwise leave the room ownerless).
+        mockMvc.perform(put("/api/v1/chat-rooms/" + roomId + "/members/" + mateId + "/role")
+                .header("Authorization", "Bearer " + ownerTok)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(Map.of("role", "ADMIN"))))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/v1/chat-rooms/" + roomId + "/members/" + ownerId + "/toggle-admin")
+                .header("Authorization", "Bearer " + mateTok))
+                .andExpect(status().isBadRequest());
+        // Owner is still OWNER.
+        org.junit.jupiter.api.Assertions.assertEquals("OWNER", memberRole(ownerTok, roomId, ownerId));
+
+        // A non-owner member can still leave normally.
+        mockMvc.perform(post("/api/v1/chat-rooms/" + roomId + "/leave")
+                .header("Authorization", "Bearer " + mateTok))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("F5: a (transferred) owner cannot be kicked, even by an admin")
+    void transferredOwnerCannotBeKicked() throws Exception {
+        Object[] creator = createUserAndLogin("f5kcreator");
+        String creatorTok = (String) creator[0];
+        Object[] heir = createUserAndLogin("f5kheir");
+        Long heirId = (Long) heir[1];
+
+        Long roomId = createGroupChat(creatorTok, "F5 kick " + uniqueSuffix, "d", List.of(heirId));
+        // Promote heir to ADMIN, then transfer ownership to them.
+        mockMvc.perform(put("/api/v1/chat-rooms/" + roomId + "/members/" + heirId + "/role")
+                .header("Authorization", "Bearer " + creatorTok)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(Map.of("role", "ADMIN"))))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/v1/chat-rooms/" + roomId + "/transfer-ownership")
+                .header("Authorization", "Bearer " + creatorTok)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body(Map.of("newOwnerId", heirId))))
+                .andExpect(status().isOk());
+
+        // The former creator (now ADMIN, still chat_rooms.created_by) cannot kick the new OWNER.
+        // This exercises the role-based isOwner protection, not the legacy createdBy check.
+        mockMvc.perform(post("/api/v1/chat-rooms/" + roomId + "/members/" + heirId + "/kick")
+                .header("Authorization", "Bearer " + creatorTok))
+                .andExpect(status().isBadRequest());
+    }
+
     // ---- Tests ----
 
     @Test

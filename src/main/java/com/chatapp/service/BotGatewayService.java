@@ -77,6 +77,12 @@ public class BotGatewayService {
         message.setChatRoom(room);
         message.setSender(sender);
         message.setBotConfig(bot);
+        // Per-room display name (room nickname overrides the bot's global name), matching how
+        // BotService renders bot replies — otherwise gateway posts show a blank/global name.
+        message.setBotDisplayName(
+                binding.getRoomNickname() != null && !binding.getRoomNickname().isBlank()
+                        ? binding.getRoomNickname().trim()
+                        : bot.getBotName());
         message.setMessageType(Message.MessageType.TEXT);
         message.setMessageStatus(Message.MessageStatus.SENT);
         message.setContent(content);

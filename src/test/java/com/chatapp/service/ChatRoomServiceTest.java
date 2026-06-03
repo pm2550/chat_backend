@@ -326,6 +326,7 @@ class ChatRoomServiceTest {
     @Test
     void testDeleteChatRoom_ByCreator() {
         when(chatRoomRepository.findById(10L)).thenReturn(Optional.of(groupRoom));
+        when(chatRoomRepository.isOwner(10L, 1L)).thenReturn(true);
 
         assertDoesNotThrow(() -> chatRoomService.deleteChatRoom(10L, 1L));
 
@@ -335,11 +336,12 @@ class ChatRoomServiceTest {
     @Test
     void testDeleteChatRoom_NotCreator() {
         when(chatRoomRepository.findById(10L)).thenReturn(Optional.of(groupRoom));
+        when(chatRoomRepository.isOwner(10L, 2L)).thenReturn(false);
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> chatRoomService.deleteChatRoom(10L, 2L));
 
-        assertTrue(ex.getMessage().contains("创建者"));
+        assertTrue(ex.getMessage().contains("群主"));
     }
 
     @Test

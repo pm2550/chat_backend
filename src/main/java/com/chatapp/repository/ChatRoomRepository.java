@@ -135,4 +135,25 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
     @Query("UPDATE ChatRoomMember crm SET crm.isMuted = CASE WHEN crm.isMuted = true THEN false ELSE true END " +
            "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
     void toggleMuteStatus(@Param("roomId") Long roomId, @Param("userId") Long userId);
+
+    // --- F5: real OWNER role above admin ---
+
+    @Query("SELECT COUNT(crm) > 0 FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId " +
+           "AND crm.user.id = :userId AND crm.memberRole = 'OWNER'")
+    boolean isOwner(@Param("roomId") Long roomId, @Param("userId") Long userId);
+
+    @Query("SELECT COUNT(crm) FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId AND crm.memberRole = 'OWNER'")
+    long countOwners(@Param("roomId") Long roomId);
+
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.memberRole = :role, crm.isAdmin = :isAdmin " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    int assignMemberRole(@Param("roomId") Long roomId, @Param("userId") Long userId,
+                         @Param("role") ChatRoomMember.MemberRole role, @Param("isAdmin") boolean isAdmin);
+
+    // F5 Slice 2: explicitly set (not toggle) a member's mute state — used by bot moderation.
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.isMuted = :muted " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    int setMemberMuted(@Param("roomId") Long roomId, @Param("userId") Long userId, @Param("muted") boolean muted);
 }

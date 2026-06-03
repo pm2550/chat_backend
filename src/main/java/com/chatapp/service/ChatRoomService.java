@@ -101,8 +101,8 @@ public class ChatRoomService {
         chatRoom = chatRoomRepository.save(chatRoom);
         ensureSystemAgentBinding(chatRoom);
 
-        // 添加创建者为管理员
-        addMemberToRoom(chatRoom.getId(), creatorId, ChatRoomMember.MemberRole.ADMIN);
+        // 添加创建者为群主（OWNER，高于管理员）
+        addMemberToRoom(chatRoom.getId(), creatorId, ChatRoomMember.MemberRole.OWNER);
 
         // 添加其他成员
         if (memberIds != null) {
@@ -188,6 +188,10 @@ public class ChatRoomService {
         if (chatRoom.getRoomType() == ChatRoom.RoomType.PRIVATE) {
             throw new IllegalArgumentException("无法退出私聊");
         }
+        // F5: 唯一群主不能直接退出（否则群将无主，无法再转让/管理/解散），需先转让群主或解散群聊
+        if (chatRoomRepository.isOwner(roomId, userId) && chatRoomRepository.countOwners(roomId) <= 1) {
+            throw new IllegalArgumentException("群主退出前需先转让群主或解散群聊");
+        }
 
         // 移除成员
         chatRoomRepository.removeMember(roomId, userId);
@@ -208,7 +212,8 @@ public class ChatRoomService {
         member.setChatRoom(chatRoom);
         member.setUser(user);
         member.setMemberRole(role);
-        member.setIsAdmin(role == ChatRoomMember.MemberRole.ADMIN);
+        member.setIsAdmin(role == ChatRoomMember.MemberRole.ADMIN
+                || role == ChatRoomMember.MemberRole.OWNER);
 
         chatRoom.getMembers().add(member);
         chatRoomRepository.save(chatRoom);
@@ -514,6 +519,10 @@ public class ChatRoomService {
         if (!chatRoomRepository.isMember(roomId, targetUserId)) {
             throw new IllegalArgumentException("目标用户不是聊天室成员");
         }
+        // F5: 群主身份只能通过转让变更，不能被 toggle-admin 降级（否则会出现无群主的群）
+        if (chatRoomRepository.isOwner(roomId, targetUserId)) {
+            throw new IllegalArgumentException("不能更改群主的管理员状态，请使用转让群主功能");
+        }
 
         // 切换管理员状态
         chatRoomRepository.toggleAdminStatus(roomId, targetUserId);
@@ -537,11 +546,72 @@ public class ChatRoomService {
         if (chatRoom.getCreatedBy().getId().equals(targetUserId)) {
             throw new IllegalArgumentException("不能踢出聊天室创建者");
         }
+        // F5: 不能踢出群主（即使群主已通过转让变更，不再等于 createdBy）
+        if (chatRoomRepository.isOwner(roomId, targetUserId)) {
+            throw new IllegalArgumentException("不能踢出群主");
+        }
+        // F5: 只有群主能移除管理员（管理员之间不能互踢）
+        if (chatRoomRepository.isAdmin(roomId, targetUserId)
+                && !chatRoomRepository.isOwner(roomId, operatorId)) {
+            throw new IllegalArgumentException("只有群主可以移除管理员");
+        }
 
         // 移除成员
         chatRoomRepository.removeMember(roomId, targetUserId);
 
         log.info("用户 {} 踢出了用户 {} (聊天室: {})", operatorId, targetUserId, roomId);
+    }
+
+    /**
+     * 转让群主。仅当前群主可操作；新群主必须是聊天室成员。原群主降为管理员，目标升为群主
+     * （同一事务原子完成，保证始终恰好一个群主）。
+     */
+    public void transferOwnership(Long roomId, Long currentOwnerId, Long newOwnerId) {
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
+        if (chatRoom.getRoomType() == ChatRoom.RoomType.PRIVATE) {
+            throw new IllegalArgumentException("私聊不能转让群主");
+        }
+        if (!chatRoomRepository.isOwner(roomId, currentOwnerId)) {
+            throw new AccessDeniedException("只有群主可以转让群主身份");
+        }
+        if (currentOwnerId.equals(newOwnerId)) {
+            throw new IllegalArgumentException("新群主不能是当前群主");
+        }
+        if (!chatRoomRepository.isMember(roomId, newOwnerId)) {
+            throw new IllegalArgumentException("目标用户不是聊天室成员");
+        }
+        chatRoomRepository.assignMemberRole(roomId, currentOwnerId, ChatRoomMember.MemberRole.ADMIN, true);
+        chatRoomRepository.assignMemberRole(roomId, newOwnerId, ChatRoomMember.MemberRole.OWNER, true);
+        log.info("聊天室 {} 群主由 {} 转让给 {}", roomId, currentOwnerId, newOwnerId);
+    }
+
+    /**
+     * 设置成员角色（ADMIN/MODERATOR/MEMBER）。仅群主可操作。不能用此方法设 OWNER（请用
+     * {@link #transferOwnership}），也不能改动现任群主的角色。
+     */
+    public void setMemberRole(Long roomId, Long operatorId, Long targetUserId,
+                              ChatRoomMember.MemberRole newRole) {
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
+        if (chatRoom.getRoomType() == ChatRoom.RoomType.PRIVATE) {
+            throw new IllegalArgumentException("私聊不能设置成员角色");
+        }
+        if (!chatRoomRepository.isOwner(roomId, operatorId)) {
+            throw new AccessDeniedException("只有群主可以管理成员角色");
+        }
+        if (newRole == null || newRole == ChatRoomMember.MemberRole.OWNER) {
+            throw new IllegalArgumentException("请使用转让群主功能设置群主");
+        }
+        if (!chatRoomRepository.isMember(roomId, targetUserId)) {
+            throw new IllegalArgumentException("目标用户不是聊天室成员");
+        }
+        if (chatRoomRepository.isOwner(roomId, targetUserId)) {
+            throw new IllegalArgumentException("不能直接降级群主，请先转让群主");
+        }
+        boolean isAdmin = newRole == ChatRoomMember.MemberRole.ADMIN;
+        chatRoomRepository.assignMemberRole(roomId, targetUserId, newRole, isAdmin);
+        log.info("聊天室 {} 群主 {} 将成员 {} 角色设为 {}", roomId, operatorId, targetUserId, newRole);
     }
 
     /**
@@ -571,14 +641,14 @@ public class ChatRoomService {
         ChatRoom chatRoom = chatRoomRepository.findById(roomId)
                 .orElseThrow(() -> new RuntimeException("聊天室不存在"));
 
-        // 只有创建者可以删除聊天室
-        if (!chatRoom.getCreatedBy().getId().equals(userId)) {
-            throw new IllegalArgumentException("只有创建者可以删除聊天室");
-        }
-
-        // 私聊不能删除
+        // 私聊不能删除（先于群主校验，给出正确的提示，且私聊无群主）
         if (chatRoom.getRoomType() == ChatRoom.RoomType.PRIVATE) {
             throw new IllegalArgumentException("私聊不能删除");
+        }
+
+        // 只有群主可以删除聊天室（群主可能已通过转让变更，不再等于 createdBy）
+        if (!chatRoomRepository.isOwner(roomId, userId)) {
+            throw new IllegalArgumentException("只有群主可以删除聊天室");
         }
 
         chatRoomRepository.delete(chatRoom);
