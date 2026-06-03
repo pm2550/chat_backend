@@ -4,6 +4,7 @@ import com.chatapp.entity.AgentTask;
 import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.ChatRoomMember;
+import com.chatapp.entity.MemoryEntry;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
@@ -43,11 +44,15 @@ public class AgentContextBuilder {
     private static final int TOP_MEMBER_LIMIT = 12;
     private static final int LORE_SCAN_HISTORY_LIMIT = 10;
     private static final int LORE_ENTRY_LIMIT = 10;
+    private static final int MEMORY_ENTRY_LIMIT = 10;
+    private static final int MEMORY_SCAN_HISTORY_LIMIT = 10;
+    private static final int MEMORY_RECALL_MIN_QUERY_LEN = 2;
     private static final DateTimeFormatter HISTORY_TIME_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC'");
 
     private final MessageRepository messageRepository;
     private final ChatRoomRepository chatRoomRepository;
+    private final MemoryService memoryService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AgentContextEnvelope buildContext(AgentTask task) {
@@ -64,6 +69,9 @@ public class AgentContextBuilder {
         boolean includeRoomMetadata = botConfig == null
                 || botConfig.getIncludeRoomMetadata() == null
                 || botConfig.getIncludeRoomMetadata();
+        boolean includeMemorySection = botConfig == null
+                || botConfig.getIncludeMemorySection() == null
+                || botConfig.getIncludeMemorySection();
 
         RoomMetadata roomMetadata = includeRoomMetadata
                 ? buildRoomMetadata(room, initiator)
@@ -79,6 +87,9 @@ public class AgentContextBuilder {
         List<String> behaviorRules = defaultBehaviorRules();
         CharacterCardSection card = buildCharacterCardSection(botConfig);
         LoreBookSection loreBook = matchLoreBook(botConfig, history, LORE_ENTRY_LIMIT);
+        MemoryBookSection memoryBook = includeMemorySection
+                ? recallMemoriesForContext(room != null ? room.getId() : null, history, task)
+                : MemoryBookSection.empty();
 
         AgentContextEnvelope env = new AgentContextEnvelope(
                 agentIdentity,
@@ -88,6 +99,8 @@ public class AgentContextBuilder {
                 behaviorRules,
                 card,
                 loreBook,
+                memoryBook,
+                includeMemorySection,
                 defaultString(task.getPrompt(), ""),
                 tokenBudget,
                 0);
@@ -100,15 +113,18 @@ public class AgentContextBuilder {
         }
 
         env = trimLoreToBudget(env, tokenBudget);
+        env = trimMemoryToBudget(env, tokenBudget);
 
         int estimatedTokens = estimateTokens(assembleSystemPrompt(env));
         env = env.withEstimatedTokens(estimatedTokens);
-        log.info("Agent context built: room='{}', members={}, history={}, loreMatched={}, loreDropped={}, estimatedTokens={}/{}",
+        log.info("Agent context built: room='{}', members={}, history={}, loreMatched={}, loreDropped={}, memoryMatched={}, memoryDropped={}, estimatedTokens={}/{}",
                 env.roomMetadata().name(),
                 env.roomMetadata().memberCount(),
                 env.conversationHistory().size(),
                 env.loreBook().matched().size(),
                 env.loreBook().dropped().size(),
+                env.memoryBook().matched().size(),
+                env.memoryBook().dropped().size(),
                 estimatedTokens,
                 tokenBudget);
         return env;
@@ -156,6 +172,25 @@ public class AgentContextBuilder {
             } else {
                 for (LoreBookEntry entry : env.loreBook().matched()) {
                     prompt.append("- ").append(entry.content()).append("\n");
+                }
+            }
+        }
+
+        if (env.memorySectionEnabled()) {
+            prompt.append("\n[MEMORY]\n");
+            List<MemoryItem> memories = env.memoryBook().matched();
+            if (memories.isEmpty()) {
+                prompt.append("(none matched)\n");
+            } else {
+                for (MemoryItem item : memories) {
+                    prompt.append("- ");
+                    if (item.pinned()) {
+                        prompt.append("(pinned) ");
+                    }
+                    if (hasText(item.title())) {
+                        prompt.append(item.title()).append(": ");
+                    }
+                    prompt.append(item.content() == null ? "" : item.content()).append("\n");
                 }
             }
         }
@@ -366,6 +401,51 @@ public class AgentContextBuilder {
         return new LoreBookSection(List.copyOf(kept), List.copyOf(dropped));
     }
 
+    private MemoryBookSection recallMemoriesForContext(
+            Long roomId,
+            List<HistoricalMessage> history,
+            AgentTask task) {
+        if (roomId == null) {
+            return MemoryBookSection.empty();
+        }
+        String query = buildMemoryQuery(history, task);
+        List<MemoryEntry> entries;
+        try {
+            entries = memoryService.recall(roomId, null, query, MEMORY_ENTRY_LIMIT);
+        } catch (Exception ex) {
+            log.warn("memory recall for context failed roomId={} err={}", roomId, ex.getMessage());
+            return MemoryBookSection.empty();
+        }
+        if (entries == null || entries.isEmpty()) {
+            return MemoryBookSection.empty();
+        }
+        List<MemoryItem> matched = entries.stream()
+                .map(entry -> new MemoryItem(
+                        entry.getId(),
+                        entry.getTitle(),
+                        entry.getContent(),
+                        Boolean.TRUE.equals(entry.getPinned()),
+                        entry.getUpdatedAt()))
+                .toList();
+        return new MemoryBookSection(matched, List.of());
+    }
+
+    private String buildMemoryQuery(List<HistoricalMessage> history, AgentTask task) {
+        StringBuilder sb = new StringBuilder();
+        int scanFrom = Math.max(0, history.size() - MEMORY_SCAN_HISTORY_LIMIT);
+        for (int i = scanFrom; i < history.size(); i++) {
+            String content = history.get(i).content();
+            if (hasText(content)) {
+                sb.append(content).append(' ');
+            }
+        }
+        if (task != null && hasText(task.getPrompt())) {
+            sb.append(task.getPrompt());
+        }
+        String query = sb.toString().trim();
+        return query.length() < MEMORY_RECALL_MIN_QUERY_LEN ? "" : query;
+    }
+
     private boolean keysMatch(JsonNode keysNode, List<String> haystack) {
         if (!keysNode.isArray()) {
             return false;
@@ -396,6 +476,39 @@ public class AgentContextBuilder {
             List<LoreBookEntry> droppedAll = new ArrayList<>(current.loreBook().dropped());
             droppedAll.add(0, dropped);
             current = current.withLoreBook(new LoreBookSection(List.copyOf(kept), List.copyOf(droppedAll)));
+        }
+        return current;
+    }
+
+    private AgentContextEnvelope trimMemoryToBudget(AgentContextEnvelope env, int tokenBudget) {
+        if (!env.memorySectionEnabled() || env.memoryBook().matched().isEmpty()) {
+            return env;
+        }
+        AgentContextEnvelope current = env;
+        List<MemoryItem> pinned = new ArrayList<>();
+        List<MemoryItem> unpinned = new ArrayList<>();
+        for (MemoryItem item : current.memoryBook().matched()) {
+            if (item.pinned()) {
+                pinned.add(item);
+            } else {
+                unpinned.add(item);
+            }
+        }
+        List<MemoryItem> droppedAll = new ArrayList<>(current.memoryBook().dropped());
+
+        while (!unpinned.isEmpty()
+                && estimateTokens(assembleSystemPrompt(current)) > tokenBudget) {
+            MemoryItem dropped = unpinned.remove(unpinned.size() - 1);
+            droppedAll.add(0, dropped);
+            List<MemoryItem> kept = new ArrayList<>(pinned);
+            kept.addAll(unpinned);
+            current = current.withMemoryBook(new MemoryBookSection(List.copyOf(kept), List.copyOf(droppedAll)));
+        }
+
+        if (!pinned.isEmpty()
+                && estimateTokens(assembleSystemPrompt(current)) > tokenBudget) {
+            log.warn("memory section over budget but only pinned remain; keeping pinned "
+                    + "(pinnedCount={}, budget={})", pinned.size(), tokenBudget);
         }
         return current;
     }
@@ -516,6 +629,27 @@ public class AgentContextBuilder {
         }
     }
 
+    public record MemoryItem(
+            Long id,
+            String title,
+            String content,
+            boolean pinned,
+            LocalDateTime updatedAt) {
+    }
+
+    public record MemoryBookSection(
+            List<MemoryItem> matched,
+            List<MemoryItem> dropped) {
+        public MemoryBookSection {
+            matched = List.copyOf(matched);
+            dropped = List.copyOf(dropped);
+        }
+
+        static MemoryBookSection empty() {
+            return new MemoryBookSection(List.of(), List.of());
+        }
+    }
+
     @Getter
     public static final class AgentContextEnvelope {
         private final AgentIdentity agentIdentity;
@@ -525,6 +659,8 @@ public class AgentContextBuilder {
         private final List<String> behaviorRules;
         private final CharacterCardSection characterCard;
         private final LoreBookSection loreBook;
+        private final MemoryBookSection memoryBook;
+        private final boolean memorySectionEnabled;
         private final String taskText;
         private final int maxContextTokensEstimate;
         private final int estimatedTokens;
@@ -537,6 +673,8 @@ public class AgentContextBuilder {
                 List<String> behaviorRules,
                 CharacterCardSection characterCard,
                 LoreBookSection loreBook,
+                MemoryBookSection memoryBook,
+                boolean memorySectionEnabled,
                 String taskText,
                 int maxContextTokensEstimate,
                 int estimatedTokens) {
@@ -547,9 +685,27 @@ public class AgentContextBuilder {
             this.behaviorRules = List.copyOf(behaviorRules);
             this.characterCard = characterCard != null ? characterCard : CharacterCardSection.empty();
             this.loreBook = loreBook != null ? loreBook : LoreBookSection.empty();
+            this.memoryBook = memoryBook != null ? memoryBook : MemoryBookSection.empty();
+            this.memorySectionEnabled = memorySectionEnabled;
             this.taskText = taskText;
             this.maxContextTokensEstimate = maxContextTokensEstimate;
             this.estimatedTokens = estimatedTokens;
+        }
+
+        AgentContextEnvelope(
+                AgentIdentity agentIdentity,
+                RoomMetadata roomMetadata,
+                List<HistoricalMessage> conversationHistory,
+                InitiatorInfo initiator,
+                List<String> behaviorRules,
+                CharacterCardSection characterCard,
+                LoreBookSection loreBook,
+                String taskText,
+                int maxContextTokensEstimate,
+                int estimatedTokens) {
+            this(agentIdentity, roomMetadata, conversationHistory, initiator, behaviorRules,
+                    characterCard, loreBook, MemoryBookSection.empty(), false, taskText,
+                    maxContextTokensEstimate, estimatedTokens);
         }
 
         AgentContextEnvelope(
@@ -562,7 +718,8 @@ public class AgentContextBuilder {
                 int maxContextTokensEstimate,
                 int estimatedTokens) {
             this(agentIdentity, roomMetadata, conversationHistory, initiator, behaviorRules,
-                    CharacterCardSection.empty(), LoreBookSection.empty(), taskText,
+                    CharacterCardSection.empty(), LoreBookSection.empty(),
+                    MemoryBookSection.empty(), false, taskText,
                     maxContextTokensEstimate, estimatedTokens);
         }
 
@@ -594,6 +751,14 @@ public class AgentContextBuilder {
             return loreBook;
         }
 
+        public MemoryBookSection memoryBook() {
+            return memoryBook;
+        }
+
+        public boolean memorySectionEnabled() {
+            return memorySectionEnabled;
+        }
+
         public String taskText() {
             return taskText;
         }
@@ -615,6 +780,8 @@ public class AgentContextBuilder {
                     behaviorRules,
                     characterCard,
                     loreBook,
+                    memoryBook,
+                    memorySectionEnabled,
                     taskText,
                     maxContextTokensEstimate,
                     estimatedTokens);
@@ -629,6 +796,8 @@ public class AgentContextBuilder {
                     behaviorRules,
                     characterCard,
                     loreBook,
+                    memoryBook,
+                    memorySectionEnabled,
                     taskText,
                     maxContextTokensEstimate,
                     tokens);
@@ -643,6 +812,24 @@ public class AgentContextBuilder {
                     behaviorRules,
                     characterCard,
                     newLoreBook,
+                    memoryBook,
+                    memorySectionEnabled,
+                    taskText,
+                    maxContextTokensEstimate,
+                    estimatedTokens);
+        }
+
+        AgentContextEnvelope withMemoryBook(MemoryBookSection newMemoryBook) {
+            return new AgentContextEnvelope(
+                    agentIdentity,
+                    roomMetadata,
+                    conversationHistory,
+                    initiator,
+                    behaviorRules,
+                    characterCard,
+                    loreBook,
+                    newMemoryBook,
+                    memorySectionEnabled,
                     taskText,
                     maxContextTokensEstimate,
                     estimatedTokens);

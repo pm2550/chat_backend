@@ -87,6 +87,9 @@ public class BotConfig {
     @Column(name = "include_room_metadata")
     private Boolean includeRoomMetadata = true;
 
+    @Column(name = "include_memory_section")
+    private Boolean includeMemorySection = true;
+
     @Column(name = "system_prompt_template", columnDefinition = "TEXT")
     private String systemPromptTemplate;
 

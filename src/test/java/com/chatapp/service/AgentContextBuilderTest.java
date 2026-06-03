@@ -4,6 +4,7 @@ import com.chatapp.entity.AgentTask;
 import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.ChatRoomMember;
+import com.chatapp.entity.MemoryEntry;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
@@ -23,8 +24,15 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -33,6 +41,7 @@ class AgentContextBuilderTest {
 
     @Mock private MessageRepository messageRepository;
     @Mock private ChatRoomRepository chatRoomRepository;
+    @Mock private MemoryService memoryService;
 
     private AgentContextBuilder builder;
     private User alice;
@@ -42,7 +51,9 @@ class AgentContextBuilderTest {
 
     @BeforeEach
     void setUp() {
-        builder = new AgentContextBuilder(messageRepository, chatRoomRepository);
+        builder = new AgentContextBuilder(messageRepository, chatRoomRepository, memoryService);
+        lenient().when(memoryService.recall(any(), isNull(), anyString(), anyInt()))
+                .thenReturn(List.of());
         alice = user(1L, "alice", "Alice");
         bob = user(2L, "bob", "Bob");
         room = new ChatRoom();
@@ -310,6 +321,96 @@ class AgentContextBuilderTest {
         assertEquals("Lore: fresh match", env.loreBook().matched().get(0).content());
     }
 
+    @Test
+    @DisplayName("memory section includes pinned entries unconditionally")
+    void memorySection_includesPinnedEntriesUnconditionally() {
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+        when(memoryService.recall(eq(10L), isNull(), anyString(), eq(10)))
+                .thenReturn(List.of(
+                        memoryEntry(1L, "Pinned fact", "Pinned context survives", true,
+                                MemoryEntry.Visibility.ROOM),
+                        memoryEntry(2L, "Normal fact", "Normal context", false,
+                                MemoryEntry.Visibility.ROOM)));
+
+        AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task("help"));
+        String prompt = builder.assembleSystemPrompt(env);
+
+        assertTrue(prompt.contains("[MEMORY]"));
+        assertTrue(prompt.contains("(pinned) Pinned fact: Pinned context survives"));
+        assertEquals(2, env.memoryBook().matched().size());
+    }
+
+    @Test
+    @DisplayName("memory section includes keyword matched entries")
+    void memorySection_includesKeywordMatchedEntries() {
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5)))
+                .thenReturn(List.of(message(1L, bob, "widgets library update", 1)));
+        when(memoryService.recall(eq(10L), isNull(), contains("widgets"), eq(10)))
+                .thenReturn(List.of(memoryEntry(3L, "Widgets", "Widgets are room context", false,
+                        MemoryEntry.Visibility.ROOM)));
+
+        String prompt = builder.assembleSystemPrompt(builder.buildContext(task("help")));
+
+        assertTrue(prompt.contains("Widgets are room context"));
+        verify(memoryService).recall(eq(10L), isNull(), contains("widgets"), eq(10));
+    }
+
+    @Test
+    @DisplayName("memory section passes null user id to service for bot privacy")
+    void memorySection_passesNullUserIdToServiceForBotPrivacy() {
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+
+        AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task("help"));
+        String prompt = builder.assembleSystemPrompt(env);
+
+        assertTrue(prompt.contains("[MEMORY]\n(none matched)"));
+        verify(memoryService).recall(eq(10L), isNull(), anyString(), eq(10));
+    }
+
+    @Test
+    @DisplayName("memory token trim protects pinned entries")
+    void memorySection_trimmedByTokenBudget_protectsPinned() {
+        bot.setMaxContextTokensEstimate(200);
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+        List<MemoryEntry> entries = new ArrayList<>();
+        entries.add(memoryEntry(1L, "Pinned 1", "pinned one " + "very long memory ".repeat(20),
+                true, MemoryEntry.Visibility.ROOM));
+        entries.add(memoryEntry(2L, "Pinned 2", "pinned two " + "very long memory ".repeat(20),
+                true, MemoryEntry.Visibility.ROOM));
+        for (int i = 3; i <= 10; i++) {
+            entries.add(memoryEntry((long) i, "Normal " + i,
+                    "normal memory " + i + " " + "very long memory ".repeat(20),
+                    false, MemoryEntry.Visibility.ROOM));
+        }
+        when(memoryService.recall(eq(10L), isNull(), anyString(), eq(10))).thenReturn(entries);
+
+        AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task("help"));
+
+        assertTrue(env.memoryBook().matched().size() < 10);
+        assertTrue(env.memoryBook().dropped().size() > 0);
+        assertTrue(env.memoryBook().matched().stream().anyMatch(item -> item.id().equals(1L)));
+        assertTrue(env.memoryBook().matched().stream().anyMatch(item -> item.id().equals(2L)));
+    }
+
+    @Test
+    @DisplayName("memory opt-out omits header and avoids recall")
+    void memorySection_respectsIncludeMemorySectionFlag_omitsHeaderWhenDisabled() {
+        bot.setIncludeMemorySection(false);
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+
+        AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task("help"));
+        String prompt = builder.assembleSystemPrompt(env);
+
+        assertFalse(env.memorySectionEnabled());
+        assertFalse(prompt.contains("[MEMORY]"));
+        verify(memoryService, never()).recall(any(), any(), anyString(), anyInt());
+    }
+
     private AgentTask task(String prompt) {
         AgentTask task = new AgentTask();
         task.setId(77L);
@@ -353,6 +454,20 @@ class AgentContextBuilderTest {
         message.setContent(content);
         message.setCreatedAt(LocalDateTime.of(2026, 6, 1, 8, 0).minusMinutes(minutesAgo));
         return message;
+    }
+
+    private MemoryEntry memoryEntry(Long id, String title, String content, boolean pinned,
+                                    MemoryEntry.Visibility visibility) {
+        MemoryEntry entry = new MemoryEntry();
+        entry.setId(id);
+        entry.setChatRoomId(10L);
+        entry.setTitle(title);
+        entry.setContent(content);
+        entry.setVisibility(visibility);
+        entry.setPinned(pinned);
+        entry.setArchived(false);
+        entry.setUpdatedAt(LocalDateTime.of(2026, 6, 1, 9, 0).minusMinutes(id));
+        return entry;
     }
 
     private User user(Long id, String username, String displayName) {
