@@ -47,6 +47,15 @@ public class User {
     @Column(nullable = false)
     private String password;
 
+    @Column(name = "client_salt", length = 128)
+    private String clientSalt;
+
+    @Column(name = "argon2_params", length = 64)
+    private String argon2Params;
+
+    @Column(name = "password_scheme", length = 32, nullable = false)
+    private String passwordScheme = "BCRYPT_LEGACY";
+
     @Column(unique = true, nullable = false, length = 100)
     private String email;
 

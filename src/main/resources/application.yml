@@ -65,6 +65,10 @@ spring:
     serialization:
       fail-on-empty-beans: false
 
+# Auth client-side password hashing
+auth:
+  client-salt-hmac-secret: ${CLIENT_SALT_HMAC_SECRET:dev-only-do-not-use-in-prod-rotate-immediately}
+
 # JWT Configuration
 jwt:
   secret: ${JWT_SECRET:Y2hhdEFwcFNlY3JldEtleUZvckpXVFRva2VuU2lnbmluZ1RoaXNJc0FMb25nZXJLZXlGb3JTZWN1cml0eQ==}

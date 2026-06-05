@@ -13,10 +13,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
-import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -31,9 +28,6 @@ class AuthControllerTest {
     private MockMvc mockMvc;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-
-    @Mock
-    private AuthenticationManager authenticationManager;
 
     @Mock
     private UserService userService;
@@ -64,10 +58,11 @@ class AuthControllerTest {
     @Test
     void testLogin_Success() throws Exception {
         UserDto.LoginRequest loginRequest = new UserDto.LoginRequest("testuser", "password123");
+        User authenticated = new User();
+        authenticated.setId(1L);
+        authenticated.setUsername("testuser");
 
-        Authentication authentication = mock(Authentication.class);
-        when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
-                .thenReturn(authentication);
+        when(userService.authenticate(any(UserDto.LoginRequest.class))).thenReturn(authenticated);
         when(jwtUtils.generateAccessToken("testuser")).thenReturn("access-token-123");
         when(jwtUtils.generateRefreshToken("testuser")).thenReturn("refresh-token-456");
         when(userService.findByUsername("testuser")).thenReturn(testUser);
@@ -81,6 +76,7 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.data.refreshToken").value("refresh-token-456"))
                 .andExpect(jsonPath("$.data.user.username").value("testuser"));
 
+        verify(userService).authenticate(any(UserDto.LoginRequest.class));
         verify(userService).updateOnlineStatus(eq(1L), eq(User.OnlineStatus.ONLINE));
     }
 
@@ -88,14 +84,14 @@ class AuthControllerTest {
     void testLogin_InvalidCredentials() throws Exception {
         UserDto.LoginRequest loginRequest = new UserDto.LoginRequest("testuser", "wrongpassword");
 
-        when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
+        when(userService.authenticate(any(UserDto.LoginRequest.class)))
                 .thenThrow(new BadCredentialsException("Bad credentials"));
 
         mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(loginRequest)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value(400));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
     }
 
     @Test

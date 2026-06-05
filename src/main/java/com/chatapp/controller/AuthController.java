@@ -2,24 +2,30 @@ package com.chatapp.controller;
 
 import com.chatapp.dto.ApiResponse;
 import com.chatapp.dto.UserDto;
+import com.chatapp.entity.User;
+import com.chatapp.exception.ClientTooOldException;
+import com.chatapp.exception.PasswordUpgradeRequiredException;
 import com.chatapp.service.TokenBlacklistService;
 import com.chatapp.service.UserService;
 import com.chatapp.util.JwtUtils;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.LockedException;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
+@Validated
 public class AuthController {
 
-    private final AuthenticationManager authenticationManager;
     private final UserService userService;
     private final JwtUtils jwtUtils;
     private final TokenBlacklistService tokenBlacklistService;
@@ -27,22 +33,37 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<ApiResponse<UserDto.JwtResponse>> login(@Valid @RequestBody UserDto.LoginRequest request) {
         try {
-            Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(request.getUsername(), request.getPassword())
-            );
-            SecurityContextHolder.getContext().setAuthentication(authentication);
+            User authenticated = userService.authenticate(request);
+            String accessToken = jwtUtils.generateAccessToken(authenticated.getUsername());
+            String refreshToken = jwtUtils.generateRefreshToken(authenticated.getUsername());
 
-            String accessToken = jwtUtils.generateAccessToken(request.getUsername());
-            String refreshToken = jwtUtils.generateRefreshToken(request.getUsername());
-
-            UserDto user = userService.findByUsername(request.getUsername());
-            userService.updateOnlineStatus(user.getId(), com.chatapp.entity.User.OnlineStatus.ONLINE);
+            userService.updateOnlineStatus(authenticated.getId(), User.OnlineStatus.ONLINE);
+            UserDto user = userService.findByUsername(authenticated.getUsername());
 
             UserDto.JwtResponse jwtResponse = new UserDto.JwtResponse(accessToken, refreshToken, user);
             return ResponseEntity.ok(ApiResponse.success("登录成功", jwtResponse));
+        } catch (PasswordUpgradeRequiredException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ApiResponse.error(409, "PASSWORD_UPGRADE_REQUIRED"));
+        } catch (ClientTooOldException e) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, "CLIENT_TOO_OLD"));
+        } catch (LockedException e) {
+            return ResponseEntity.status(423).body(ApiResponse.error(423, e.getMessage()));
+        } catch (BadCredentialsException e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiResponse.unauthorized("用户名或密码错误"));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(ApiResponse.badRequest("用户名或密码错误"));
         }
+    }
+
+    @GetMapping("/client-salt-params")
+    public ResponseEntity<ApiResponse<UserDto.ClientSaltParamsResponse>> clientSaltParams(
+            @RequestParam @NotBlank String username) {
+        UserDto.ClientSaltParamsResponse params = userService.resolveClientSaltParams(username);
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .header("Pragma", "no-cache")
+                .body(ApiResponse.success(params));
     }
 
     @PostMapping("/register")
@@ -65,7 +86,7 @@ public class AuthController {
 
             String username = jwtUtils.getUserNameFromJwtToken(jwt);
             UserDto user = userService.findByUsername(username);
-            userService.updateOnlineStatus(user.getId(), com.chatapp.entity.User.OnlineStatus.OFFLINE);
+            userService.updateOnlineStatus(user.getId(), User.OnlineStatus.OFFLINE);
 
             SecurityContextHolder.clearContext();
             return ResponseEntity.ok(ApiResponse.<Void>success("登出成功", null));

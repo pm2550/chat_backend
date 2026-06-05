@@ -38,6 +38,9 @@ spring:
     username: ${RABBITMQ_USERNAME}
     password: ${RABBITMQ_PASSWORD}
 
+auth:
+  client-salt-hmac-secret: ${CLIENT_SALT_HMAC_SECRET}
+
 # Force JWT secret from env, no default
 jwt:
   secret: ${JWT_SECRET}

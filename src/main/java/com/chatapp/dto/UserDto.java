@@ -1,12 +1,14 @@
 package com.chatapp.dto;
 
 import com.chatapp.entity.User;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.time.LocalDateTime;
 
@@ -34,23 +36,36 @@ public class UserDto {
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
+    @ToString(exclude = {"password", "clientHash"})
     public static class LoginRequest {
         @NotBlank(message = "用户名不能为空")
         private String username;
 
-        @NotBlank(message = "密码不能为空")
         private String password;
+        private String clientHash;
+
+        public LoginRequest(String username, String password) {
+            this.username = username;
+            this.password = password;
+        }
+
+        @AssertTrue(message = "exactly one of {password, clientHash} must be provided")
+        public boolean isExactlyOneCredential() {
+            boolean hasPassword = password != null && !password.isBlank();
+            boolean hasClientHash = clientHash != null && !clientHash.isBlank();
+            return hasPassword ^ hasClientHash;
+        }
     }
 
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
+    @ToString(exclude = {"password", "clientHash", "clientSalt"})
     public static class RegisterRequest {
         @NotBlank(message = "用户名不能为空")
         @Size(min = 3, max = 50, message = "用户名长度必须在3-50之间")
         private String username;
 
-        @NotBlank(message = "密码不能为空")
         @Size(min = 6, max = 100, message = "密码长度必须在6-100之间")
         private String password;
 
@@ -60,6 +75,28 @@ public class UserDto {
 
         private String phone;
         private String displayName;
+        private String clientHash;
+        private String clientSalt;
+        private String argon2Params;
+
+        public RegisterRequest(String username, String password, String email, String phone, String displayName) {
+            this.username = username;
+            this.password = password;
+            this.email = email;
+            this.phone = phone;
+            this.displayName = displayName;
+        }
+
+        @AssertTrue(message = "must provide either password OR (clientHash+clientSalt+argon2Params)")
+        public boolean isValidCredentialBundle() {
+            boolean hasPassword = password != null && !password.isBlank();
+            boolean hasClientHash = clientHash != null && !clientHash.isBlank();
+            boolean hasClientSalt = clientSalt != null && !clientSalt.isBlank();
+            boolean hasArgon2Params = argon2Params != null && !argon2Params.isBlank();
+            boolean oldPath = hasPassword && !hasClientHash && !hasClientSalt && !hasArgon2Params;
+            boolean newPath = !hasPassword && hasClientHash && hasClientSalt && hasArgon2Params;
+            return oldPath ^ newPath;
+        }
     }
 
     @Data
@@ -77,13 +114,38 @@ public class UserDto {
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
+    @ToString(exclude = {"oldPassword", "oldClientHash", "newPassword", "newClientHash", "newClientSalt"})
     public static class ChangePasswordRequest {
-        @NotBlank(message = "旧密码不能为空")
         private String oldPassword;
-
-        @NotBlank(message = "新密码不能为空")
+        private String oldClientHash;
         @Size(min = 6, max = 100, message = "密码长度必须在6-100之间")
         private String newPassword;
+        private String newClientHash;
+        private String newClientSalt;
+        private String newArgon2Params;
+
+        @AssertTrue(message = "must provide one old credential and one new credential bundle")
+        public boolean isValidChange() {
+            boolean hasOldPassword = oldPassword != null && !oldPassword.isBlank();
+            boolean hasOldClientHash = oldClientHash != null && !oldClientHash.isBlank();
+            boolean hasNewPassword = newPassword != null && !newPassword.isBlank();
+            boolean hasNewClientHash = newClientHash != null && !newClientHash.isBlank();
+            boolean hasNewClientSalt = newClientSalt != null && !newClientSalt.isBlank();
+            boolean hasNewArgon2Params = newArgon2Params != null && !newArgon2Params.isBlank();
+            boolean oldCredentialOk = hasOldPassword ^ hasOldClientHash;
+            boolean newLegacyOk = hasNewPassword && !hasNewClientHash && !hasNewClientSalt && !hasNewArgon2Params;
+            boolean newClientOk = !hasNewPassword && hasNewClientHash && hasNewClientSalt && hasNewArgon2Params;
+            return oldCredentialOk && (newLegacyOk ^ newClientOk);
+        }
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ClientSaltParamsResponse {
+        private String salt;
+        private String argon2Params;
+        private String scheme;
     }
 
     @Data

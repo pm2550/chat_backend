@@ -197,17 +197,149 @@ public class AuthIntegrationTest {
         mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(createLoginRequest(username, "wrongpassword"))))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
-    @DisplayName("Login with non-existent user returns bad request")
+    @DisplayName("Login with non-existent user returns unauthorized")
     void testLoginNonExistentUser() throws Exception {
         mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(createLoginRequest("nonexistent_user_xyz", "password123"))))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnauthorized());
     }
+
+
+
+    @Test
+    @DisplayName("Client-side hash registration returns client salt params and logs in with clientHash")
+    void clientHashRegisterAndLogin() throws Exception {
+        String username = "clienthash_" + uniqueSuffix;
+        String email = username + "@test.com";
+        String salt = "AAAAAAAAAAAAAAAAAAAAAA";
+        String clientHash = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+        Map<String, Object> registerRequest = new HashMap<>();
+        registerRequest.put("username", username);
+        registerRequest.put("email", email);
+        registerRequest.put("clientHash", clientHash);
+        registerRequest.put("clientSalt", salt);
+        registerRequest.put("argon2Params", "m=65536,t=3,p=1,v=19,hashLen=32");
+        registerRequest.put("displayName", username);
+
+        mockMvc.perform(post("/api/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(registerRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        mockMvc.perform(get("/api/auth/client-salt-params")
+                .param("username", username))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
+                .andExpect(jsonPath("$.data.salt").value(salt))
+                .andExpect(jsonPath("$.data.scheme").value("CLIENT_ARGON2_BCRYPT"));
+
+        Map<String, Object> loginRequest = new HashMap<>();
+        loginRequest.put("username", username);
+        loginRequest.put("clientHash", clientHash);
+        mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(loginRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.accessToken").isNotEmpty());
+    }
+
+    @Test
+    @DisplayName("Client-salt params are stable and non-enumerating for missing users")
+    void clientSaltParamsForMissingUsersAreStable() throws Exception {
+        String username = "missing_" + uniqueSuffix;
+        MvcResult first = mockMvc.perform(get("/api/auth/client-salt-params")
+                .param("username", username))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.scheme").value("BCRYPT_LEGACY"))
+                .andReturn();
+        MvcResult second = mockMvc.perform(get("/api/auth/client-salt-params")
+                .param("username", username))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.scheme").value("BCRYPT_LEGACY"))
+                .andReturn();
+        Map<String, Object> a = objectMapper.readValue(first.getResponse().getContentAsString(), Map.class);
+        Map<String, Object> b = objectMapper.readValue(second.getResponse().getContentAsString(), Map.class);
+        Map<String, Object> dataA = (Map<String, Object>) a.get("data");
+        Map<String, Object> dataB = (Map<String, Object>) b.get("data");
+        org.junit.jupiter.api.Assertions.assertEquals(dataA.get("salt"), dataB.get("salt"));
+    }
+
+    @Test
+    @DisplayName("Client-hash account rejects plaintext old clients")
+    void clientHashAccountRejectsPlaintextLogin() throws Exception {
+        String username = "clientold_" + uniqueSuffix;
+        String email = username + "@test.com";
+        Map<String, Object> registerRequest = new HashMap<>();
+        registerRequest.put("username", username);
+        registerRequest.put("email", email);
+        registerRequest.put("clientHash", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+        registerRequest.put("clientSalt", "BBBBBBBBBBBBBBBBBBBBBB");
+        registerRequest.put("argon2Params", "m=65536,t=3,p=1,v=19,hashLen=32");
+        mockMvc.perform(post("/api/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(registerRequest)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createLoginRequest(username, "plaintext"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("CLIENT_TOO_OLD"));
+    }
+
+
+    @Test
+    @DisplayName("Legacy account can change password into client-hash scheme")
+    void legacyAccountCanUpgradePasswordOnChange() throws Exception {
+        String username = "upgrade_" + uniqueSuffix;
+        String email = username + "@test.com";
+        String oldPassword = "password123";
+        String newClientHash = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+        String newSalt = "CCCCCCCCCCCCCCCCCCCCCC";
+
+        registerUser(username, email, oldPassword);
+        String token = loginAndGetToken(username, oldPassword);
+
+        Map<String, Object> changeRequest = new HashMap<>();
+        changeRequest.put("oldPassword", oldPassword);
+        changeRequest.put("newClientHash", newClientHash);
+        changeRequest.put("newClientSalt", newSalt);
+        changeRequest.put("newArgon2Params", "m=65536,t=3,p=1,v=19,hashLen=32");
+        mockMvc.perform(post("/api/profile/password")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(changeRequest)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/auth/client-salt-params")
+                .param("username", username))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.scheme").value("CLIENT_ARGON2_BCRYPT"))
+                .andExpect(jsonPath("$.data.salt").value(newSalt));
+
+        mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createLoginRequest(username, oldPassword))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("CLIENT_TOO_OLD"));
+
+        Map<String, Object> loginRequest = new HashMap<>();
+        loginRequest.put("username", username);
+        loginRequest.put("clientHash", newClientHash);
+        mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(loginRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.accessToken").isNotEmpty());
+    }
+
 
     @Test
     @DisplayName("Access protected endpoint without token returns 401")
