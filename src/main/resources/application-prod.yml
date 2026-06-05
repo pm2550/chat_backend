@@ -71,6 +71,11 @@ file:
     clamav-host: ${CLAMAV_HOST:127.0.0.1}
     clamav-port: ${CLAMAV_PORT:3310}
     clamav-timeout-ms: ${CLAMAV_TIMEOUT_MS:5000}
+    master-key: ${FILE_STORAGE_MASTER_KEY:}
+    encrypt-legacy-on-startup: ${FILE_ENCRYPT_LEGACY:false}
+    decrypt-legacy-on-startup: ${FILE_DECRYPT_LEGACY:false}
+    legacy-encrypt-exclude-dirs: ${FILE_LEGACY_EXCLUDE_DIRS:app-releases}
+    streaming-threshold-bytes: ${FILE_STREAMING_THRESHOLD:1048576}
 
 app:
   version:

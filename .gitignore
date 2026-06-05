@@ -44,6 +44,7 @@ pids
 *.pid
 *.seed
 *.pid.lock
+uploads/
 
 # Dependency directories
 node_modules/

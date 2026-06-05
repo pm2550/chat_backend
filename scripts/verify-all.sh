@@ -9,6 +9,10 @@ cd "$ROOT_DIR"
 git diff --check
 mvn test
 
+if [[ "${RUN_TDE_VERIFY:-0}" == "1" ]]; then
+  "$ROOT_DIR/scripts/verify-tde.sh"
+fi
+
 cd "$FRONTEND_DIR"
 git diff --check
 "$FLUTTER_BIN" test

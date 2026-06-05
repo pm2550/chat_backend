@@ -1,6 +1,7 @@
 package com.chatapp.service;
 
 import com.chatapp.config.FileStorageConfig;
+import com.chatapp.security.FileVaultService;
 import io.minio.BucketExistsArgs;
 import io.minio.GetObjectArgs;
 import io.minio.ListObjectsArgs;
@@ -12,6 +13,8 @@ import io.minio.Result;
 import io.minio.messages.Item;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
@@ -34,9 +37,13 @@ import java.util.UUID;
  */
 @Service
 public class FileStorageService {
+    private static final Logger log = LoggerFactory.getLogger(FileStorageService.class);
 
     @Autowired
     private FileStorageConfig fileStorageConfig;
+
+    @Autowired
+    private FileVaultService fileVaultService;
 
     private volatile MinioClient workspaceObjectClient;
 
@@ -74,9 +81,8 @@ public class FileStorageService {
         String fileExtension = getFileExtension(originalFilename);
         String fileName = UUID.randomUUID().toString() + "." + fileExtension;
         
-        // 存储文件
         Path targetLocation = Paths.get(fileStorageConfig.getFullAvatarDir()).resolve(fileName);
-        Files.copy(file.getInputStream(), targetLocation, StandardCopyOption.REPLACE_EXISTING);
+        storeEncryptedFile(targetLocation, file);
         
         // 返回访问URL
         return "/api/files/avatar/" + fileName;
@@ -94,9 +100,8 @@ public class FileStorageService {
         String fileExtension = getFileExtension(originalFilename);
         String fileName = UUID.randomUUID().toString() + "." + fileExtension;
         
-        // 存储文件
         Path targetLocation = Paths.get(fileStorageConfig.getFullChatFileDir()).resolve(fileName);
-        Files.copy(file.getInputStream(), targetLocation, StandardCopyOption.REPLACE_EXISTING);
+        storeEncryptedFile(targetLocation, file);
         
         // 返回访问URL
         return "/api/files/chat/" + fileName;
@@ -113,7 +118,7 @@ public class FileStorageService {
         String fileName = UUID.randomUUID().toString() + "." + fileExtension;
 
         Path targetLocation = Paths.get(fileStorageConfig.getFullBackgroundDir()).resolve(fileName);
-        Files.copy(file.getInputStream(), targetLocation, StandardCopyOption.REPLACE_EXISTING);
+        storeEncryptedFile(targetLocation, file);
 
         return "/api/files/background/" + fileName;
     }
@@ -124,7 +129,7 @@ public class FileStorageService {
         String fileExtension = getFileExtension(safeName);
         String fileName = UUID.randomUUID().toString() + "." + (fileExtension.isBlank() ? "png" : fileExtension);
         Path targetLocation = Paths.get(fileStorageConfig.getFullChatFileDir()).resolve(fileName);
-        Files.write(targetLocation, bytes == null ? new byte[0] : bytes);
+        storeEncryptedBytes(targetLocation, bytes == null ? new byte[0] : bytes);
         return "/api/files/chat/" + fileName;
     }
 
@@ -134,7 +139,7 @@ public class FileStorageService {
         String fileExtension = getFileExtension(safeName);
         String fileName = UUID.randomUUID() + "." + (fileExtension.isBlank() ? "png" : fileExtension);
         Path targetLocation = Paths.get(fileStorageConfig.getFullImageGenDir()).resolve(fileName);
-        Files.write(targetLocation, bytes == null ? new byte[0] : bytes);
+        storeEncryptedBytes(targetLocation, bytes == null ? new byte[0] : bytes);
         return "/api/files/image-gen/" + fileName;
     }
 
@@ -159,6 +164,7 @@ public class FileStorageService {
         String fileName = UUID.randomUUID().toString() + (fileExtension.isBlank() ? "" : "." + fileExtension);
 
         if (!isLocalWorkspaceStorage()) {
+            log.warn("workspace S3 storage is NOT envelope-encrypted; SSE config is a separate hardening item");
             String objectKey = workspaceObjectKey(fileName);
             try (ByteArrayInputStream input = new ByteArrayInputStream(safeBytes)) {
                 workspaceClient().putObject(PutObjectArgs.builder()
@@ -183,7 +189,7 @@ public class FileStorageService {
         }
 
         Path targetLocation = Paths.get(fileStorageConfig.getFullWorkspaceFileDir()).resolve(fileName);
-        Files.write(targetLocation, safeBytes);
+        storeEncryptedBytes(targetLocation, safeBytes);
 
         return new StoredFile(
                 fileName,
@@ -203,15 +209,15 @@ public class FileStorageService {
             if (filePath.startsWith("/api/files/avatar/")) {
                 String fileName = filePath.substring("/api/files/avatar/".length());
                 Path file = Paths.get(fileStorageConfig.getFullAvatarDir()).resolve(fileName);
-                return Files.deleteIfExists(file);
+                return deleteLocalFile(file);
             } else if (filePath.startsWith("/api/files/chat/")) {
                 String fileName = filePath.substring("/api/files/chat/".length());
                 Path file = Paths.get(fileStorageConfig.getFullChatFileDir()).resolve(fileName);
-                return Files.deleteIfExists(file);
+                return deleteLocalFile(file);
             } else if (filePath.startsWith("/api/files/background/")) {
                 String fileName = filePath.substring("/api/files/background/".length());
                 Path file = Paths.get(fileStorageConfig.getFullBackgroundDir()).resolve(fileName);
-                return Files.deleteIfExists(file);
+                return deleteLocalFile(file);
             } else if (filePath.startsWith("workspace:")) {
                 String fileName = filePath.substring("workspace:".length());
                 return deleteWorkspaceFile(fileName);
@@ -235,7 +241,7 @@ public class FileStorageService {
             }
         }
         Path file = Paths.get(fileStorageConfig.getFullWorkspaceFileDir()).resolve(storageNameOrObjectKey);
-        return Files.deleteIfExists(file);
+        return deleteLocalFile(file);
     }
 
     /**
@@ -257,6 +263,10 @@ public class FileStorageService {
             throw new IllegalArgumentException("不支持的文件类型: " + type);
         }
         
+        if (fileVaultService.isEncrypted(filePath)) {
+            return fileVaultService.loadDecrypted(filePath);
+        }
+
         if (!Files.exists(filePath)) {
             throw new IOException("文件不存在: " + fileName);
         }
@@ -277,6 +287,9 @@ public class FileStorageService {
         }
 
         Path filePath = Paths.get(fileStorageConfig.getFullWorkspaceFileDir()).resolve(storageNameOrObjectKey);
+        if (fileVaultService.isEncrypted(filePath)) {
+            return fileVaultService.loadDecrypted(filePath);
+        }
         if (!Files.exists(filePath)) {
             throw new IOException("文件不存在: " + storageNameOrObjectKey);
         }
@@ -310,9 +323,34 @@ public class FileStorageService {
         try (var stream = Files.list(dir)) {
             return stream
                     .filter(Files::isRegularFile)
+                    .filter(path -> !path.getFileName().toString().endsWith(".meta.json"))
                     .map(path -> path.getFileName().toString())
+                    .map(name -> name.endsWith(".enc") ? name.substring(0, name.length() - ".enc".length()) : name)
                     .toList();
         }
+    }
+
+    private void storeEncryptedFile(Path basePath, MultipartFile file) throws IOException {
+        if (file.getSize() <= fileVaultService.getStreamingThreshold()) {
+            fileVaultService.storeEncrypted(basePath, file.getBytes());
+            return;
+        }
+        fileVaultService.storeEncryptedStream(basePath, file.getInputStream(), file.getSize());
+    }
+
+    private void storeEncryptedBytes(Path basePath, byte[] bytes) throws IOException {
+        byte[] safeBytes = bytes == null ? new byte[0] : bytes;
+        if (safeBytes.length <= fileVaultService.getStreamingThreshold()) {
+            fileVaultService.storeEncrypted(basePath, safeBytes);
+            return;
+        }
+        fileVaultService.storeEncryptedStream(basePath, new ByteArrayInputStream(safeBytes), safeBytes.length);
+    }
+
+    private boolean deleteLocalFile(Path basePath) throws IOException {
+        boolean deletedEncrypted = fileVaultService.deleteEncrypted(basePath);
+        boolean deletedPlain = Files.deleteIfExists(basePath);
+        return deletedEncrypted || deletedPlain;
     }
 
     /**

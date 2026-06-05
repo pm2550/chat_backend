@@ -87,6 +87,31 @@ public class FileStorageConfig {
     private int clamavTimeoutMs = 5000;
 
     /**
+     * Master secret for local upload envelope encryption. Required in prod.
+     */
+    private String masterKey = "";
+
+    /**
+     * One-shot legacy plaintext migration gate.
+     */
+    private boolean encryptLegacyOnStartup = false;
+
+    /**
+     * Emergency rollback gate for encrypted local uploads.
+     */
+    private boolean decryptLegacyOnStartup = false;
+
+    /**
+     * Directory names skipped by the legacy encryption runner.
+     */
+    private String legacyEncryptExcludeDirs = "app-releases";
+
+    /**
+     * Payloads above this threshold use stream encryption.
+     */
+    private long streamingThresholdBytes = 1024 * 1024;
+
+    /**
      * 最大文件大小（字节）- 默认10MB
      */
     private long maxFileSize = 10 * 1024 * 1024;
