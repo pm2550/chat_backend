@@ -467,6 +467,32 @@ class AgentContextBuilderTest {
         assertTrue(prompt.contains("TASK=ping"));
     }
 
+    @Test
+    @DisplayName("private (1-on-1) room uses direct-chat wording, not group room")
+    void privateRoomUsesDirectChatWording() {
+        room.setRoomType(ChatRoom.RoomType.PRIVATE);
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+
+        String prompt = builder.assembleSystemPrompt(builder.buildContext(task("hi")));
+
+        assertTrue(prompt.contains("one-on-one direct chat"));
+        assertFalse(prompt.contains("group room"));
+    }
+
+    @Test
+    @DisplayName("group room keeps group wording")
+    void groupRoomUsesGroupWording() {
+        room.setRoomType(ChatRoom.RoomType.GROUP);
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+
+        String prompt = builder.assembleSystemPrompt(builder.buildContext(task("hi")));
+
+        assertTrue(prompt.contains("group room"));
+        assertFalse(prompt.contains("one-on-one"));
+    }
+
     private AgentTask task(String prompt) {
         AgentTask task = new AgentTask();
         task.setId(77L);
