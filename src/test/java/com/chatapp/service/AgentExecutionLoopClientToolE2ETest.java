@@ -130,7 +130,7 @@ class AgentExecutionLoopClientToolE2ETest {
     private AgentContextBuilder.AgentContextEnvelope envelope() {
         return new AgentContextBuilder.AgentContextEnvelope(
                 new AgentContextBuilder.AgentIdentity("Agent", "", "base", null),
-                new AgentContextBuilder.RoomMetadata(true, "Room", "", 1, List.of("Alice"), null),
+                new AgentContextBuilder.RoomMetadata(true, "Room", "", 1, List.of("Alice"), null, true),
                 List.of(),
                 new AgentContextBuilder.InitiatorInfo("Alice", "member", false),
                 List.of("Be concise"),

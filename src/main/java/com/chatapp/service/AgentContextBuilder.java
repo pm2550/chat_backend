@@ -78,7 +78,8 @@ public class AgentContextBuilder {
 
         RoomMetadata roomMetadata = includeRoomMetadata
                 ? buildRoomMetadata(room, initiator)
-                : RoomMetadata.empty(room != null ? room.getName() : "");
+                : RoomMetadata.empty(room != null ? room.getName() : "",
+                        room == null || room.getRoomType() != ChatRoom.RoomType.PRIVATE);
         InitiatorInfo initiatorInfo = buildInitiatorInfo(room, initiator);
         AgentIdentity agentIdentity = new AgentIdentity(
                 botConfig != null ? defaultString(botConfig.getBotName(), "Agent") : "Agent",
@@ -151,10 +152,16 @@ public class AgentContextBuilder {
         } else {
             prompt.append("[ROLE: Agent identity]\n")
                     .append("You are ")
-                    .append(env.agentIdentity().displayName())
-                    .append(", a helpful agent inside the PM chat group room \"")
-                    .append(env.roomMetadata().name())
-                    .append("\".\n");
+                    .append(env.agentIdentity().displayName());
+            if (env.roomMetadata().group()) {
+                prompt.append(", a helpful agent inside the PM chat group room \"")
+                        .append(env.roomMetadata().name())
+                        .append("\".\n");
+            } else {
+                prompt.append(", a helpful assistant in a one-on-one direct chat with \"")
+                        .append(env.roomMetadata().name())
+                        .append("\".\n");
+            }
             if (hasText(env.agentIdentity().baseSystemPrompt())) {
                 prompt.append(env.agentIdentity().baseSystemPrompt()).append("\n");
             }
@@ -276,7 +283,8 @@ public class AgentContextBuilder {
                 firstText(room.getDescription(), room.getAnnouncement()),
                 Math.toIntExact(Math.min(memberCount, Integer.MAX_VALUE)),
                 names,
-                room.getAvatarUrl());
+                room.getAvatarUrl(),
+                room.getRoomType() != ChatRoom.RoomType.PRIVATE);
     }
 
     private InitiatorInfo buildInitiatorInfo(ChatRoom room, User initiator) {
@@ -614,9 +622,14 @@ public class AgentContextBuilder {
             String topic,
             int memberCount,
             List<String> memberNames,
-            String avatarUrl) {
+            String avatarUrl,
+            boolean group) {
         static RoomMetadata empty(String name) {
-            return new RoomMetadata(false, defaultString(name, ""), "", 0, List.of(), null);
+            return empty(name, true);
+        }
+
+        static RoomMetadata empty(String name, boolean group) {
+            return new RoomMetadata(false, defaultString(name, ""), "", 0, List.of(), null, group);
         }
     }
 
