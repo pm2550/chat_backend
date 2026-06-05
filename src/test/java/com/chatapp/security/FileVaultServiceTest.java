@@ -64,6 +64,29 @@ class FileVaultServiceTest {
     }
 
     @Test
+    void objectPayloadRoundTripSupportsMinioWorkspaceBranch() throws Exception {
+        FileVaultService vault = service();
+        byte[] plain = "workspace secret from bot".getBytes();
+
+        FileVaultService.EncryptedPayload payload = vault.encryptObject(plain);
+
+        assertThat(payload.ciphertext()).isNotEqualTo(plain);
+        assertThat(new String(payload.metaJson())).contains("wrapped_dk_b64");
+        assertThat(vault.decryptObject(payload.ciphertext(), payload.metaJson())).isEqualTo(plain);
+    }
+
+    @Test
+    void objectPayloadTamperFailsAuthentication() throws Exception {
+        FileVaultService vault = service();
+        FileVaultService.EncryptedPayload payload = vault.encryptObject("workspace secret".getBytes());
+        byte[] tampered = payload.ciphertext().clone();
+        tampered[0] ^= 0x42;
+
+        assertThatThrownBy(() -> vault.decryptObject(tampered, payload.metaJson()))
+                .isInstanceOf(IOException.class);
+    }
+
+    @Test
     void missingMetadataFailsClosed() throws Exception {
         FileVaultService vault = service();
         Path base = tempDir.resolve("missing.txt");

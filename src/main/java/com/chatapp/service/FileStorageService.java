@@ -10,6 +10,7 @@ import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
 import io.minio.Result;
+import io.minio.errors.ErrorResponseException;
 import io.minio.messages.Item;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -164,18 +165,17 @@ public class FileStorageService {
         String fileName = UUID.randomUUID().toString() + (fileExtension.isBlank() ? "" : "." + fileExtension);
 
         if (!isLocalWorkspaceStorage()) {
-            log.warn("workspace S3 storage is NOT envelope-encrypted; SSE config is a separate hardening item");
             String objectKey = workspaceObjectKey(fileName);
-            try (ByteArrayInputStream input = new ByteArrayInputStream(safeBytes)) {
-                workspaceClient().putObject(PutObjectArgs.builder()
-                        .bucket(workspaceBucket())
-                        .object(objectKey)
-                        .stream(input, safeBytes.length, -1)
-                        .contentType(contentType == null || contentType.isBlank()
-                                ? "application/octet-stream"
-                                : contentType)
-                        .build());
+            FileVaultService.EncryptedPayload payload = fileVaultService.encryptObject(safeBytes);
+            try {
+                putWorkspaceObject(objectKey, payload.ciphertext(), "application/octet-stream");
+                putWorkspaceObject(workspaceMetaObjectKey(objectKey), payload.metaJson(), "application/json");
             } catch (Exception e) {
+                try {
+                    removeWorkspaceObjectIfExists(objectKey);
+                } catch (IOException cleanupError) {
+                    log.warn("工作区对象存储密文清理失败: {}", objectKey, cleanupError);
+                }
                 throw new IOException("工作区对象存储写入失败", e);
             }
             return new StoredFile(
@@ -231,10 +231,8 @@ public class FileStorageService {
     public boolean deleteWorkspaceFile(String storageNameOrObjectKey) throws IOException {
         if (!isLocalWorkspaceStorage()) {
             try {
-                workspaceClient().removeObject(RemoveObjectArgs.builder()
-                        .bucket(workspaceBucket())
-                        .object(storageNameOrObjectKey)
-                        .build());
+                removeWorkspaceObjectIfExists(storageNameOrObjectKey);
+                removeWorkspaceObjectIfExists(workspaceMetaObjectKey(storageNameOrObjectKey));
                 return true;
             } catch (Exception e) {
                 throw new IOException("工作区对象存储删除失败", e);
@@ -276,13 +274,15 @@ public class FileStorageService {
 
     public byte[] getWorkspaceFile(String storageProvider, String storageNameOrObjectKey) throws IOException {
         if (isObjectWorkspaceProvider(storageProvider) || (storageProvider == null && !isLocalWorkspaceStorage())) {
-            try (var stream = workspaceClient().getObject(GetObjectArgs.builder()
-                    .bucket(workspaceBucket())
-                    .object(storageNameOrObjectKey)
-                    .build())) {
-                return stream.readAllBytes();
-            } catch (Exception e) {
-                throw new IOException("工作区对象不存在: " + storageNameOrObjectKey, e);
+            byte[] objectBytes = getWorkspaceObjectBytes(storageNameOrObjectKey);
+            try {
+                byte[] metaJson = getWorkspaceObjectBytes(workspaceMetaObjectKey(storageNameOrObjectKey));
+                return fileVaultService.decryptObject(objectBytes, metaJson);
+            } catch (IOException e) {
+                if (isNotFound(e)) {
+                    return objectBytes;
+                }
+                throw e;
             }
         }
 
@@ -307,7 +307,7 @@ public class FileStorageService {
                         .build());
                 for (Result<Item> result : results) {
                     Item item = result.get();
-                    if (!item.isDir()) {
+                    if (!item.isDir() && !item.objectName().endsWith(".meta.json")) {
                         names.add(item.objectName());
                     }
                 }
@@ -330,6 +330,30 @@ public class FileStorageService {
         }
     }
 
+    public boolean encryptLegacyWorkspaceObjectIfPlaintext(String storageProvider, String objectKey) throws IOException {
+        if (!isObjectWorkspaceProvider(storageProvider) || objectKey == null || objectKey.isBlank()) {
+            return false;
+        }
+        try {
+            getWorkspaceObjectBytes(workspaceMetaObjectKey(objectKey));
+            return false;
+        } catch (IOException e) {
+            if (!isNotFound(e)) {
+                throw e;
+            }
+        }
+
+        byte[] plaintext = getWorkspaceObjectBytes(objectKey);
+        FileVaultService.EncryptedPayload payload = fileVaultService.encryptObject(plaintext);
+        try {
+            putWorkspaceObject(objectKey, payload.ciphertext(), "application/octet-stream");
+            putWorkspaceObject(workspaceMetaObjectKey(objectKey), payload.metaJson(), "application/json");
+            return true;
+        } catch (Exception e) {
+            throw new IOException("工作区对象存储 legacy 加密失败: " + objectKey, e);
+        }
+    }
+
     private void storeEncryptedFile(Path basePath, MultipartFile file) throws IOException {
         if (file.getSize() <= fileVaultService.getStreamingThreshold()) {
             fileVaultService.storeEncrypted(basePath, file.getBytes());
@@ -345,6 +369,44 @@ public class FileStorageService {
             return;
         }
         fileVaultService.storeEncryptedStream(basePath, new ByteArrayInputStream(safeBytes), safeBytes.length);
+    }
+
+    private void putWorkspaceObject(String objectKey, byte[] bytes, String contentType) throws Exception {
+        byte[] safeBytes = bytes == null ? new byte[0] : bytes;
+        try (ByteArrayInputStream input = new ByteArrayInputStream(safeBytes)) {
+            workspaceClient().putObject(PutObjectArgs.builder()
+                    .bucket(workspaceBucket())
+                    .object(objectKey)
+                    .stream(input, safeBytes.length, -1)
+                    .contentType(contentType)
+                    .build());
+        }
+    }
+
+    private byte[] getWorkspaceObjectBytes(String objectKey) throws IOException {
+        try (var stream = workspaceClient().getObject(GetObjectArgs.builder()
+                .bucket(workspaceBucket())
+                .object(objectKey)
+                .build())) {
+            return stream.readAllBytes();
+        } catch (Exception e) {
+            throw new IOException("工作区对象不存在: " + objectKey, e);
+        }
+    }
+
+    private void removeWorkspaceObjectIfExists(String objectKey) throws IOException {
+        try {
+            workspaceClient().removeObject(RemoveObjectArgs.builder()
+                    .bucket(workspaceBucket())
+                    .object(objectKey)
+                    .build());
+        } catch (ErrorResponseException e) {
+            if (!isNoSuchKey(e)) {
+                throw new IOException("工作区对象删除失败: " + objectKey, e);
+            }
+        } catch (Exception e) {
+            throw new IOException("工作区对象删除失败: " + objectKey, e);
+        }
     }
 
     private boolean deleteLocalFile(Path basePath) throws IOException {
@@ -489,6 +551,20 @@ public class FileStorageService {
 
     private String workspaceObjectKey(String fileName) {
         return workspacePrefix() + fileName;
+    }
+
+    private String workspaceMetaObjectKey(String objectKey) {
+        return objectKey + ".meta.json";
+    }
+
+    private boolean isNotFound(IOException e) {
+        Throwable cause = e.getCause();
+        return cause instanceof ErrorResponseException error && isNoSuchKey(error);
+    }
+
+    private boolean isNoSuchKey(ErrorResponseException error) {
+        String code = error.errorResponse() == null ? "" : error.errorResponse().code();
+        return "NoSuchKey".equals(code) || "NoSuchBucket".equals(code);
     }
 
     private void ensureWorkspaceBucket() throws Exception {

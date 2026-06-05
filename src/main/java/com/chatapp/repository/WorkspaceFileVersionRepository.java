@@ -18,4 +18,12 @@ public interface WorkspaceFileVersionRepository extends JpaRepository<WorkspaceF
 
     @Query("select v.storageName from WorkspaceFileVersion v where v.storageName is not null")
     Set<String> findAllStorageNames();
+
+    @Query("""
+            select v from WorkspaceFileVersion v
+            where upper(v.storageProvider) in ('MINIO', 'S3')
+              and v.objectKey is not null
+              and v.objectKey <> ''
+            """)
+    List<WorkspaceFileVersion> findObjectStoredVersions();
 }

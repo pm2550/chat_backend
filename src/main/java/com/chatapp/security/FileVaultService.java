@@ -75,14 +75,8 @@ public class FileVaultService {
     }
 
     public void storeEncrypted(Path basePath, byte[] plaintext) throws IOException {
-        byte[] safePlaintext = plaintext == null ? new byte[0] : plaintext;
-        byte[] dk = randomBytes(DK_BYTES);
-        byte[] iv = randomBytes(IV_BYTES);
-        byte[] wrapIv = randomBytes(IV_BYTES);
-        byte[] cipherText = crypt(Cipher.ENCRYPT_MODE, new SecretKeySpec(dk, "AES"), iv, safePlaintext);
-        byte[] wrappedDk = crypt(Cipher.ENCRYPT_MODE, masterKey, wrapIv, dk);
-        VaultMeta meta = VaultMeta.create(iv, wrapIv, wrappedDk, safePlaintext.length);
-        writeEncryptedFiles(basePath, cipherText, meta);
+        EncryptedPayload payload = encryptObject(plaintext);
+        writeEncryptedFiles(basePath, payload.ciphertext(), readMeta(payload.metaJson()));
     }
 
     public void storeEncryptedStream(Path basePath, InputStream plaintextStream, long expectedSize)
@@ -119,6 +113,34 @@ public class FileVaultService {
     public byte[] loadDecrypted(Path basePath) throws IOException {
         try (InputStream in = loadDecryptedStream(basePath)) {
             return in.readAllBytes();
+        }
+    }
+
+    public EncryptedPayload encryptObject(byte[] plaintext) throws IOException {
+        byte[] safePlaintext = plaintext == null ? new byte[0] : plaintext;
+        byte[] dk = randomBytes(DK_BYTES);
+        byte[] iv = randomBytes(IV_BYTES);
+        byte[] wrapIv = randomBytes(IV_BYTES);
+        byte[] cipherText = crypt(Cipher.ENCRYPT_MODE, new SecretKeySpec(dk, "AES"), iv, safePlaintext);
+        byte[] wrappedDk = crypt(Cipher.ENCRYPT_MODE, masterKey, wrapIv, dk);
+        VaultMeta meta = VaultMeta.create(iv, wrapIv, wrappedDk, safePlaintext.length);
+        return new EncryptedPayload(cipherText, mapper.writeValueAsBytes(meta));
+    }
+
+    public byte[] decryptObject(byte[] ciphertext, byte[] metaJson) throws IOException {
+        if (ciphertext == null || metaJson == null || metaJson.length == 0) {
+            throw new IOException("加密对象缺少密文或元数据");
+        }
+        try {
+            VaultMeta meta = readMeta(metaJson);
+            byte[] dk = crypt(
+                    Cipher.DECRYPT_MODE,
+                    masterKey,
+                    decode(meta.wrapIvB64()),
+                    decode(meta.wrappedDkB64()));
+            return crypt(Cipher.DECRYPT_MODE, new SecretKeySpec(dk, "AES"), decode(meta.ivB64()), ciphertext);
+        } catch (Exception e) {
+            throw asIOException("对象解密失败", e);
         }
     }
 
@@ -179,6 +201,10 @@ public class FileVaultService {
             cleanupTmp(cipherTmp, metaTmp);
             throw asIOException("文件加密写入失败", e);
         }
+    }
+
+    private VaultMeta readMeta(byte[] metaJson) throws IOException {
+        return mapper.readValue(metaJson, VaultMeta.class);
     }
 
     private void ensureNotEncrypted(Path basePath) throws IOException {
@@ -256,5 +282,8 @@ public class FileVaultService {
                     sizePlain,
                     Instant.now().toString());
         }
+    }
+
+    public record EncryptedPayload(byte[] ciphertext, byte[] metaJson) {
     }
 }

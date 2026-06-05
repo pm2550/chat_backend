@@ -1,7 +1,10 @@
 package com.chatapp.admin;
 
 import com.chatapp.config.FileStorageConfig;
+import com.chatapp.repository.WorkspaceFileRepository;
+import com.chatapp.repository.WorkspaceFileVersionRepository;
 import com.chatapp.security.FileVaultService;
+import com.chatapp.service.FileStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -22,10 +25,21 @@ public class EncryptLegacyUploadsRunner implements ApplicationRunner {
 
     private final FileStorageConfig config;
     private final FileVaultService fileVaultService;
+    private final FileStorageService fileStorageService;
+    private final WorkspaceFileRepository workspaceFileRepository;
+    private final WorkspaceFileVersionRepository workspaceFileVersionRepository;
 
-    public EncryptLegacyUploadsRunner(FileStorageConfig config, FileVaultService fileVaultService) {
+    public EncryptLegacyUploadsRunner(
+            FileStorageConfig config,
+            FileVaultService fileVaultService,
+            FileStorageService fileStorageService,
+            WorkspaceFileRepository workspaceFileRepository,
+            WorkspaceFileVersionRepository workspaceFileVersionRepository) {
         this.config = config;
         this.fileVaultService = fileVaultService;
+        this.fileStorageService = fileStorageService;
+        this.workspaceFileRepository = workspaceFileRepository;
+        this.workspaceFileVersionRepository = workspaceFileVersionRepository;
     }
 
     @Override
@@ -80,6 +94,45 @@ public class EncryptLegacyUploadsRunner implements ApplicationRunner {
         }
         log.info("ENCRYPT_LEGACY done: by-dir {}; total migrated={} skipped={} errors={} excluded={}",
                 byDir, summary.migrated, summary.skipped, summary.errors, summary.excluded);
+        migrateWorkspaceObjects(summary, byDir);
+        log.info("ENCRYPT_LEGACY workspace objects done: by-dir {}; object migrated={} skipped={} errors={}",
+                byDir, summary.objectMigrated, summary.objectSkipped, summary.objectErrors);
+    }
+
+    private void migrateWorkspaceObjects(Summary summary, Map<String, Integer> byDir) {
+        workspaceFileRepository.findObjectStoredFiles().forEach(file -> migrateWorkspaceObject(
+                summary,
+                byDir,
+                file.getStorageProvider(),
+                file.getObjectKey(),
+                "workspace_files#" + file.getId()));
+        workspaceFileVersionRepository.findObjectStoredVersions().forEach(version -> migrateWorkspaceObject(
+                summary,
+                byDir,
+                version.getStorageProvider(),
+                version.getObjectKey(),
+                "workspace_file_versions#" + version.getId()));
+    }
+
+    private void migrateWorkspaceObject(
+            Summary summary,
+            Map<String, Integer> byDir,
+            String provider,
+            String objectKey,
+            String source) {
+        try {
+            boolean migrated = fileStorageService.encryptLegacyWorkspaceObjectIfPlaintext(provider, objectKey);
+            if (migrated) {
+                summary.objectMigrated++;
+                byDir.merge("workspace-object", 1, Integer::sum);
+                log.info("ENCRYPT_LEGACY MIGRATED object {} source={}", objectKey, source);
+            } else {
+                summary.objectSkipped++;
+            }
+        } catch (Exception e) {
+            summary.objectErrors++;
+            log.error("ENCRYPT_LEGACY ERROR object {} source={}", objectKey, source, e);
+        }
     }
 
     private Set<String> excludedDirs() {
@@ -112,5 +165,8 @@ public class EncryptLegacyUploadsRunner implements ApplicationRunner {
         int skipped;
         int errors;
         int excluded;
+        int objectMigrated;
+        int objectSkipped;
+        int objectErrors;
     }
 }

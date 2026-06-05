@@ -28,4 +28,12 @@ public interface WorkspaceFileRepository extends JpaRepository<WorkspaceFile, Lo
 
     @Query("select f.currentStorageName from WorkspaceFile f where f.currentStorageName is not null")
     Set<String> findAllCurrentStorageNames();
+
+    @Query("""
+            select f from WorkspaceFile f
+            where upper(f.storageProvider) in ('MINIO', 'S3')
+              and f.objectKey is not null
+              and f.objectKey <> ''
+            """)
+    List<WorkspaceFile> findObjectStoredFiles();
 }
