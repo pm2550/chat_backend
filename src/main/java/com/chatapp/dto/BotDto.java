@@ -2,6 +2,7 @@ package com.chatapp.dto;
 
 import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoomBot;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
@@ -104,12 +105,17 @@ public class BotDto {
     @NoArgsConstructor
     public static class ChatMessage {
         private String role; // "system", "user", "assistant", "tool"
-        private String content;
+        private Object content;
         private String toolCallId;
         private String name;
         private List<ToolCall> toolCalls;
 
         public ChatMessage(String role, String content) {
+            this.role = role;
+            this.content = content;
+        }
+
+        public ChatMessage(String role, Object content) {
             this.role = role;
             this.content = content;
         }
@@ -121,6 +127,110 @@ public class BotDto {
             this.name = name;
             this.toolCalls = toolCalls;
         }
+
+        public ChatMessage(String role, Object content, String toolCallId, String name, List<ToolCall> toolCalls) {
+            this.role = role;
+            this.content = content;
+            this.toolCallId = toolCallId;
+            this.name = name;
+            this.toolCalls = toolCalls;
+        }
+
+        public static ChatMessage userWithImages(String text, List<ImageAttachment> attachments) {
+            if (attachments == null || attachments.isEmpty()) {
+                return new ChatMessage("user", text);
+            }
+            java.util.ArrayList<ContentPart> parts = new java.util.ArrayList<>();
+            if (text != null && !text.isBlank()) {
+                parts.add(ContentPart.text(text));
+            }
+            for (ImageAttachment attachment : attachments) {
+                if (attachment != null && attachment.dataUrl() != null && !attachment.dataUrl().isBlank()) {
+                    parts.add(ContentPart.imageUrl(attachment.dataUrl()));
+                }
+            }
+            return new ChatMessage("user", parts.isEmpty() ? text : parts);
+        }
+
+        public String textContent() {
+            if (content == null) {
+                return "";
+            }
+            if (content instanceof String text) {
+                return text;
+            }
+            if (content instanceof List<?> parts) {
+                StringBuilder text = new StringBuilder();
+                for (Object part : parts) {
+                    if (part instanceof ContentPart contentPart) {
+                        if ("text".equals(contentPart.getType()) && contentPart.getText() != null) {
+                            if (!text.isEmpty()) text.append(' ');
+                            text.append(contentPart.getText());
+                        } else if ("image_url".equals(contentPart.getType())) {
+                            if (!text.isEmpty()) text.append(' ');
+                            text.append("[image]");
+                        }
+                    }
+                }
+                return text.toString();
+            }
+            return String.valueOf(content);
+        }
+
+        public boolean hasImageContent() {
+            if (!(content instanceof List<?> parts)) {
+                return false;
+            }
+            for (Object part : parts) {
+                if (part instanceof ContentPart contentPart && "image_url".equals(contentPart.getType())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public List<String> imageDataUrls() {
+            if (!(content instanceof List<?> parts)) {
+                return List.of();
+            }
+            java.util.ArrayList<String> urls = new java.util.ArrayList<>();
+            for (Object part : parts) {
+                if (part instanceof ContentPart contentPart
+                        && contentPart.getImageUrl() != null
+                        && contentPart.getImageUrl().getUrl() != null) {
+                    urls.add(contentPart.getImageUrl().getUrl());
+                }
+            }
+            return urls;
+        }
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ContentPart {
+        private String type;
+        private String text;
+        @JsonProperty("image_url")
+        private ImageUrlPart imageUrl;
+
+        public static ContentPart text(String text) {
+            return new ContentPart("text", text, null);
+        }
+
+        public static ContentPart imageUrl(String url) {
+            return new ContentPart("image_url", null, new ImageUrlPart(url));
+        }
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ImageUrlPart {
+        private String url;
+    }
+
+    public record ImageAttachment(String fileName, String mediaType, String dataUrl) {
     }
 
     @Data

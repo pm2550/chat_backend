@@ -393,12 +393,12 @@ class BotServiceTest {
         verify(llmService).chat(eq(bot), captor.capture());
         List<BotDto.ChatMessage> messages = captor.getValue();
         assertEquals("system", messages.get(0).getRole());
-        assertTrue(messages.get(0).getContent().contains("Character system"));
-        assertTrue(messages.get(0).getContent().contains("Persona: fox courier"));
-        assertTrue(messages.get(0).getContent().contains("Lore: parcels are sacred"));
+        assertTrue(messages.get(0).textContent().contains("Character system"));
+        assertTrue(messages.get(0).textContent().contains("Persona: fox courier"));
+        assertTrue(messages.get(0).textContent().contains("Lore: parcels are sacred"));
         assertEquals("user", messages.get(1).getRole());
         assertEquals("system", messages.get(2).getRole());
-        assertEquals("Post history instruction", messages.get(2).getContent());
+        assertEquals("Post history instruction", messages.get(2).textContent());
     }
 
     @Test

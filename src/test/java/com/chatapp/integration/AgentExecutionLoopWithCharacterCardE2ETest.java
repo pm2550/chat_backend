@@ -101,10 +101,10 @@ class AgentExecutionLoopWithCharacterCardE2ETest {
         assertFalse(messages.isEmpty());
         BotDto.ChatMessage system = messages.get(0);
         assertEquals("system", system.getRole());
-        assertTrue(system.getContent().contains("Moonlit archivist description"));
-        assertTrue(system.getContent().contains("careful, warm, and exacting"));
-        assertTrue(system.getContent().contains("Rain library scenario"));
-        assertTrue(system.getContent().contains("Lore: aurora parcels must be catalogued"));
+        assertTrue(system.textContent().contains("Moonlit archivist description"));
+        assertTrue(system.textContent().contains("careful, warm, and exacting"));
+        assertTrue(system.textContent().contains("Rain library scenario"));
+        assertTrue(system.textContent().contains("Lore: aurora parcels must be catalogued"));
 
         int postHistoryIndex = indexOfContent(messages,
                 "After reading history, answer in the archivist voice.");
@@ -138,8 +138,8 @@ class AgentExecutionLoopWithCharacterCardE2ETest {
                 .count();
         assertEquals(1, systemMessages, "only the assembled system prompt should be present");
         assertFalse(messages.stream()
-                .anyMatch(message -> message.getContent() != null
-                        && message.getContent().contains("After reading history")));
+                .anyMatch(message -> !message.textContent().isBlank()
+                        && message.textContent().contains("After reading history")));
     }
 
     private Fixture createFixture(String label, boolean includePostHistory) {
@@ -224,8 +224,8 @@ class AgentExecutionLoopWithCharacterCardE2ETest {
 
     private int indexOfContent(List<BotDto.ChatMessage> messages, String content) {
         for (int i = 0; i < messages.size(); i++) {
-            if (messages.get(i).getContent() != null
-                    && messages.get(i).getContent().contains(content)) {
+            if (!messages.get(i).textContent().isBlank()
+                    && messages.get(i).textContent().contains(content)) {
                 return i;
             }
         }
@@ -235,7 +235,7 @@ class AgentExecutionLoopWithCharacterCardE2ETest {
     private int indexOfRoleContent(List<BotDto.ChatMessage> messages, String role, String content) {
         for (int i = 0; i < messages.size(); i++) {
             BotDto.ChatMessage message = messages.get(i);
-            if (role.equals(message.getRole()) && content.equals(message.getContent())) {
+            if (role.equals(message.getRole()) && content.equals(message.textContent())) {
                 return i;
             }
         }

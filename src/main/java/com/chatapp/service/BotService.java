@@ -57,6 +57,7 @@ public class BotService {
     private final BotRateLimitService botRateLimitService;
     private final RichContentSanitizer richContentSanitizer;
     private final BotWebhookService botWebhookService;
+    private final AgentVisionAttachmentService agentVisionAttachmentService;
     // Lazy to break the cycle: AgentExecutionLoop -> AgentToolDispatcher ->
     // RawWebSocketHandler -> BotService.
     private final ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
@@ -262,6 +263,12 @@ public class BotService {
 
     @Transactional
     public List<Message> processMessageForBots(Long chatRoomId, String messageContent, Long senderId) {
+        return processMessageForBots(chatRoomId, messageContent, senderId, null);
+    }
+
+    @Transactional
+    public List<Message> processMessageForBots(Long chatRoomId, String messageContent, Long senderId, Message sourceMessage) {
+        String safeContent = messageContent != null ? messageContent : "";
         List<Message> botMessages = new ArrayList<>();
         List<ChatRoomBot> bots = chatRoomBotRepository.findActiveBotsWithConfig(chatRoomId);
         if (bots.isEmpty()) return botMessages;
@@ -273,14 +280,15 @@ public class BotService {
             String displayName = roomDisplayName(crb);
             boolean shouldRespond = switch (crb.getTriggerMode()) {
                 case ALL -> true;
-                case MENTION -> messageContent.contains("@" + displayName)
-                        || messageContent.contains("@" + crb.getBotConfig().getBotName());
+                case MENTION -> safeContent.contains("@" + displayName)
+                        || safeContent.contains("@" + crb.getBotConfig().getBotName());
                 case KEYWORD -> {
                     if (crb.getTriggerKeywords() == null) yield false;
                     String[] keywords = crb.getTriggerKeywords().split(",");
                     boolean matched = false;
                     for (String kw : keywords) {
-                        if (messageContent.contains(kw.trim())) {
+                        String keyword = kw.trim();
+                        if (!keyword.isBlank() && safeContent.contains(keyword)) {
                             matched = true;
                             break;
                         }
@@ -295,7 +303,7 @@ public class BotService {
                     // External bridge: if this bot has an active webhook subscription, forward
                     // the event to the external bot (it replies via the inbound gateway) and
                     // skip the in-app LLM entirely.
-                    if (botWebhookService.dispatchIfSubscribed(config, chatRoomId, messageContent, senderId)) {
+                    if (botWebhookService.dispatchIfSubscribed(config, chatRoomId, safeContent, senderId)) {
                         log.info("机器人 {} 已转发到外部 webhook (聊天室 {})", config.getBotName(), chatRoomId);
                         continue;
                     }
@@ -303,10 +311,10 @@ public class BotService {
                     if (agentToolRegistry.hasExplicitToolWhitelist(config)) {
                         // Tool-enabled bots run the full multi-turn agent loop
                         // (room history + tools), not a single LLM call.
-                        replyContent = respondViaAgentLoop(chatRoomId, crb, messageContent, senderId);
+                        replyContent = respondViaAgentLoop(chatRoomId, crb, safeContent, senderId, sourceMessage);
                     } else {
                         // Persona / tool-less bots keep the lightweight one-shot path.
-                        List<BotDto.ChatMessage> chatMessages = buildContext(crb, messageContent);
+                        List<BotDto.ChatMessage> chatMessages = buildContext(crb, safeContent, sourceMessage);
                         BotDto.LLMResponse response = llmService.chat(config, chatMessages);
                         replyContent = response.getContent();
                         log.info("机器人 {} 在聊天室 {} 回复了消息 (tokens: {})",
@@ -332,7 +340,7 @@ public class BotService {
      * transient {@link AgentTask} for audit/observability. Returns the final answer,
      * or {@code null} when the per-(room,bot) rate limit is exceeded.
      */
-    private String respondViaAgentLoop(Long chatRoomId, ChatRoomBot crb, String messageContent, Long senderId) {
+    private String respondViaAgentLoop(Long chatRoomId, ChatRoomBot crb, String messageContent, Long senderId, Message sourceMessage) {
         BotConfig config = crb.getBotConfig();
         if (!botRateLimitService.tryAcquireAgentRun(chatRoomId, config.getId())) {
             log.warn("机器人 {} 在聊天室 {} 的 agent 运行被限流，跳过本次回复", config.getBotName(), chatRoomId);
@@ -354,7 +362,13 @@ public class BotService {
         task.setChatRoom(chatRoom);
         task.setRequestedBy(requester);
         task.setBotConfig(config);
-        task.setPrompt(cleanMentions(messageContent, crb));
+        String cleanPrompt = cleanMentions(messageContent, crb);
+        AgentVisionAttachmentService.ImageContext sourceImage = resolveVisionImage(sourceMessage);
+        if (sourceImage.annotation() != null && !sourceImage.annotation().isBlank()) {
+            cleanPrompt = cleanPrompt + "\n" + sourceImage.annotation();
+        }
+        task.setPrompt(cleanPrompt);
+        task.setImageAttachments(sourceImage.attachments());
         task.setStatus(AgentTask.Status.RUNNING);
         task = agentTaskRepository.save(task);
 
@@ -384,14 +398,14 @@ public class BotService {
 
     private String cleanMentions(String userMessage, ChatRoomBot crb) {
         BotConfig config = crb.getBotConfig();
-        String cleaned = userMessage
+        String cleaned = (userMessage != null ? userMessage : "")
                 .replaceAll("@" + Pattern.quote(config.getBotName()) + "\\s*", "")
                 .replaceAll("@" + Pattern.quote(roomDisplayName(crb)) + "\\s*", "")
                 .trim();
         return cleaned.isEmpty() ? "你好" : cleaned;
     }
 
-    private List<BotDto.ChatMessage> buildContext(ChatRoomBot crb, String userMessage) {
+    private List<BotDto.ChatMessage> buildContext(ChatRoomBot crb, String userMessage, Message sourceMessage) {
         BotConfig config = crb.getBotConfig();
         List<BotDto.ChatMessage> messages = new ArrayList<>();
 
@@ -408,15 +422,28 @@ public class BotService {
             messages.add(new BotDto.ChatMessage("system", systemPrompt));
         }
 
-        // Clean @mention from message
+        // Clean @mention from message and attach current image bytes, if present.
         String cleanMessage = cleanMentions(userMessage, crb);
-        messages.add(new BotDto.ChatMessage("user", cleanMessage));
+        AgentVisionAttachmentService.ImageContext sourceImage = resolveVisionImage(sourceMessage);
+        if (sourceImage.annotation() != null && !sourceImage.annotation().isBlank()) {
+            cleanMessage = cleanMessage + "\n" + sourceImage.annotation();
+        }
+        messages.add(BotDto.ChatMessage.userWithImages(cleanMessage, sourceImage.attachments()));
         if (config.getCharacterPostHistoryInstructions() != null
                 && !config.getCharacterPostHistoryInstructions().isBlank()) {
             messages.add(new BotDto.ChatMessage("system", config.getCharacterPostHistoryInstructions().trim()));
         }
 
         return messages;
+    }
+
+
+    private AgentVisionAttachmentService.ImageContext resolveVisionImage(Message sourceMessage) {
+        if (agentVisionAttachmentService == null) {
+            return AgentVisionAttachmentService.ImageContext.empty();
+        }
+        AgentVisionAttachmentService.ImageContext context = agentVisionAttachmentService.resolve(sourceMessage, true);
+        return context != null ? context : AgentVisionAttachmentService.ImageContext.empty();
     }
 
     private Message saveBotMessage(Long chatRoomId, ChatRoomBot crb, String content) {

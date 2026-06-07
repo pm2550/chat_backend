@@ -36,7 +36,8 @@ public class AgentExecutionLoop {
         List<Tool> availableTools = toolRegistry.listToolsForBot(bot);
         List<BotDto.ChatMessage> messages = new ArrayList<>();
         messages.add(new BotDto.ChatMessage("system", agentContextBuilder.assembleSystemPrompt(envelope)));
-        messages.add(new BotDto.ChatMessage("user", task.getPrompt()));
+        appendHistoricalImageMessages(messages, envelope);
+        messages.add(BotDto.ChatMessage.userWithImages(task.getPrompt(), task.getImageAttachments()));
 
         ToolContext toolContext = new ToolContext(
                 task.getChatRoom().getId(),
@@ -153,6 +154,19 @@ public class AgentExecutionLoop {
         }
     }
 
+    private void appendHistoricalImageMessages(
+            List<BotDto.ChatMessage> messages,
+            AgentContextBuilder.AgentContextEnvelope envelope) {
+        for (AgentContextBuilder.HistoricalMessage historical : envelope.conversationHistory()) {
+            if (historical.imageAttachments() == null || historical.imageAttachments().isEmpty()) {
+                continue;
+            }
+            String text = "Earlier image from " + historical.senderName()
+                    + " at " + historical.timestamp() + ": " + historical.content();
+            messages.add(BotDto.ChatMessage.userWithImages(text, historical.imageAttachments()));
+        }
+    }
+
     private List<BotDto.ChatMessage> messagesForLlm(
             List<BotDto.ChatMessage> messages,
             AgentContextBuilder.AgentContextEnvelope envelope) {
@@ -200,7 +214,7 @@ public class AgentExecutionLoop {
     private int estimateMessages(List<BotDto.ChatMessage> messages) {
         int total = 0;
         for (BotDto.ChatMessage message : messages) {
-            total += agentContextBuilder.estimateTokens(message.getContent());
+            total += agentContextBuilder.estimateTokens(message.textContent());
         }
         return total;
     }

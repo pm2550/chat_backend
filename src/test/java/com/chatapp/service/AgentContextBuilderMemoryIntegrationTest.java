@@ -146,7 +146,7 @@ class AgentContextBuilderMemoryIntegrationTest {
                 .filter(message -> "system".equals(message.getRole()))
                 .findFirst()
                 .orElseThrow()
-                .getContent();
+                .textContent();
 
         assertTrue(systemPrompt.contains("[MEMORY]"));
         assertTrue(systemPrompt.contains("Shared room fact"));

@@ -1,5 +1,6 @@
 package com.chatapp.service;
 
+import com.chatapp.dto.BotDto;
 import com.chatapp.entity.AgentTask;
 import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
@@ -56,6 +57,7 @@ public class AgentContextBuilder {
     private final MessageRepository messageRepository;
     private final ChatRoomRepository chatRoomRepository;
     private final MemoryService memoryService;
+    private final AgentVisionAttachmentService agentVisionAttachmentService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AgentContextEnvelope buildContext(AgentTask task) {
@@ -311,14 +313,40 @@ public class AgentContextBuilder {
         }
         List<Message> recent = new ArrayList<>(messageRepository.findRecentMessages(room.getId(), historyLimit));
         Collections.reverse(recent);
-        return recent.stream()
-                .filter(message -> message.getContent() != null && !message.getContent().isBlank())
-                .map(message -> new HistoricalMessage(
-                        displayName(message.getSender(), null),
-                        message.getMessageType() != null ? message.getMessageType().name() : "TEXT",
-                        message.getContent(),
-                        formatTimestamp(message.getCreatedAt())))
-                .toList();
+
+        boolean[] includeBinaryImage = new boolean[recent.size()];
+        int imagesIncluded = 0;
+        for (int i = recent.size() - 1; i >= 0; i--) {
+            Message message = recent.get(i);
+            if (agentVisionAttachmentService.isImageMessage(message)
+                    && imagesIncluded < AgentVisionAttachmentService.MAX_HISTORY_IMAGES) {
+                includeBinaryImage[i] = true;
+                imagesIncluded++;
+            }
+        }
+
+        List<HistoricalMessage> history = new ArrayList<>();
+        for (int i = 0; i < recent.size(); i++) {
+            Message message = recent.get(i);
+            boolean isImage = agentVisionAttachmentService.isImageMessage(message);
+            String content = message.getContent() != null ? message.getContent() : "";
+            AgentVisionAttachmentService.ImageContext imageContext = isImage
+                    ? agentVisionAttachmentService.resolve(message, includeBinaryImage[i])
+                    : AgentVisionAttachmentService.ImageContext.empty();
+            if (imageContext.annotation() != null && !imageContext.annotation().isBlank()) {
+                content = content.isBlank() ? imageContext.annotation() : content + " " + imageContext.annotation();
+            }
+            if (content.isBlank() && imageContext.attachments().isEmpty()) {
+                continue;
+            }
+            history.add(new HistoricalMessage(
+                    displayName(message.getSender(), null),
+                    message.getMessageType() != null ? message.getMessageType().name() : "TEXT",
+                    content,
+                    formatTimestamp(message.getCreatedAt()),
+                    imageContext.attachments()));
+        }
+        return history;
     }
 
     private static final Pattern TEMPLATE_TOKEN = Pattern.compile("\\{\\{(\\w+)\\}\\}");
@@ -637,7 +665,11 @@ public class AgentContextBuilder {
             String senderName,
             String messageType,
             String content,
-            String timestamp) {
+            String timestamp,
+            List<BotDto.ImageAttachment> imageAttachments) {
+        public HistoricalMessage(String senderName, String messageType, String content, String timestamp) {
+            this(senderName, messageType, content, timestamp, List.of());
+        }
     }
 
     public record InitiatorInfo(

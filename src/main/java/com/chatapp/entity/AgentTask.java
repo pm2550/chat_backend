@@ -1,5 +1,6 @@
 package com.chatapp.entity;
 
+import com.chatapp.dto.BotDto;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -8,6 +9,8 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Agent 工作流任务。
@@ -41,6 +44,9 @@ public class AgentTask {
 
     @Column(columnDefinition = "TEXT", nullable = false)
     private String prompt;
+
+    @Transient
+    private List<BotDto.ImageAttachment> imageAttachments = new ArrayList<>();
 
     @Column(columnDefinition = "TEXT")
     private String result;

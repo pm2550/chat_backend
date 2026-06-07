@@ -98,7 +98,7 @@ public class MessageIntegrationTest {
             String userPrompt = messages.stream()
                     .filter(message -> "user".equals(message.getRole()))
                     .reduce((first, second) -> second)
-                    .map(BotDto.ChatMessage::getContent)
+                    .map(BotDto.ChatMessage::textContent)
                     .orElse("任务");
             return new BotDto.LLMResponse("任务已接收: " + userPrompt, 1, "test-model");
         });
@@ -107,7 +107,7 @@ public class MessageIntegrationTest {
             String userPrompt = messages.stream()
                     .filter(message -> "user".equals(message.getRole()))
                     .reduce((first, second) -> second)
-                    .map(BotDto.ChatMessage::getContent)
+                    .map(BotDto.ChatMessage::textContent)
                     .orElse("任务");
             return new BotDto.LLMResponse("任务已接收: " + userPrompt, 1, "test-model");
         });
@@ -641,7 +641,7 @@ public class MessageIntegrationTest {
 
         ArgumentCaptor<List<BotDto.ChatMessage>> messagesCaptor = ArgumentCaptor.forClass(List.class);
         verify(llmService).chat(any(BotConfig.class), messagesCaptor.capture(), anyList());
-        String systemPrompt = messagesCaptor.getValue().get(0).getContent();
+        String systemPrompt = messagesCaptor.getValue().get(0).textContent();
 
         assertTrue(systemPrompt.contains(roomName));
         assertTrue(systemPrompt.contains("[ROOM CONTEXT]"));
@@ -676,7 +676,7 @@ public class MessageIntegrationTest {
 
         ArgumentCaptor<List<BotDto.ChatMessage>> messagesCaptor = ArgumentCaptor.forClass(List.class);
         verify(llmService).chat(any(BotConfig.class), messagesCaptor.capture(), anyList());
-        String systemPrompt = messagesCaptor.getValue().get(0).getContent();
+        String systemPrompt = messagesCaptor.getValue().get(0).textContent();
 
         assertTrue(systemPrompt.contains("agentctxalice"));
         assertTrue(systemPrompt.contains("agentctxbob"));
@@ -721,7 +721,7 @@ public class MessageIntegrationTest {
         List<BotDto.ChatMessage> secondTurnMessages = messagesCaptor.getAllValues().get(1);
         assertTrue(secondTurnMessages.stream()
                 .anyMatch(message -> "tool".equals(message.getRole())
-                        && message.getContent().contains("tool loop history anchor")));
+                        && message.textContent().contains("tool loop history anchor")));
     }
 
     @Test

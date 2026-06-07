@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -24,6 +25,7 @@ public class LLMService {
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final ProviderCredentialService providerCredentialService;
+    private final HermesProvider hermesProvider;
 
     @Value("${llm.openai.api-key:}")
     private String openaiApiKey;
@@ -71,8 +73,15 @@ public class LLMService {
     private String dashscopeModel;
 
     public LLMService(ObjectMapper objectMapper, ProviderCredentialService providerCredentialService) {
+        this(objectMapper, providerCredentialService, null);
+    }
+
+    @Autowired
+    public LLMService(ObjectMapper objectMapper, ProviderCredentialService providerCredentialService,
+                      HermesProvider hermesProvider) {
         this.objectMapper = objectMapper;
         this.providerCredentialService = providerCredentialService;
+        this.hermesProvider = hermesProvider;
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(120, TimeUnit.SECONDS)
@@ -85,6 +94,13 @@ public class LLMService {
     }
 
     public BotDto.LLMResponse chat(BotConfig botConfig, List<BotDto.ChatMessage> messages, List<Tool> tools) {
+        if (containsImageContent(messages)) {
+            if (hermesProvider == null) {
+                throw new IllegalStateException("Hermes vision provider is not configured");
+            }
+            log.info("LLM vision route provider=hermes images={}", countImages(messages));
+            return hermesProvider.chat(botConfig, messages, tools);
+        }
         return switch (botConfig.getLlmProvider()) {
             case OPENAI -> callOpenAICompatible(
                     requireApiKey(resolveApiKey(botConfig, openaiApiKey), "OpenAI"),
@@ -125,6 +141,21 @@ public class LLMService {
         };
     }
 
+    private boolean containsImageContent(List<BotDto.ChatMessage> messages) {
+        if (messages == null) {
+            return false;
+        }
+        return messages.stream().anyMatch(BotDto.ChatMessage::hasImageContent);
+    }
+
+    private int countImages(List<BotDto.ChatMessage> messages) {
+        if (messages == null) {
+            return 0;
+        }
+        return messages.stream().mapToInt(message -> message.imageDataUrls().size()).sum();
+    }
+
+
     private BotDto.LLMResponse callOpenAICompatible(String apiKey, String baseUrl, String model,
                                                      List<BotDto.ChatMessage> messages, BotConfig config, List<Tool> tools) {
         try {
@@ -137,11 +168,7 @@ public class LLMService {
             for (BotDto.ChatMessage msg : messages) {
                 ObjectNode msgNode = messagesArray.addObject();
                 msgNode.put("role", msg.getRole());
-                if (msg.getContent() != null) {
-                    msgNode.put("content", msg.getContent());
-                } else {
-                    msgNode.putNull("content");
-                }
+                setOpenAiContent(msgNode, msg);
                 if (msg.getToolCallId() != null) {
                     msgNode.put("tool_call_id", msg.getToolCallId());
                 }
@@ -196,6 +223,36 @@ public class LLMService {
             log.error("LLM API call failed: {}", e.getMessage());
             throw new RuntimeException("LLM服务调用失败", e);
         }
+    }
+
+    private void setOpenAiContent(ObjectNode msgNode, BotDto.ChatMessage msg) {
+        if (msg.getContent() == null) {
+            msgNode.putNull("content");
+            return;
+        }
+        msgNode.set("content", objectMapper.valueToTree(msg.getContent()));
+    }
+
+    private void addOllamaImages(ObjectNode msgNode, BotDto.ChatMessage msg) {
+        List<String> imageUrls = msg.imageDataUrls();
+        if (imageUrls.isEmpty()) {
+            return;
+        }
+        ArrayNode images = msgNode.putArray("images");
+        for (String imageUrl : imageUrls) {
+            images.add(stripDataUrlPrefix(imageUrl));
+        }
+    }
+
+    private String stripDataUrlPrefix(String dataUrl) {
+        if (dataUrl == null) {
+            return "";
+        }
+        int comma = dataUrl.indexOf(',');
+        if (dataUrl.startsWith("data:") && comma >= 0 && comma + 1 < dataUrl.length()) {
+            return dataUrl.substring(comma + 1);
+        }
+        return dataUrl;
     }
 
     /**
@@ -254,11 +311,11 @@ public class LLMService {
             ArrayNode messagesArray = requestBody.putArray("messages");
             for (BotDto.ChatMessage msg : messages) {
                 if ("system".equals(msg.getRole())) {
-                    systemMessage = msg.getContent();
+                    systemMessage = msg.textContent();
                 } else {
                     ObjectNode msgNode = messagesArray.addObject();
                     msgNode.put("role", msg.getRole());
-                    msgNode.put("content", msg.getContent());
+                    setOpenAiContent(msgNode, msg);
                 }
             }
             if (systemMessage != null) {
@@ -308,7 +365,8 @@ public class LLMService {
             for (BotDto.ChatMessage msg : messages) {
                 ObjectNode msgNode = messagesArray.addObject();
                 msgNode.put("role", msg.getRole());
-                msgNode.put("content", msg.getContent() != null ? msg.getContent() : "");
+                msgNode.put("content", msg.textContent());
+                addOllamaImages(msgNode, msg);
                 if (msg.getName() != null) {
                     // Ollama identifies the tool a result belongs to via tool_name.
                     msgNode.put("tool_name", msg.getName());

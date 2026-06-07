@@ -725,13 +725,19 @@ public class MessageController {
     }
 
     private void processBotsAndBroadcast(Message message, Long senderId) {
-        if (message.getMessageType() != Message.MessageType.TEXT) {
+        if (message.getEncryptedContent() != null && message.getEncryptedContent().length > 0) {
+            return;
+        }
+        if (message.getMessageType() != Message.MessageType.TEXT
+                && message.getMessageType() != Message.MessageType.IMAGE
+                && message.getMessageType() != Message.MessageType.IMAGE_GENERATION) {
             return;
         }
         List<Message> botMessages = botService.processMessageForBots(
                 message.getChatRoom().getId(),
                 message.getContent(),
-                senderId);
+                senderId,
+                message);
         botMessages.forEach(rawWebSocketHandler::broadcastMessage);
     }
 }

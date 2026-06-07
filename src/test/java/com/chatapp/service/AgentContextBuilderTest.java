@@ -42,6 +42,7 @@ class AgentContextBuilderTest {
     @Mock private MessageRepository messageRepository;
     @Mock private ChatRoomRepository chatRoomRepository;
     @Mock private MemoryService memoryService;
+    @Mock private AgentVisionAttachmentService agentVisionAttachmentService;
 
     private AgentContextBuilder builder;
     private User alice;
@@ -51,7 +52,7 @@ class AgentContextBuilderTest {
 
     @BeforeEach
     void setUp() {
-        builder = new AgentContextBuilder(messageRepository, chatRoomRepository, memoryService);
+        builder = new AgentContextBuilder(messageRepository, chatRoomRepository, memoryService, agentVisionAttachmentService);
         lenient().when(memoryService.recall(any(), isNull(), anyString(), anyInt()))
                 .thenReturn(List.of());
         alice = user(1L, "alice", "Alice");
