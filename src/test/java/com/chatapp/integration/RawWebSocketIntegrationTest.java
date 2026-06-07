@@ -64,6 +64,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest(
@@ -485,6 +489,59 @@ class RawWebSocketIntegrationTest {
         assertEquals("offer", received.path("sdpType").asText());
         assertEquals("v=0", received.path("sdp").asText());
         assertTrue(aliceSession.messages.isEmpty(), "targeted sender should not receive echo");
+    }
+
+    @Test
+    @DisplayName("Targeted call invite acks ringing to caller when peer is online")
+    void targeted_call_invite_sends_ringing_ack() throws Exception {
+        TestWebSocketSession aliceSession = connect(alice);
+        TestWebSocketSession bobSession = connect(bob);
+        drainStatus(aliceSession, bobSession);
+
+        sendCall(aliceSession, Map.of(
+                "action", "invite",
+                "chatRoomId", room.getId(),
+                "callId", "targeted-ringing-1",
+                "toUserId", bob.getId(),
+                "mediaType", "AUDIO"
+        ));
+
+        JsonNode invite = awaitCallAction(bobSession, "invite");
+        assertNotNull(invite, "bob should receive targeted invite");
+        assertEquals(alice.getId().longValue(), invite.path("fromUserId").asLong());
+
+        JsonNode ringing = awaitCallAction(aliceSession, "call_ringing");
+        assertNotNull(ringing, "alice should receive ringing ack");
+        assertEquals("targeted-ringing-1", ringing.path("callId").asText());
+        assertEquals(bob.getId().longValue(), ringing.path("fromUserId").asLong());
+        assertEquals(alice.getId().longValue(), ringing.path("toUserId").asLong());
+    }
+
+    @Test
+    @DisplayName("Offline targeted call invite falls back to push notification")
+    void offline_call_invite_pushes_notification() throws Exception {
+        TestWebSocketSession aliceSession = connect(alice);
+        drainStatus(aliceSession);
+
+        sendCall(aliceSession, Map.of(
+                "action", "invite",
+                "chatRoomId", room.getId(),
+                "callId", "offline-call-1",
+                "toUserId", bob.getId(),
+                "mediaType", "AUDIO"
+        ));
+
+        verify(pushNotificationService).sendPushNotification(
+                eq(bob.getId()),
+                eq("PM chat 来电"),
+                contains("Alice 来电"),
+                argThat(data -> data.contains("\"type\":\"call\"")
+                        && data.contains("\"action\":\"invite\"")
+                        && data.contains("\"callId\":\"offline-call-1\"")
+                        && data.contains("\"chatRoomId\":" + room.getId()))
+        );
+        assertNull(awaitCallAction(aliceSession, "call_ringing"),
+                "offline callee should not produce ringing ack");
     }
 
     @Test

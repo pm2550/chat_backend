@@ -282,10 +282,32 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         }
 
         if (toUserId != null) {
-            sendToUser(toUserId, envelope);
+            boolean delivered = sendToUser(toUserId, envelope);
+            if ("invite".equals(action)) {
+                if (delivered) {
+                    sendCallRinging(user.getId(), toUserId, chatRoomId, callId,
+                            root.path("mediaType").asText("AUDIO"));
+                } else {
+                    pushOfflineCallInvitation(toUserId, user, chatRoomId, callId,
+                            root.path("mediaType").asText("AUDIO"));
+                }
+            }
         } else {
             broadcastToRoomExcept(chatRoomId, user.getId(), envelope);
         }
+    }
+
+    private void sendCallRinging(Long callerUserId, Long targetUserId, Long chatRoomId,
+                                 String callId, String mediaType) {
+        ObjectNode ringing = objectMapper.createObjectNode();
+        ringing.put("type", "call");
+        ringing.put("action", "call_ringing");
+        ringing.put("chatRoomId", chatRoomId);
+        ringing.put("callId", callId);
+        ringing.put("fromUserId", targetUserId);
+        ringing.put("toUserId", callerUserId);
+        ringing.put("mediaType", mediaType);
+        sendToUser(callerUserId, ringing);
     }
 
     private void handleCallJoin(User user, Long chatRoomId, String callId) {
@@ -570,11 +592,13 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         });
     }
 
-    private void sendToUser(Long userId, Object payload) {
+    private boolean sendToUser(Long userId, Object payload) {
         Set<WebSocketSession> sessions = userSessions.get(userId);
-        if (sessions != null) {
+        if (sessions != null && !sessions.isEmpty()) {
             sessions.forEach(s -> sendJson(s, payload));
+            return true;
         }
+        return false;
     }
 
     private void sendToUsersExcept(Iterable<Long> userIds, Long exceptUserId, Object payload) {
@@ -628,6 +652,35 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             }
             pushNotificationService.sendPushNotification(userId, title, body, data);
         });
+    }
+
+    private void pushOfflineCallInvitation(Long toUserId, User fromUser, Long chatRoomId,
+                                           String callId, String mediaType) {
+        if (toUserId == null || fromUser == null || chatRoomId == null) {
+            return;
+        }
+        String fromName = fallback(fromUser.getDisplayName(), fromUser.getUsername());
+        String title = "PM chat 来电";
+        String body = fromName + " 来电";
+        String data = offlineCallNotificationData(fromUser, chatRoomId, callId, mediaType);
+        pushNotificationService.sendPushNotification(toUserId, title, body, data);
+    }
+
+    private String offlineCallNotificationData(User fromUser, Long chatRoomId,
+                                               String callId, String mediaType) {
+        try {
+            return objectMapper.writeValueAsString(Map.of(
+                    "type", "call",
+                    "action", "invite",
+                    "chatRoomId", chatRoomId,
+                    "callId", fallback(callId, ""),
+                    "fromUserId", fromUser.getId(),
+                    "fromName", fallback(fromUser.getDisplayName(), fromUser.getUsername()),
+                    "mediaType", fallback(mediaType, "AUDIO")
+            ));
+        } catch (Exception e) {
+            return "{}";
+        }
     }
 
     private String notificationBody(Message message) {
