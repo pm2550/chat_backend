@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -59,6 +60,9 @@ public class AgentContextBuilder {
     private final MemoryService memoryService;
     private final AgentVisionAttachmentService agentVisionAttachmentService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Value("${agent.product-faq:}")
+    private String productFaq;
 
     public AgentContextEnvelope buildContext(AgentTask task) {
         BotConfig botConfig = task.getBotConfig();
@@ -139,10 +143,11 @@ public class AgentContextBuilder {
     public String assembleSystemPrompt(AgentContextEnvelope env) {
         String template = env.agentIdentity().systemPromptTemplate();
         if (!env.characterCard().hasCard() && template != null && !template.isBlank()) {
-            return substituteTemplate(template, env);
+            return productFaqBlock() + substituteTemplate(template, env);
         }
 
         StringBuilder prompt = new StringBuilder();
+        appendProductFaq(prompt);
         if (env.characterCard().hasCard()) {
             // Character-card persona wins over system_prompt_template because the
             // template is a generic room envelope, while the card is the bot's
@@ -239,6 +244,17 @@ public class AgentContextBuilder {
                 .append("[TASK]\n")
                 .append(env.taskText());
         return prompt.toString();
+    }
+
+    private void appendProductFaq(StringBuilder prompt) {
+        prompt.append(productFaqBlock());
+    }
+
+    private String productFaqBlock() {
+        if (!hasText(productFaq)) {
+            return "";
+        }
+        return "[PM CHAT PRODUCT FAQ]\n" + productFaq.strip() + "\n\n";
     }
 
     public int estimateTokens(String text) {

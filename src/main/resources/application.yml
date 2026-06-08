@@ -201,6 +201,19 @@ searxng:
   base-url: ${SEARXNG_BASE_URL:http://172.17.0.1:8888}
 
 agent:
+  product-faq: |
+    PM chat is a private team chat and AI workspace. It has five main areas:
+    Messages, Workspace, Contacts, AI Assistant, and Me.
+    Users can chat in private rooms or groups, send text, images, files, voice
+    messages, and use voice/video calls where available.
+    AI agents can be mentioned in chats, read the current room context, use
+    approved server/client tools, understand image attachments through the
+    Hermes vision pipeline, and write useful outputs back into PM chat.
+    PM chat uses points for paid AI features. Users may have free daily quotas
+    per feature plus paid points. Agents should use the points lookup tools
+    when users ask about their own balance or feature costs.
+    产品说明：PM chat 是把聊天、资料库、联系人、AI 助手和个人中心放在一起的协作工具；
+    可以群聊/私聊、发图片和文件、语音/视频通话、@Agent 处理问题，并用积分管理 AI 功能消耗。
   gateway:
     enabled: ${AGENT_GATEWAY_ENABLED:false}
     provider: ${AGENT_GATEWAY_PROVIDER:generic}
