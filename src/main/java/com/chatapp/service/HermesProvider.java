@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 public class HermesProvider {
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
+    private final String internalToken;
 
     @Value("${llm.hermes.chat-url:http://127.0.0.1:8765/chat}")
     private String chatUrl;
@@ -33,13 +34,23 @@ public class HermesProvider {
     @Value("${llm.hermes.vision-model:grok-4.3}")
     private String visionModel;
 
-    public HermesProvider(ObjectMapper objectMapper) {
+    public HermesProvider(
+            ObjectMapper objectMapper,
+            @Value("${llm.hermes.internal-token:${HERMES_INTERNAL_TOKEN:}}") String internalToken) {
         this.objectMapper = objectMapper;
+        this.internalToken = requireInternalToken(internalToken);
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(130, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .build();
+    }
+
+    private static String requireInternalToken(String token) {
+        if (token == null || token.isBlank()) {
+            throw new IllegalStateException("HERMES_INTERNAL_TOKEN is required for Hermes /chat vision routing");
+        }
+        return token.trim();
     }
 
     public BotDto.LLMResponse chat(BotConfig config, List<BotDto.ChatMessage> messages, List<Tool> tools) {
@@ -80,6 +91,7 @@ public class HermesProvider {
             Request request = new Request.Builder()
                     .url(chatUrl)
                     .header("Content-Type", "application/json")
+                    .header("X-Hermes-Token", internalToken)
                     .post(RequestBody.create(objectMapper.writeValueAsString(requestBody),
                             MediaType.parse("application/json")))
                     .build();

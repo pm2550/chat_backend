@@ -22,10 +22,12 @@ class HermesProviderTest {
     @Test
     void chatWithImageMessagePostsOpenAiMultimodalBody() throws Exception {
         AtomicReference<String> capturedPath = new AtomicReference<>("");
+        AtomicReference<String> capturedToken = new AtomicReference<>("");
         AtomicReference<String> capturedBody = new AtomicReference<>("");
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/chat", exchange -> {
             capturedPath.set(exchange.getRequestURI().getPath());
+            capturedToken.set(exchange.getRequestHeaders().getFirst("X-Hermes-Token"));
             capturedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] body = """
                     {
@@ -41,7 +43,7 @@ class HermesProviderTest {
         });
         server.start();
         try {
-            HermesProvider provider = new HermesProvider(objectMapper);
+            HermesProvider provider = new HermesProvider(objectMapper, "test-hermes-token");
             ReflectionTestUtils.setField(provider, "chatUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/chat");
             ReflectionTestUtils.setField(provider, "visionModel", "grok-4.3");
 
@@ -55,6 +57,7 @@ class HermesProviderTest {
             BotDto.LLMResponse response = provider.chat(bot, List.of(imageMessage), List.of());
 
             assertEquals("/chat", capturedPath.get());
+            assertEquals("test-hermes-token", capturedToken.get());
             assertTrue(capturedBody.get().contains("\"model\":\"grok-4.3\""));
             assertTrue(capturedBody.get().contains("\"image_url\""));
             assertTrue(capturedBody.get().contains("data:image/png;base64,aGVsbG8="));
@@ -78,7 +81,7 @@ class HermesProviderTest {
         });
         server.start();
         try {
-            HermesProvider provider = new HermesProvider(objectMapper);
+            HermesProvider provider = new HermesProvider(objectMapper, "test-hermes-token");
             ReflectionTestUtils.setField(provider, "chatUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/chat");
 
             RuntimeException thrown = assertThrows(RuntimeException.class, () ->
@@ -90,4 +93,13 @@ class HermesProviderTest {
             server.stop(0);
         }
     }
+
+    @Test
+    void missingInternalTokenFailsFast() {
+        IllegalStateException thrown = assertThrows(IllegalStateException.class, () ->
+                new HermesProvider(objectMapper, "  "));
+
+        assertTrue(thrown.getMessage().contains("HERMES_INTERNAL_TOKEN"));
+    }
+
 }

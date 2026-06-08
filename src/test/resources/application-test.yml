@@ -91,6 +91,10 @@ llm:
     api-key:
     base-url: http://localhost/dashscope/v1
     model: qwen-plus
+  hermes:
+    internal-token: test-hermes-token
+    chat-url: http://127.0.0.1:8765/chat
+    vision-model: grok-4.3
 
 bot:
   rate-limit:

@@ -176,6 +176,9 @@ llm:
     api-key: ${HERMES_API_KEY:}
     base-url: ${HERMES_BASE_URL:http://127.0.0.1:8642/v1}
     model: ${HERMES_MODEL:hermes-agent}
+    chat-url: ${HERMES_CHAT_URL:http://127.0.0.1:8765/chat}
+    vision-model: ${HERMES_VISION_MODEL:grok-4.3}
+    internal-token: ${HERMES_INTERNAL_TOKEN:}
   dashscope:
     # Chat is routed through an OpenAI-compatible proxy (self-hosted dashscope-proxy is keyless).
     # Image generation is unaffected and keeps using its own per-user DashScope credential.
