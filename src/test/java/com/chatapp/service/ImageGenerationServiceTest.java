@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Optional;
@@ -25,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -122,6 +125,43 @@ class ImageGenerationServiceTest {
         assertThat(persistedMessage.getImageGenStatus()).isEqualTo(Message.ImageGenerationStatus.FAILED);
         assertThat(persistedMessage.getMessageStatus()).isEqualTo(Message.MessageStatus.FAILED);
         verify(pointsService).refund(1L, "image_generation", "image_generation:77", "图片生成失败自动退还");
+    }
+
+    @Test
+    void submitDefersProviderCallUntilOuterTransactionCommits() throws Exception {
+        arrangeRoomAndUser();
+        when(pointsService.debit(1L, "image_generation", "image_generation:77"))
+                .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
+        when(generationClient.submit("", "延迟提交", 1, "1024*1024", true))
+                .thenReturn(new ImageGenerationClient.SubmitResult("/data2/hermes/data/cache/images/task-2.png"));
+        when(generationClient.poll("", "/data2/hermes/data/cache/images/task-2.png"))
+                .thenReturn(new ImageGenerationClient.PollResult(
+                        ImageGenerationClient.PollResult.Status.SUCCEEDED,
+                        "/data2/hermes/data/cache/images/task-2.png",
+                        null));
+        when(generationClient.download("/data2/hermes/data/cache/images/task-2.png"))
+                .thenReturn(new byte[]{4, 5, 6});
+        when(fileStorageService.uploadGeneratedImage(eq("image-generation-77.png"), eq("image/png"), any(byte[].class)))
+                .thenReturn("/api/files/image-gen/generated-2.png");
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.submit(
+                    1L,
+                    new ImageGenerationDto.GenerateRequest(10L, "延迟提交", 1, "1024*1024", true));
+
+            assertThat(persistedMessage.getImageGenStatus()).isEqualTo(Message.ImageGenerationStatus.QUEUED);
+            verify(generationClient, never()).submit("", "延迟提交", 1, "1024*1024", true);
+
+            for (TransactionSynchronization synchronization : TransactionSynchronizationManager.getSynchronizations()) {
+                synchronization.afterCommit();
+            }
+
+            assertThat(persistedMessage.getImageGenStatus()).isEqualTo(Message.ImageGenerationStatus.DONE);
+            assertThat(persistedMessage.getFileUrl()).isEqualTo("/api/files/image-gen/generated-2.png");
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     private void arrangeRoomAndUser() {

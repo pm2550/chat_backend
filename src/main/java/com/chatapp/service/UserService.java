@@ -312,6 +312,27 @@ public class UserService implements UserDetailsService {
         return dto;
     }
 
+    /**
+     * Repairs the built-in admin account if its ADMIN role is missing.
+     *
+     * <p>This intentionally does not grant ADMIN during public registration.
+     * It only applies to an existing username exactly equal to "admin".</p>
+     *
+     * @return true when the built-in admin user exists, false otherwise
+     */
+    @Transactional
+    public boolean ensureBuiltinAdminRole() {
+        User admin = userRepository.findByUsername("admin").orElse(null);
+        if (admin == null) {
+            return false;
+        }
+        if (!admin.getRoles().contains(User.Role.ADMIN)) {
+            admin.getRoles().add(User.Role.ADMIN);
+            userRepository.save(admin);
+        }
+        return true;
+    }
+
     private String credentialForScheme(String scheme, UserDto.LoginRequest request) {
         if (SCHEME_CLIENT.equals(scheme)) {
             if (!isNotBlank(request.getClientHash())) {

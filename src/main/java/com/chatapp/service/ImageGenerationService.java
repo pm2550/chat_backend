@@ -13,6 +13,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
@@ -92,7 +94,7 @@ public class ImageGenerationService {
         Long messageId = message.getId();
         String size = request.getSize();
         boolean expand = request.getExpand() == null || request.getExpand();
-        taskExecutor.execute(() -> process(messageId, userId, prompt, size, expand, refId));
+        runAfterCommit(() -> process(messageId, userId, prompt, size, expand, refId));
 
         return new ImageGenerationDto.GenerateResponse(
                 messageId,
@@ -130,6 +132,19 @@ public class ImageGenerationService {
             }
             fail(messageId, e.getMessage());
         }
+    }
+
+    private void runAfterCommit(Runnable task) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            taskExecutor.execute(task);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                taskExecutor.execute(task);
+            }
+        });
     }
 
     private ImageGenerationClient.PollResult waitForResult(String apiKey, String taskId) throws InterruptedException {

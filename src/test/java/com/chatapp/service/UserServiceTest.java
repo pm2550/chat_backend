@@ -285,4 +285,27 @@ class UserServiceTest {
                 () -> userService.updateUserTitleAsAdmin(1L, 2L, request));
         verify(userRepository, never()).save(any(User.class));
     }
+
+    @Test
+    void ensureBuiltinAdminRole_addsAdminRoleToExistingAdminUser() {
+        User admin = createTestUser();
+        admin.setUsername("admin");
+        assertFalse(admin.getRoles().contains(User.Role.ADMIN));
+
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(admin));
+
+        assertTrue(userService.ensureBuiltinAdminRole());
+
+        assertTrue(admin.getRoles().contains(User.Role.ADMIN));
+        verify(userRepository).save(admin);
+    }
+
+    @Test
+    void ensureBuiltinAdminRole_isNoopWhenAdminMissing() {
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.empty());
+
+        assertFalse(userService.ensureBuiltinAdminRole());
+
+        verify(userRepository, never()).save(any(User.class));
+    }
 }
