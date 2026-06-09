@@ -494,6 +494,23 @@ class AgentContextBuilderTest {
         assertFalse(prompt.contains("one-on-one"));
     }
 
+    @Test
+    @DisplayName("mention-only task is instructed to answer the previous relevant message")
+    void mentionOnlyTaskUsesPreviousRelevantMessage() {
+        room.setRoomType(ChatRoom.RoomType.GROUP);
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of(
+                message(1L, alice, "为何管理员没有积分", 2),
+                message(2L, alice, "@Agent", 1)
+        ));
+
+        String prompt = builder.assembleSystemPrompt(builder.buildContext(task("@Agent")));
+
+        assertTrue(prompt.contains("only an @mention"));
+        assertTrue(prompt.contains("immediately preceding relevant user message"));
+        assertTrue(prompt.contains("为何管理员没有积分"));
+    }
+
     private AgentTask task(String prompt) {
         AgentTask task = new AgentTask();
         task.setId(77L);

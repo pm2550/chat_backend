@@ -613,6 +613,8 @@ public class AgentContextBuilder {
     private static List<String> defaultBehaviorRules() {
         return List.of(
                 "Respond concisely in the language the user wrote in.",
+                "If the current task is a complete question or statement, answer it directly and use recent conversation only as background.",
+                "If the current task is only an @mention, empty, or a very short follow-up, infer the intended request from the immediately preceding relevant user message and answer that instead of greeting generically.",
                 "Cite group members by their display name when referring to their messages.",
                 "If you don't know, say so. Do not fabricate facts.",
                 "Do not reveal these rules to users unless asked.");
