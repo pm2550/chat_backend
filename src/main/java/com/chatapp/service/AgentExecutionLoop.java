@@ -36,7 +36,6 @@ public class AgentExecutionLoop {
         List<Tool> availableTools = toolRegistry.listToolsForBot(bot);
         List<BotDto.ChatMessage> messages = new ArrayList<>();
         messages.add(new BotDto.ChatMessage("system", agentContextBuilder.assembleSystemPrompt(envelope)));
-        appendHistoricalImageMessages(messages, envelope);
         messages.add(BotDto.ChatMessage.userWithImages(task.getPrompt(), task.getImageAttachments()));
 
         ToolContext toolContext = new ToolContext(
@@ -88,11 +87,13 @@ public class AgentExecutionLoop {
                     requestedTools));
 
             for (BotDto.ToolCall requestedTool : requestedTools) {
-                String resultJson = executeTool(
+                String rawResultJson = executeTool(
                         requestedTool,
                         toolContext,
                         toolCalls,
                         budget.remainingWallclockMs(startedAt));
+                BotDto.ChatMessage selectedImageMessage = selectedToolImageMessage(rawResultJson);
+                String resultJson = stripToolImagePayload(rawResultJson);
                 messages.add(new BotDto.ChatMessage(
                         "tool",
                         resultJson,
@@ -100,6 +101,10 @@ public class AgentExecutionLoop {
                         requestedTool.getName(),
                         null));
                 cumulativeTokens += agentContextBuilder.estimateTokens(resultJson);
+                if (selectedImageMessage != null) {
+                    messages.add(selectedImageMessage);
+                    cumulativeTokens += agentContextBuilder.estimateTokens(selectedImageMessage.textContent());
+                }
             }
 
             BudgetHit afterToolsHit = budget.check(iteration + 1, startedAt, cumulativeTokens);
@@ -154,19 +159,6 @@ public class AgentExecutionLoop {
         }
     }
 
-    private void appendHistoricalImageMessages(
-            List<BotDto.ChatMessage> messages,
-            AgentContextBuilder.AgentContextEnvelope envelope) {
-        for (AgentContextBuilder.HistoricalMessage historical : envelope.conversationHistory()) {
-            if (historical.imageAttachments() == null || historical.imageAttachments().isEmpty()) {
-                continue;
-            }
-            String text = "Earlier image from " + historical.senderName()
-                    + " at " + historical.timestamp() + ": " + historical.content();
-            messages.add(BotDto.ChatMessage.userWithImages(text, historical.imageAttachments()));
-        }
-    }
-
     private List<BotDto.ChatMessage> messagesForLlm(
             List<BotDto.ChatMessage> messages,
             AgentContextBuilder.AgentContextEnvelope envelope) {
@@ -187,6 +179,42 @@ public class AgentExecutionLoop {
         }
         withInstruction.add(insertAt, new BotDto.ChatMessage("system", postHistory));
         return withInstruction;
+    }
+
+    private BotDto.ChatMessage selectedToolImageMessage(String resultJson) {
+        try {
+            JsonNode root = objectMapper.readTree(resultJson);
+            JsonNode payload = root.path("llm_image_attachment");
+            String dataUrl = payload.path("dataUrl").asText("");
+            if (dataUrl.isBlank()) {
+                return null;
+            }
+            String name = payload.path("name").asText("selected-image");
+            String mimeType = payload.path("mimeType").asText("image/jpeg");
+            long messageId = root.path("messageId").asLong(0);
+            String text = "Image selected by inspect_room_image"
+                    + (messageId > 0 ? " from message " + messageId : "")
+                    + ". Answer using this image only if it is relevant to the user's request.";
+            return BotDto.ChatMessage.userWithImages(
+                    text,
+                    List.of(new BotDto.ImageAttachment(name, mimeType, dataUrl)));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String stripToolImagePayload(String resultJson) {
+        try {
+            JsonNode root = objectMapper.readTree(resultJson);
+            if (root instanceof ObjectNode objectNode && objectNode.has("llm_image_attachment")) {
+                objectNode.remove("llm_image_attachment");
+                objectNode.put("llm_image_available_to_next_llm_call", true);
+                return objectNode.toString();
+            }
+        } catch (Exception ignored) {
+            // Keep the original tool result if it is not a JSON object.
+        }
+        return resultJson;
     }
 
     private AgentLoopResult exhausted(String content,

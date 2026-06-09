@@ -11,6 +11,7 @@ import com.chatapp.service.tool.Tool;
 import com.chatapp.service.tool.ToolContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -186,6 +188,92 @@ class AgentExecutionLoopTest {
             assertTrue(userIndex >= 0, "user task missing");
             assertTrue(postIndex < userIndex, "post-history instruction must appear before user task");
         }
+    }
+
+    @Test
+    void historicalImagesAreNotAutomaticallySentToLlm() {
+        envelope = new AgentContextBuilder.AgentContextEnvelope(
+                new AgentContextBuilder.AgentIdentity("Agent", "", "base", null),
+                new AgentContextBuilder.RoomMetadata(true, "Room", "", 1, List.of("Alice"), null, true),
+                List.of(new AgentContextBuilder.HistoricalMessage(
+                        "Bob",
+                        "IMAGE",
+                        "[图片: old.jpg]",
+                        "2026-06-09 00:30",
+                        List.of(new BotDto.ImageAttachment(
+                                "old.jpg",
+                                "image/jpeg",
+                                "data:image/jpeg;base64,OLD_IMAGE_SHOULD_NOT_BE_SENT")))),
+                new AgentContextBuilder.InitiatorInfo("Alice", "member", false),
+                List.of("Be concise"),
+                "我有多少积分",
+                6000,
+                20);
+        when(contextBuilder.assembleSystemPrompt(envelope)).thenReturn("system prompt");
+        when(llmService.chat(any(BotConfig.class), anyList(), anyList()))
+                .thenReturn(new BotDto.LLMResponse("done", 5, "m"));
+
+        loop.runLoop(task, envelope);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BotDto.ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
+        verify(llmService).chat(eq(bot), captor.capture(), anyList());
+        assertFalse(captor.getValue().stream().anyMatch(BotDto.ChatMessage::hasImageContent),
+                "text-only agent calls must not route old room images through Hermes");
+    }
+
+    @Test
+    void inspectRoomImageToolCanOptIntoOneVisionMessage() {
+        Tool imageTool = new Tool() {
+            @Override
+            public String name() {
+                return "inspect_room_image";
+            }
+
+            @Override
+            public String description() {
+                return "test image tool";
+            }
+
+            @Override
+            public JsonNode parametersSchema() {
+                return objectMapper.createObjectNode().put("type", "object");
+            }
+
+            @Override
+            public JsonNode execute(JsonNode params, ToolContext context) {
+                ObjectNode root = objectMapper.createObjectNode();
+                root.put("messageId", 123);
+                root.put("image_selected_for_next_llm_call", true);
+                ObjectNode payload = root.putObject("llm_image_attachment");
+                payload.put("name", "selected.jpg");
+                payload.put("mimeType", "image/jpeg");
+                payload.put("dataUrl", "data:image/jpeg;base64,SELECTED_IMAGE");
+                return root;
+            }
+        };
+        when(registry.listToolsForBot(bot)).thenReturn(List.of(imageTool));
+        when(registry.getTool("inspect_room_image")).thenReturn(Optional.of(imageTool));
+        when(llmService.chat(any(BotConfig.class), anyList(), anyList()))
+                .thenReturn(new BotDto.LLMResponse("", 5, "m",
+                        List.of(new BotDto.ToolCall("call-1", "inspect_room_image", "{\"messageId\":123}"))))
+                .thenReturn(new BotDto.LLMResponse("I inspected it.", 7, "m"));
+
+        AgentExecutionLoop.AgentLoopResult result = loop.runLoop(task, envelope);
+
+        assertEquals("I inspected it.", result.finalContent());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BotDto.ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
+        verify(llmService, times(2)).chat(eq(bot), captor.capture(), anyList());
+        List<BotDto.ChatMessage> secondCall = captor.getAllValues().get(1);
+        assertTrue(secondCall.stream().anyMatch(BotDto.ChatMessage::hasImageContent),
+                "explicit image inspection should attach one image to the next LLM call");
+        assertTrue(secondCall.stream()
+                .filter(message -> "tool".equals(message.getRole()))
+                .map(message -> String.valueOf(message.getContent()))
+                .anyMatch(content -> content.contains("llm_image_available_to_next_llm_call")
+                        && !content.contains("SELECTED_IMAGE")),
+                "tool result should expose availability without dumping base64 into text tokens");
     }
 
     private int indexOf(List<BotDto.ChatMessage> messages, String role, String content) {
