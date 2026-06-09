@@ -402,7 +402,9 @@ public class BotService {
                 .replaceAll("@" + Pattern.quote(config.getBotName()) + "\\s*", "")
                 .replaceAll("@" + Pattern.quote(roomDisplayName(crb)) + "\\s*", "")
                 .trim();
-        return cleaned.isEmpty() ? "你好" : cleaned;
+        return cleaned.isEmpty()
+                ? "[MENTION_ONLY] The user only mentioned this bot. Infer the intended request from the immediately preceding relevant user message in the recent conversation, and answer that request instead of greeting generically."
+                : cleaned;
     }
 
     private List<BotDto.ChatMessage> buildContext(ChatRoomBot crb, String userMessage, Message sourceMessage) {

@@ -213,6 +213,38 @@ class BotServiceMultiBotTest {
         assertTrue(out.isEmpty(), "no bot in this room may forge a reply for @<other-room bot>");
     }
 
+    @Test
+    void mentionOnlyAgentTaskPreservesFollowUpIntentInsteadOfGreetingFallback() {
+        when(agentExecutionLoopProvider.getObject()).thenReturn(agentExecutionLoop);
+        when(chatRoomBotRepository.findActiveBotsWithConfig(200L)).thenReturn(List.of(auroraInA));
+        when(agentToolRegistry.hasExplicitToolWhitelist(auroraConfig)).thenReturn(true);
+        when(botRateLimitService.tryAcquireAgentRun(200L, 10L)).thenReturn(true);
+        when(chatRoomRepository.findById(200L)).thenReturn(Optional.of(roomA));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(agentTaskRepository.save(any(AgentTask.class))).thenAnswer(inv -> {
+            AgentTask task = inv.getArgument(0);
+            task.setId(9090L);
+            return task;
+        });
+        when(agentContextBuilder.buildContext(any(AgentTask.class))).thenReturn(null);
+        when(agentExecutionLoop.runLoop(any(), any())).thenReturn(new AgentLoopResult(
+                "follow-up answer",
+                1,
+                List.of(),
+                TerminationReason.FINAL_ANSWER,
+                new BudgetSnapshot(0, 0)));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.processMessageForBots(200L, "@Aurora", 1L);
+
+        ArgumentCaptor<AgentTask> taskCap = ArgumentCaptor.forClass(AgentTask.class);
+        verify(agentExecutionLoop).runLoop(taskCap.capture(), any());
+        String prompt = taskCap.getValue().getPrompt();
+        assertTrue(prompt.contains("[MENTION_ONLY]"));
+        assertTrue(prompt.contains("immediately preceding relevant user message"));
+        assertTrue(!prompt.equals("你好"), "mention-only prompts must not be rewritten to a generic greeting");
+    }
+
     private ChatRoom room(Long id) {
         ChatRoom room = new ChatRoom();
         room.setId(id);
