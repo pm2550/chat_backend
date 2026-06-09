@@ -4,7 +4,6 @@ import com.chatapp.dto.ImageGenerationDto;
 import com.chatapp.dto.PointsDto;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.Message;
-import com.chatapp.entity.ProviderCredential;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MessageRepository;
@@ -37,7 +36,6 @@ class ImageGenerationServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private MessageService messageService;
     @Mock private PointsService pointsService;
-    @Mock private ProviderCredentialService credentialService;
     @Mock private ImageGenerationClient generationClient;
     @Mock private FileStorageService fileStorageService;
     @Mock private RawWebSocketHandler rawWebSocketHandler;
@@ -55,7 +53,6 @@ class ImageGenerationServiceTest {
                 userRepository,
                 messageService,
                 pointsService,
-                credentialService,
                 generationClient,
                 fileStorageService,
                 rawWebSocketHandler,
@@ -84,28 +81,23 @@ class ImageGenerationServiceTest {
     @Test
     void submitDebitsPointsAndCompletesGeneratedImageMessage() throws Exception {
         arrangeRoomAndUser();
-        ProviderCredential credential = new ProviderCredential();
-        credential.setId(9L);
         when(pointsService.debit(1L, "image_generation", "image_generation:77"))
                 .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
-        when(credentialService.getLatestActiveCredential(eq(1L), any()))
-                .thenReturn(credential);
-        when(credentialService.decrypt(credential)).thenReturn("dashscope-key");
-        when(generationClient.submit("dashscope-key", "画一只蓝色机器人", 1, "1024*1024"))
-                .thenReturn(new ImageGenerationClient.SubmitResult("task-1"));
-        when(generationClient.poll("dashscope-key", "task-1"))
+        when(generationClient.submit("", "画一只蓝色机器人", 1, "1024*1024", false))
+                .thenReturn(new ImageGenerationClient.SubmitResult("/data2/hermes/data/cache/images/task-1.png"));
+        when(generationClient.poll("", "/data2/hermes/data/cache/images/task-1.png"))
                 .thenReturn(new ImageGenerationClient.PollResult(
                         ImageGenerationClient.PollResult.Status.SUCCEEDED,
-                        "https://example.test/out.png",
+                        "/data2/hermes/data/cache/images/task-1.png",
                         null));
-        when(generationClient.download("https://example.test/out.png"))
+        when(generationClient.download("/data2/hermes/data/cache/images/task-1.png"))
                 .thenReturn(new byte[]{1, 2, 3});
         when(fileStorageService.uploadGeneratedImage(eq("image-generation-77.png"), eq("image/png"), any(byte[].class)))
                 .thenReturn("/api/files/image-gen/generated.png");
 
         ImageGenerationDto.GenerateResponse response = service.submit(
                 1L,
-                new ImageGenerationDto.GenerateRequest(10L, "画一只蓝色机器人", 1, "1024*1024"));
+                new ImageGenerationDto.GenerateRequest(10L, "画一只蓝色机器人", 1, "1024*1024", false));
 
         assertThat(response.getMessageId()).isEqualTo(77L);
         assertThat(response.getPointsCharged()).isEqualTo(10);
@@ -118,18 +110,14 @@ class ImageGenerationServiceTest {
     @Test
     void submitRefundsPointsWhenProviderFails() {
         arrangeRoomAndUser();
-        ProviderCredential credential = new ProviderCredential();
         when(pointsService.debit(1L, "image_generation", "image_generation:77"))
                 .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
-        when(credentialService.getLatestActiveCredential(eq(1L), any()))
-                .thenReturn(credential);
-        when(credentialService.decrypt(credential)).thenReturn("dashscope-key");
-        when(generationClient.submit("dashscope-key", "失败图", 1, "1024*1024"))
+        when(generationClient.submit("", "失败图", 1, "1024*1024", true))
                 .thenThrow(new IllegalStateException("quota exhausted"));
 
         service.submit(
                 1L,
-                new ImageGenerationDto.GenerateRequest(10L, "失败图", 1, "1024*1024"));
+                new ImageGenerationDto.GenerateRequest(10L, "失败图", 1, "1024*1024", true));
 
         assertThat(persistedMessage.getImageGenStatus()).isEqualTo(Message.ImageGenerationStatus.FAILED);
         assertThat(persistedMessage.getMessageStatus()).isEqualTo(Message.MessageStatus.FAILED);

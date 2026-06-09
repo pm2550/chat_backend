@@ -3,6 +3,10 @@ package com.chatapp.service;
 public interface ImageGenerationClient {
     SubmitResult submit(String apiKey, String prompt, int count, String size);
 
+    default SubmitResult submit(String apiKey, String prompt, int count, String size, boolean expand) {
+        return submit(apiKey, prompt, count, size);
+    }
+
     PollResult poll(String apiKey, String taskId);
 
     byte[] download(String imageUrl);

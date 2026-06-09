@@ -2,10 +2,8 @@ package com.chatapp.service;
 
 import com.chatapp.dto.ImageGenerationDto;
 import com.chatapp.dto.MessageDto;
-import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.Message;
-import com.chatapp.entity.ProviderCredential;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MessageRepository;
@@ -32,7 +30,6 @@ public class ImageGenerationService {
     private final UserRepository userRepository;
     private final MessageService messageService;
     private final PointsService pointsService;
-    private final ProviderCredentialService credentialService;
     private final ImageGenerationClient generationClient;
     private final FileStorageService fileStorageService;
     private final RawWebSocketHandler rawWebSocketHandler;
@@ -45,7 +42,6 @@ public class ImageGenerationService {
             UserRepository userRepository,
             MessageService messageService,
             PointsService pointsService,
-            ProviderCredentialService credentialService,
             ImageGenerationClient generationClient,
             FileStorageService fileStorageService,
             RawWebSocketHandler rawWebSocketHandler,
@@ -56,7 +52,6 @@ public class ImageGenerationService {
         this.userRepository = userRepository;
         this.messageService = messageService;
         this.pointsService = pointsService;
-        this.credentialService = credentialService;
         this.generationClient = generationClient;
         this.fileStorageService = fileStorageService;
         this.rawWebSocketHandler = rawWebSocketHandler;
@@ -96,7 +91,8 @@ public class ImageGenerationService {
 
         Long messageId = message.getId();
         String size = request.getSize();
-        taskExecutor.execute(() -> process(messageId, userId, prompt, size, refId));
+        boolean expand = request.getExpand() == null || request.getExpand();
+        taskExecutor.execute(() -> process(messageId, userId, prompt, size, expand, refId));
 
         return new ImageGenerationDto.GenerateResponse(
                 messageId,
@@ -106,17 +102,13 @@ public class ImageGenerationService {
         );
     }
 
-    private void process(Long messageId, Long userId, String prompt, String size, String refId) {
+    private void process(Long messageId, Long userId, String prompt, String size, boolean expand, String refId) {
         try {
             updateStatus(messageId, Message.ImageGenerationStatus.PROCESSING, Message.MessageStatus.SENDING, null, null);
-            ProviderCredential credential = credentialService.getLatestActiveCredential(
-                    userId,
-                    BotConfig.LLMProvider.DASHSCOPE);
-            String apiKey = credentialService.decrypt(credential);
-            ImageGenerationClient.SubmitResult submit = generationClient.submit(apiKey, prompt, 1, size);
+            ImageGenerationClient.SubmitResult submit = generationClient.submit("", prompt, 1, size, expand);
             updateProviderTask(messageId, submit.taskId());
 
-            ImageGenerationClient.PollResult result = waitForResult(apiKey, submit.taskId());
+            ImageGenerationClient.PollResult result = waitForResult("", submit.taskId());
             if (result.status() != ImageGenerationClient.PollResult.Status.SUCCEEDED) {
                 throw new IllegalStateException(result.errorMessage() == null
                         ? "图片生成失败"

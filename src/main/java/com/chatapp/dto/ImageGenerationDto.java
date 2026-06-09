@@ -26,6 +26,8 @@ public class ImageGenerationDto {
         private Integer n = 1;
 
         private String size = "1024*1024";
+
+        private Boolean expand = true;
     }
 
     @Data
