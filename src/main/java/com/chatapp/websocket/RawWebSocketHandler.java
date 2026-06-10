@@ -548,6 +548,14 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         broadcastToRoom(chatRoom.getId(), envelope);
     }
 
+    public boolean sendRoomDisplayStateChanged(Long userId, Long chatRoomId, Object state) {
+        ObjectNode envelope = objectMapper.createObjectNode();
+        envelope.put("type", "room_display_state_changed");
+        envelope.put("chatRoomId", chatRoomId);
+        envelope.set("state", objectMapper.valueToTree(state));
+        return sendToUser(userId, envelope);
+    }
+
     private void broadcastMessage(Message saved, Long exceptUserId) {
         ObjectNode envelope = objectMapper.createObjectNode();
         envelope.put("type", "message");
@@ -644,8 +652,12 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             // moderation send-block. (Pre-split this read is_muted; after the split a
             // self-muted user has is_muted=0, so reading is_muted here would wrongly
             // resume their push notifications — must read is_notification_muted.)
-            boolean muted = chatRoomRepository.findMember(chatRoomId, userId)
-                    .map(member -> Boolean.TRUE.equals(member.getIsNotificationMuted()))
+            var member = chatRoomRepository.findMember(chatRoomId, userId);
+            if (member.map(value -> Boolean.TRUE.equals(value.getIsBlocked())).orElse(false)) {
+                return;
+            }
+            boolean muted = member
+                    .map(value -> Boolean.TRUE.equals(value.getIsNotificationMuted()))
                     .orElse(false);
             if (muted && !mentioned) {
                 return;

@@ -79,6 +79,15 @@ public class ChatRoomMember {
     @Column(name = "unread_count")
     private Integer unreadCount = 0;
 
+    @Column(name = "hidden_at")
+    private LocalDateTime hiddenAt;
+
+    @Column(name = "is_blocked")
+    private Boolean isBlocked = false;
+
+    @Column(name = "cleared_before_message_id")
+    private Long clearedBeforeMessageId;
+
     /**
      * 成员角色枚举
      */

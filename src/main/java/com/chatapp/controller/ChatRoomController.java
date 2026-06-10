@@ -27,6 +27,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -131,6 +132,10 @@ public class ChatRoomController {
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "updatedAt") String sortBy,
             @RequestParam(defaultValue = "desc") String sortDir,
+            @RequestParam(defaultValue = "false") boolean includeHidden,
+            @RequestParam(defaultValue = "false") boolean includeBlocked,
+            @RequestParam(required = false) String roomType,
+            @RequestParam(required = false) String type,
             Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
@@ -139,7 +144,12 @@ public class ChatRoomController {
                 Sort.by(sortBy).descending() : Sort.by(sortBy).ascending();
             Pageable pageable = PageRequest.of(page, size, sort);
             
-            Page<ChatRoom> chatRooms = chatRoomService.getUserChatRooms(currentUser.getId(), pageable);
+            Page<ChatRoom> chatRooms = chatRoomService.getUserChatRooms(
+                    currentUser.getId(),
+                    pageable,
+                    includeHidden,
+                    includeBlocked,
+                    parseRoomType(roomType != null ? roomType : type));
             
             Map<String, Object> response = new HashMap<>();
             response.put("chatRooms", chatRooms.getContent());
@@ -268,6 +278,33 @@ public class ChatRoomController {
             return ResponseEntity.ok(toNotificationSettings(settings, roomId, currentUser.getId()));
         } catch (Exception e) {
             log.error("更新通知偏好失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 更新当前用户的会话展示状态：清空记录 / 移出消息流 / 屏蔽 / 恢复。
+     */
+    @PutMapping("/{roomId}/display-state")
+    public ResponseEntity<?> updateDisplayState(
+            @PathVariable Long roomId,
+            @RequestBody DisplayStateRequest request,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            ChatRoomMember settings = chatRoomService.updateDisplayState(
+                    roomId,
+                    currentUser.getId(),
+                    request.getAction());
+            Map<String, Object> state = toNotificationSettings(settings, roomId, currentUser.getId());
+            webSocketHandler.sendRoomDisplayStateChanged(currentUser.getId(), roomId, state);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "会话展示状态已更新");
+            response.put("state", state);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("更新会话展示状态失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
@@ -725,6 +762,13 @@ public class ChatRoomController {
         public void setPinned(Boolean pinned) { this.pinned = pinned; }
     }
 
+    public static class DisplayStateRequest {
+        private String action;
+
+        public String getAction() { return action; }
+        public void setAction(String action) { this.action = action; }
+    }
+
     public static class MemberProfileRequest {
         private String nickname;
         private String memberTitle;
@@ -755,6 +799,13 @@ public class ChatRoomController {
         settings.put("muted", Boolean.TRUE.equals(member.getIsNotificationMuted()));
         settings.put("pinned", Boolean.TRUE.equals(member.getIsPinned()));
         settings.put("notificationLevel", Boolean.TRUE.equals(member.getIsNotificationMuted()) ? "MUTE" : "ALL");
+        settings.put("hiddenAt", member.getHiddenAt());
+        settings.put("isHidden", member.getHiddenAt() != null);
+        settings.put("isBlocked", Boolean.TRUE.equals(member.getIsBlocked()));
+        settings.put("blocked", Boolean.TRUE.equals(member.getIsBlocked()));
+        settings.put("clearedBeforeMessageId", member.getClearedBeforeMessageId());
+        settings.put("lastReadMessageId", member.getLastReadMessageId());
+        settings.put("unreadCount", member.getUnreadCount());
         return settings;
     }
 
@@ -779,7 +830,22 @@ public class ChatRoomController {
         summary.put("joinedAt", member.getJoinedAt());
         summary.put("lastReadMessageId", member.getLastReadMessageId());
         summary.put("unreadCount", member.getUnreadCount());
+        summary.put("hiddenAt", member.getHiddenAt());
+        summary.put("isHidden", member.getHiddenAt() != null);
+        summary.put("isBlocked", member.getIsBlocked());
+        summary.put("clearedBeforeMessageId", member.getClearedBeforeMessageId());
         return summary;
+    }
+
+    private ChatRoom.RoomType parseRoomType(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return ChatRoom.RoomType.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("不支持的 roomType: " + raw);
+        }
     }
 
     private Map<String, Object> toUserSummary(User user) {

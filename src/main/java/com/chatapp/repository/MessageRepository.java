@@ -77,9 +77,9 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false " +
-           "AND m.createdAt > :clearedAt ORDER BY m.createdAt DESC")
+           "AND (:clearedBeforeMessageId IS NULL OR m.id > :clearedBeforeMessageId) ORDER BY m.createdAt DESC")
     Page<Message> findByChatRoomIdAfterClear(@Param("chatRoomId") Long chatRoomId,
-                                             @Param("clearedAt") LocalDateTime clearedAt,
+                                             @Param("clearedBeforeMessageId") Long clearedBeforeMessageId,
                                              Pageable pageable);
 
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
@@ -88,9 +88,9 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false " +
-           "AND m.createdAt > :clearedAt ORDER BY m.createdAt DESC")
+           "AND (:clearedBeforeMessageId IS NULL OR m.id > :clearedBeforeMessageId) ORDER BY m.createdAt DESC")
     List<Message> findRecentMessagesListAfterClear(@Param("chatRoomId") Long chatRoomId,
-                                                   @Param("clearedAt") LocalDateTime clearedAt,
+                                                   @Param("clearedBeforeMessageId") Long clearedBeforeMessageId,
                                                    Pageable pageable);
 
     default List<Message> findRecentMessages(Long chatRoomId, int limit) {
@@ -101,7 +101,8 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     @Query("UPDATE Message m SET m.readCount = m.readCount + 1, m.messageStatus = 'READ' WHERE m.id = :messageId AND m.sender.id <> :userId")
     void markAsRead(@Param("messageId") Long messageId, @Param("userId") Long userId);
 
-    @Query("SELECT COALESCE(SUM(crm.unreadCount), 0) FROM ChatRoomMember crm WHERE crm.user.id = :userId")
+    @Query("SELECT COALESCE(SUM(crm.unreadCount), 0) FROM ChatRoomMember crm WHERE crm.user.id = :userId " +
+           "AND COALESCE(crm.isBlocked, false) = false")
     Long countTotalUnreadMessages(@Param("userId") Long userId);
 
     @Modifying
@@ -114,9 +115,9 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     Long countByChatRoomId(@Param("chatRoomId") Long chatRoomId);
 
     @Query("SELECT COUNT(m) FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false " +
-           "AND m.createdAt > :clearedAt")
+           "AND (:clearedBeforeMessageId IS NULL OR m.id > :clearedBeforeMessageId)")
     Long countByChatRoomIdAfterClear(@Param("chatRoomId") Long chatRoomId,
-                                     @Param("clearedAt") LocalDateTime clearedAt);
+                                     @Param("clearedBeforeMessageId") Long clearedBeforeMessageId);
 
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false ORDER BY m.createdAt DESC")
@@ -124,9 +125,9 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false " +
-           "AND m.createdAt > :clearedAt ORDER BY m.createdAt DESC")
+           "AND (:clearedBeforeMessageId IS NULL OR m.id > :clearedBeforeMessageId) ORDER BY m.createdAt DESC")
     List<Message> findLastMessagesAfterClear(@Param("chatRoomId") Long chatRoomId,
-                                             @Param("clearedAt") LocalDateTime clearedAt,
+                                             @Param("clearedBeforeMessageId") Long clearedBeforeMessageId,
                                              Pageable pageable);
 
     default Message findLastMessage(Long chatRoomId) {
@@ -141,11 +142,12 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false " +
-           "AND m.createdAt > :clearedAt AND LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+           "AND (:clearedBeforeMessageId IS NULL OR m.id > :clearedBeforeMessageId) " +
+           "AND LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
            "ORDER BY m.createdAt DESC")
     Page<Message> searchInChatRoomAfterClear(@Param("chatRoomId") Long chatRoomId,
                                              @Param("keyword") String keyword,
-                                             @Param("clearedAt") LocalDateTime clearedAt,
+                                             @Param("clearedBeforeMessageId") Long clearedBeforeMessageId,
                                              Pageable pageable);
 
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
@@ -181,20 +183,22 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
     @Query("SELECT DISTINCT m FROM Message m JOIN m.mentionedUserIds mentionedUserId " +
            "WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false " +
-           "AND m.createdAt > :clearedAt AND mentionedUserId = :userId " +
+           "AND (:clearedBeforeMessageId IS NULL OR m.id > :clearedBeforeMessageId) " +
+           "AND mentionedUserId = :userId " +
            "ORDER BY m.createdAt DESC")
     Page<Message> findMentionedMessagesForUserAfterClear(@Param("chatRoomId") Long chatRoomId,
                                                          @Param("userId") Long userId,
-                                                         @Param("clearedAt") LocalDateTime clearedAt,
+                                                         @Param("clearedBeforeMessageId") Long clearedBeforeMessageId,
                                                          Pageable pageable);
 
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false " +
-           "AND m.createdAt > :clearedAt AND m.fileUrl IS NOT NULL " +
+           "AND (:clearedBeforeMessageId IS NULL OR m.id > :clearedBeforeMessageId) " +
+           "AND m.fileUrl IS NOT NULL " +
            "AND (:messageType IS NULL OR m.messageType = :messageType) ORDER BY m.createdAt DESC")
     Page<Message> findFileMessagesInChatRoomAfterClear(@Param("chatRoomId") Long chatRoomId,
                                                        @Param("messageType") Message.MessageType messageType,
-                                                       @Param("clearedAt") LocalDateTime clearedAt,
+                                                       @Param("clearedBeforeMessageId") Long clearedBeforeMessageId,
                                                        Pageable pageable);
 
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom"})

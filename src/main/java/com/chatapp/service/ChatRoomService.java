@@ -25,6 +25,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
@@ -223,8 +224,25 @@ public class ChatRoomService {
      * 获取用户的聊天室列表
      */
     public Page<ChatRoom> getUserChatRooms(Long userId, Pageable pageable) {
+        return getUserChatRooms(userId, pageable, false, false, null);
+    }
+
+    /**
+     * 获取用户的聊天室列表，可按本人的消息流状态过滤。默认消息 tab 不返回
+     * 已移出/已屏蔽会话；联系人 tab 可显式包含这些会话。
+     */
+    public Page<ChatRoom> getUserChatRooms(Long userId,
+                                           Pageable pageable,
+                                           boolean includeHidden,
+                                           boolean includeBlocked,
+                                           ChatRoom.RoomType roomType) {
         Pageable unsortedPageable = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());
-        return chatRoomRepository.findByUserId(userId, unsortedPageable);
+        return chatRoomRepository.findByUserIdWithDisplayState(
+                userId,
+                includeHidden,
+                includeBlocked,
+                roomType,
+                unsortedPageable);
     }
 
     /**
@@ -259,6 +277,42 @@ public class ChatRoomService {
             chatRoomRepository.updatePinned(roomId, userId, pinned);
         }
         log.info("用户 {} 更新聊天室 {} 偏好: muted={}, pinned={}", userId, roomId, muted, pinned);
+        return getNotificationSettings(roomId, userId);
+    }
+
+    /**
+     * 更新当前用户自己的会话展示状态。清空记录只推进该用户的可见起点；
+     * 隐藏/屏蔽只影响消息流展示和未读，不影响房间成员关系或其他成员历史。
+     */
+    public ChatRoomMember updateDisplayState(Long roomId, Long userId, String action) {
+        if (!chatRoomRepository.isMember(roomId, userId)) {
+            throw new IllegalArgumentException("不是聊天室成员");
+        }
+        String normalized = action == null ? "" : action.trim().toUpperCase(Locale.ROOT);
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("action 不能为空");
+        }
+
+        switch (normalized) {
+            case "CLEAR", "CLEAR_HISTORY", "CLEAR_CHAT_HISTORY" -> {
+                Message lastMessage = messageRepository.findLastMessage(roomId);
+                Long clearedBeforeMessageId = lastMessage != null && lastMessage.getId() != null
+                        ? lastMessage.getId()
+                        : 0L;
+                chatRoomRepository.updateClearedBeforeMessageId(roomId, userId, clearedBeforeMessageId);
+            }
+            case "HIDE", "REMOVE", "REMOVE_FROM_LIST", "HIDE_FROM_LIST" ->
+                    chatRoomRepository.hideRoomForMember(roomId, userId, LocalDateTime.now());
+            case "UNHIDE", "RESTORE", "SHOW" ->
+                    chatRoomRepository.restoreRoomForMember(roomId, userId);
+            case "BLOCK", "BLOCK_ROOM" ->
+                    chatRoomRepository.updateBlockedForMember(roomId, userId, true, LocalDateTime.now());
+            case "UNBLOCK", "UNBLOCK_ROOM" ->
+                    chatRoomRepository.updateBlockedForMember(roomId, userId, false, null);
+            default -> throw new IllegalArgumentException("不支持的会话状态操作: " + action);
+        }
+
+        log.info("用户 {} 更新聊天室 {} 展示状态: {}", userId, roomId, normalized);
         return getNotificationSettings(roomId, userId);
     }
 

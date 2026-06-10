@@ -6,7 +6,6 @@ import com.chatapp.entity.ChatRoomPinnedMessage;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
-import com.chatapp.repository.ChatRoomClearStateRepository;
 import com.chatapp.repository.ChatRoomPinnedMessageRepository;
 import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.MessageStarRepository;
@@ -38,9 +37,6 @@ class MessageServiceTest {
 
     @Mock
     private ChatRoomRepository chatRoomRepository;
-
-    @Mock
-    private ChatRoomClearStateRepository clearStateRepository;
 
     @Mock
     private UserRepository userRepository;
@@ -118,6 +114,7 @@ class MessageServiceTest {
         assertSame(sender, result.getSender());
         assertSame(room, result.getChatRoom());
         verify(messageRepository).save(any(Message.class));
+        verify(chatRoomRepository).clearHiddenForMember(10L, 1L);
         verify(chatRoomRepository).incrementUnreadForRoomMembersExcept(10L, 1L);
     }
 
@@ -245,6 +242,7 @@ class MessageServiceTest {
         assertEquals(1024L, result.getFileSize());
         assertEquals(Message.MessageType.FILE, result.getMessageType());
         verify(messageRepository).save(any(Message.class));
+        verify(chatRoomRepository).clearHiddenForMember(10L, 1L);
         verify(chatRoomRepository).incrementUnreadForRoomMembersExcept(10L, 1L);
     }
 
@@ -298,13 +296,31 @@ class MessageServiceTest {
         Page<Message> page = new PageImpl<>(Collections.emptyList());
 
         when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
-        when(clearStateRepository.findByUserIdAndChatRoomId(1L, 10L)).thenReturn(Optional.empty());
+        when(chatRoomRepository.findMember(10L, 1L)).thenReturn(Optional.empty());
         when(messageRepository.findByChatRoomIdOrderByCreatedAtDesc(10L, pageable)).thenReturn(page);
 
         Page<Message> result = messageService.getChatRoomMessages(10L, 1L, pageable);
 
         assertNotNull(result);
         verify(messageRepository).findByChatRoomIdOrderByCreatedAtDesc(10L, pageable);
+    }
+
+    @Test
+    void testGetChatRoomMessages_AfterClearUsesMemberCursor() {
+        Pageable pageable = PageRequest.of(0, 20);
+        Page<Message> page = new PageImpl<>(Collections.emptyList());
+        ChatRoomMember member = new ChatRoomMember();
+        member.setClearedBeforeMessageId(55L);
+
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(chatRoomRepository.findMember(10L, 1L)).thenReturn(Optional.of(member));
+        when(messageRepository.findByChatRoomIdAfterClear(10L, 55L, pageable)).thenReturn(page);
+
+        Page<Message> result = messageService.getChatRoomMessages(10L, 1L, pageable);
+
+        assertSame(page, result);
+        verify(messageRepository).findByChatRoomIdAfterClear(10L, 55L, pageable);
+        verify(messageRepository, never()).findByChatRoomIdOrderByCreatedAtDesc(anyLong(), any());
     }
 
     @Test
@@ -452,7 +468,23 @@ class MessageServiceTest {
         assertEquals("Test message", forwarded.getContent());
         assertEquals(20L, forwarded.getChatRoom().getId());
         assertEquals(50L, forwarded.getForwardedFromMessage().getId());
+        verify(chatRoomRepository).clearHiddenForMember(20L, 1L);
         verify(chatRoomRepository).incrementUnreadForRoomMembersExcept(20L, 1L);
+    }
+
+    @Test
+    void clearChatHistoryForUserStoresLastVisibleMessageIdPerMember() {
+        User sender = createTestUser(1L, "sender");
+        ChatRoom room = createTestChatRoom(10L, sender);
+        Message last = createTestMessage(88L, sender, room);
+
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(messageRepository.findLastMessage(10L)).thenReturn(last);
+
+        messageService.clearChatHistoryForUser(10L, 1L);
+
+        verify(chatRoomRepository).updateClearedBeforeMessageId(10L, 1L, 88L);
+        verify(messageRepository, never()).delete(any(Message.class));
     }
 
     @Test

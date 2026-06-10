@@ -4,6 +4,7 @@ import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.ChatRoomBot;
 import com.chatapp.entity.ChatRoomMember;
+import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
@@ -17,9 +18,14 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -269,6 +275,97 @@ class ChatRoomServiceTest {
                 () -> chatRoomService.getChatRoomDetails(20L, 99L));
 
         assertTrue(ex.getMessage().contains("无权限"));
+    }
+
+    @Test
+    void getUserChatRooms_defaultsToVisibleMessageStreamOnly() {
+        Page<ChatRoom> page = new PageImpl<>(List.of(groupRoom));
+        PageRequest pageable = PageRequest.of(0, 20);
+        when(chatRoomRepository.findByUserIdWithDisplayState(1L, false, false, null, pageable))
+                .thenReturn(page);
+
+        Page<ChatRoom> result = chatRoomService.getUserChatRooms(1L, pageable);
+
+        assertSame(page, result);
+        verify(chatRoomRepository).findByUserIdWithDisplayState(1L, false, false, null, pageable);
+    }
+
+    @Test
+    void getUserChatRooms_canIncludeHiddenBlockedAndFilterTypeForContactsTab() {
+        Page<ChatRoom> page = new PageImpl<>(List.of(groupRoom));
+        PageRequest pageable = PageRequest.of(0, 20);
+        when(chatRoomRepository.findByUserIdWithDisplayState(
+                1L,
+                true,
+                true,
+                ChatRoom.RoomType.GROUP,
+                pageable)).thenReturn(page);
+
+        Page<ChatRoom> result = chatRoomService.getUserChatRooms(
+                1L,
+                pageable,
+                true,
+                true,
+                ChatRoom.RoomType.GROUP);
+
+        assertSame(page, result);
+        verify(chatRoomRepository).findByUserIdWithDisplayState(
+                1L,
+                true,
+                true,
+                ChatRoom.RoomType.GROUP,
+                pageable);
+    }
+
+    @Test
+    void updateDisplayState_clearStoresLastMessageIdOnMember() {
+        ChatRoomMember member = new ChatRoomMember();
+        member.setChatRoom(groupRoom);
+        member.setUser(user1);
+        Message last = new Message();
+        last.setId(88L);
+
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(messageRepository.findLastMessage(10L)).thenReturn(last);
+        when(chatRoomRepository.findMember(10L, 1L)).thenReturn(Optional.of(member));
+
+        ChatRoomMember result = chatRoomService.updateDisplayState(10L, 1L, "CLEAR");
+
+        assertSame(member, result);
+        verify(chatRoomRepository).updateClearedBeforeMessageId(10L, 1L, 88L);
+        verify(chatRoomRepository, never()).removeMember(anyLong(), anyLong());
+    }
+
+    @Test
+    void updateDisplayState_hideRemovesOnlyFromMessageStream() {
+        ChatRoomMember member = new ChatRoomMember();
+        member.setChatRoom(groupRoom);
+        member.setUser(user1);
+
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(chatRoomRepository.findMember(10L, 1L)).thenReturn(Optional.of(member));
+
+        chatRoomService.updateDisplayState(10L, 1L, "REMOVE_FROM_LIST");
+
+        verify(chatRoomRepository).hideRoomForMember(eq(10L), eq(1L), any(LocalDateTime.class));
+        verify(chatRoomRepository, never()).removeMember(anyLong(), anyLong());
+    }
+
+    @Test
+    void updateDisplayState_blockAndUnblockArePerMember() {
+        ChatRoomMember member = new ChatRoomMember();
+        member.setChatRoom(groupRoom);
+        member.setUser(user1);
+
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(chatRoomRepository.findMember(10L, 1L)).thenReturn(Optional.of(member));
+
+        chatRoomService.updateDisplayState(10L, 1L, "BLOCK");
+        chatRoomService.updateDisplayState(10L, 1L, "UNBLOCK");
+
+        verify(chatRoomRepository).updateBlockedForMember(eq(10L), eq(1L), eq(true), any(LocalDateTime.class));
+        verify(chatRoomRepository).updateBlockedForMember(10L, 1L, false, null);
+        verify(chatRoomRepository, never()).removeMember(anyLong(), anyLong());
     }
 
     // ---- updateChatRoom ----

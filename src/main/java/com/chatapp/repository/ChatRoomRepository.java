@@ -72,8 +72,22 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
 
     @Query("SELECT cr FROM ChatRoomMember crm JOIN crm.chatRoom cr " +
            "WHERE crm.user.id = :userId AND cr.isActive = true " +
+           "AND COALESCE(crm.isBlocked, false) = false " +
+           "AND crm.hiddenAt IS NULL " +
            "ORDER BY COALESCE(crm.isPinned, false) DESC, cr.updatedAt DESC")
     Page<ChatRoom> findByUserId(@Param("userId") Long userId, Pageable pageable);
+
+    @Query("SELECT cr FROM ChatRoomMember crm JOIN crm.chatRoom cr " +
+           "WHERE crm.user.id = :userId AND cr.isActive = true " +
+           "AND (:includeBlocked = true OR COALESCE(crm.isBlocked, false) = false) " +
+           "AND (:includeHidden = true OR crm.hiddenAt IS NULL) " +
+           "AND (:roomType IS NULL OR cr.roomType = :roomType) " +
+           "ORDER BY COALESCE(crm.isPinned, false) DESC, cr.updatedAt DESC")
+    Page<ChatRoom> findByUserIdWithDisplayState(@Param("userId") Long userId,
+                                                @Param("includeHidden") boolean includeHidden,
+                                                @Param("includeBlocked") boolean includeBlocked,
+                                                @Param("roomType") ChatRoom.RoomType roomType,
+                                                Pageable pageable);
 
     @Query("SELECT crm FROM ChatRoomMember crm JOIN FETCH crm.user WHERE crm.chatRoom.id = :roomId")
     List<ChatRoomMember> findMembersByRoomId(@Param("roomId") Long roomId);
@@ -82,9 +96,17 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
     List<Long> findMemberUserIdsByRoomId(@Param("roomId") Long roomId);
 
     @Modifying
-    @Query("UPDATE ChatRoomMember crm SET crm.unreadCount = COALESCE(crm.unreadCount, 0) + 1 " +
-           "WHERE crm.chatRoom.id = :roomId AND crm.user.id <> :senderId")
+    @Query("UPDATE ChatRoomMember crm SET crm.unreadCount = COALESCE(crm.unreadCount, 0) + 1, " +
+           "crm.hiddenAt = NULL " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id <> :senderId " +
+           "AND COALESCE(crm.isBlocked, false) = false")
     int incrementUnreadForRoomMembersExcept(@Param("roomId") Long roomId, @Param("senderId") Long senderId);
+
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.hiddenAt = NULL " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId " +
+           "AND COALESCE(crm.isBlocked, false) = false")
+    int clearHiddenForMember(@Param("roomId") Long roomId, @Param("userId") Long userId);
 
     @Modifying
     @Query("UPDATE ChatRoomMember crm SET crm.unreadCount = CASE WHEN COALESCE(crm.unreadCount, 0) > 0 THEN crm.unreadCount - 1 ELSE 0 END, " +
@@ -101,8 +123,38 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
                               @Param("userId") Long userId,
                               @Param("lastReadMessageId") Long lastReadMessageId);
 
-    @Query("SELECT COALESCE(crm.unreadCount, 0) FROM ChatRoomMember crm " +
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.hiddenAt = :hiddenAt, crm.unreadCount = 0 " +
            "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    int hideRoomForMember(@Param("roomId") Long roomId,
+                          @Param("userId") Long userId,
+                          @Param("hiddenAt") java.time.LocalDateTime hiddenAt);
+
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.hiddenAt = NULL, crm.isBlocked = false " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    int restoreRoomForMember(@Param("roomId") Long roomId, @Param("userId") Long userId);
+
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.isBlocked = :blocked, " +
+           "crm.hiddenAt = CASE WHEN :blocked = true THEN :blockedAt ELSE NULL END, " +
+           "crm.unreadCount = CASE WHEN :blocked = true THEN 0 ELSE COALESCE(crm.unreadCount, 0) END " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    int updateBlockedForMember(@Param("roomId") Long roomId,
+                               @Param("userId") Long userId,
+                               @Param("blocked") boolean blocked,
+                               @Param("blockedAt") java.time.LocalDateTime blockedAt);
+
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.clearedBeforeMessageId = :messageId, crm.unreadCount = 0, crm.lastReadMessageId = :messageId " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    int updateClearedBeforeMessageId(@Param("roomId") Long roomId,
+                                     @Param("userId") Long userId,
+                                     @Param("messageId") Long messageId);
+
+    @Query("SELECT COALESCE(crm.unreadCount, 0) FROM ChatRoomMember crm " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId " +
+           "AND COALESCE(crm.isBlocked, false) = false")
     Optional<Integer> findUnreadCount(@Param("roomId") Long roomId, @Param("userId") Long userId);
 
     @Query("SELECT crm FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")

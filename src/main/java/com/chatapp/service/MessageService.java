@@ -2,14 +2,12 @@ package com.chatapp.service;
 
 import com.chatapp.dto.MessageDto;
 import com.chatapp.entity.ChatRoom;
-import com.chatapp.entity.ChatRoomClearState;
 import com.chatapp.entity.ChatRoomMember;
 import com.chatapp.entity.ChatRoomPinnedMessage;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.MessageStar;
 import com.chatapp.entity.User;
 import com.chatapp.entity.AnonymousIdentity;
-import com.chatapp.repository.ChatRoomClearStateRepository;
 import com.chatapp.repository.ChatRoomPinnedMessageRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MessageRepository;
@@ -51,7 +49,6 @@ public class MessageService {
     private final ChatRoomRepository chatRoomRepository;
     private final UserRepository userRepository;
     private final AnonymousService anonymousService;
-    private final ChatRoomClearStateRepository clearStateRepository;
     private final ChatRoomPinnedMessageRepository pinnedMessageRepository;
     private final MessageStarRepository messageStarRepository;
 
@@ -123,6 +120,7 @@ public class MessageService {
         if (!encrypted && message.getMessageType() == Message.MessageType.TEXT) {
             enqueueLinkPreview(message);
         }
+        chatRoomRepository.clearHiddenForMember(chatRoomId, senderId);
         chatRoomRepository.incrementUnreadForRoomMembersExcept(chatRoomId, senderId);
 
         log.info("用户 {} 在聊天室 {} 发送消息: {}", senderId, chatRoomId, message.getId());
@@ -200,6 +198,7 @@ public class MessageService {
         }
 
         message = messageRepository.save(message);
+        chatRoomRepository.clearHiddenForMember(chatRoomId, senderId);
         chatRoomRepository.incrementUnreadForRoomMembersExcept(chatRoomId, senderId);
 
         log.info("用户 {} 在聊天室 {} 发送文件: {} (类型: {})", 
@@ -313,8 +312,8 @@ public class MessageService {
             throw new IllegalArgumentException("您不是该聊天室的成员");
         }
 
-        return clearedAt(chatRoomId, userId)
-                .map(clearedAt -> messageRepository.findByChatRoomIdAfterClear(chatRoomId, clearedAt, pageable))
+        return clearedBeforeMessageId(chatRoomId, userId)
+                .map(clearedBefore -> messageRepository.findByChatRoomIdAfterClear(chatRoomId, clearedBefore, pageable))
                 .orElseGet(() -> messageRepository.findByChatRoomIdOrderByCreatedAtDesc(chatRoomId, pageable));
     }
 
@@ -326,11 +325,11 @@ public class MessageService {
             throw new IllegalArgumentException("您不是该聊天室的成员");
         }
 
-        return clearedAt(chatRoomId, userId)
-                .map(clearedAt -> messageRepository.findMentionedMessagesForUserAfterClear(
+        return clearedBeforeMessageId(chatRoomId, userId)
+                .map(clearedBefore -> messageRepository.findMentionedMessagesForUserAfterClear(
                         chatRoomId,
                         userId,
-                        clearedAt,
+                        clearedBefore,
                         pageable))
                 .orElseGet(() -> messageRepository.findMentionedMessagesForUser(chatRoomId, userId, pageable));
     }
@@ -344,10 +343,10 @@ public class MessageService {
             throw new IllegalArgumentException("您不是该聊天室的成员");
         }
 
-        return clearedAt(chatRoomId, userId)
-                .map(clearedAt -> messageRepository.findRecentMessagesListAfterClear(
+        return clearedBeforeMessageId(chatRoomId, userId)
+                .map(clearedBefore -> messageRepository.findRecentMessagesListAfterClear(
                         chatRoomId,
-                        clearedAt,
+                        clearedBefore,
                         org.springframework.data.domain.PageRequest.of(0, limit)))
                 .orElseGet(() -> messageRepository.findRecentMessages(chatRoomId, limit));
     }
@@ -473,6 +472,7 @@ public class MessageService {
             forwarded.setMentionedUserIds(resolveMentionedUserIds(forwarded.getContent(), targetRoom));
         }
         Message saved = messageRepository.save(forwarded);
+        chatRoomRepository.clearHiddenForMember(targetRoomId, userId);
         chatRoomRepository.incrementUnreadForRoomMembersExcept(targetRoomId, userId);
         return saved;
     }
@@ -587,11 +587,11 @@ public class MessageService {
             throw new IllegalArgumentException("您不是该聊天室的成员");
         }
 
-        return clearedAt(chatRoomId, userId)
-                .map(clearedAt -> messageRepository.searchInChatRoomAfterClear(
+        return clearedBeforeMessageId(chatRoomId, userId)
+                .map(clearedBefore -> messageRepository.searchInChatRoomAfterClear(
                         chatRoomId,
                         keyword,
-                        clearedAt,
+                        clearedBefore,
                         pageable))
                 .orElseGet(() -> messageRepository.searchInChatRoom(chatRoomId, keyword, pageable));
     }
@@ -631,11 +631,11 @@ public class MessageService {
                 && messageType != Message.MessageType.VIDEO) {
             throw new IllegalArgumentException("仅支持筛选附件消息");
         }
-        return clearedAt(chatRoomId, userId)
-                .map(clearedAt -> messageRepository.findFileMessagesInChatRoomAfterClear(
+        return clearedBeforeMessageId(chatRoomId, userId)
+                .map(clearedBefore -> messageRepository.findFileMessagesInChatRoomAfterClear(
                         chatRoomId,
                         messageType,
-                        clearedAt,
+                        clearedBefore,
                         pageable))
                 .orElseGet(() -> messageRepository.findFileMessagesInChatRoom(chatRoomId, messageType, pageable));
     }
@@ -705,8 +705,8 @@ public class MessageService {
             throw new IllegalArgumentException("您不是该聊天室的成员");
         }
 
-        Long totalCount = clearedAt(chatRoomId, userId)
-                .map(clearedAt -> messageRepository.countByChatRoomIdAfterClear(chatRoomId, clearedAt))
+        Long totalCount = clearedBeforeMessageId(chatRoomId, userId)
+                .map(clearedBefore -> messageRepository.countByChatRoomIdAfterClear(chatRoomId, clearedBefore))
                 .orElseGet(() -> messageRepository.countByChatRoomId(chatRoomId));
         Long unreadCount = getUnreadMessageCount(chatRoomId, userId);
         Message lastMessage = findVisibleLastMessage(chatRoomId, userId);
@@ -723,38 +723,31 @@ public class MessageService {
             throw new IllegalArgumentException("您不是该聊天室的成员");
         }
 
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("用户不存在"));
-        ChatRoom chatRoom = chatRoomRepository.findById(chatRoomId)
-                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
-
-        ChatRoomClearState clearState = clearStateRepository
-                .findByUserIdAndChatRoomId(userId, chatRoomId)
-                .orElseGet(ChatRoomClearState::new);
-        clearState.setUser(user);
-        clearState.setChatRoom(chatRoom);
-        clearState.setClearedAt(LocalDateTime.now());
-        clearStateRepository.save(clearState);
-        chatRoomRepository.markRoomReadForMember(chatRoomId, userId, null);
+        Message lastMessage = messageRepository.findLastMessage(chatRoomId);
+        chatRoomRepository.updateClearedBeforeMessageId(
+                chatRoomId,
+                userId,
+                lastMessage != null && lastMessage.getId() != null ? lastMessage.getId() : 0L);
 
         log.info("用户 {} 清空了聊天室 {} 的本地可见历史", userId, chatRoomId);
     }
 
     private Message findVisibleLastMessage(Long chatRoomId, Long userId) {
-        return clearedAt(chatRoomId, userId)
-                .map(clearedAt -> {
+        return clearedBeforeMessageId(chatRoomId, userId)
+                .map(clearedBefore -> {
                     List<Message> messages = messageRepository.findLastMessagesAfterClear(
                             chatRoomId,
-                            clearedAt,
+                            clearedBefore,
                             org.springframework.data.domain.PageRequest.of(0, 1));
                     return messages.isEmpty() ? null : messages.get(0);
                 })
                 .orElseGet(() -> messageRepository.findLastMessage(chatRoomId));
     }
 
-    private java.util.Optional<LocalDateTime> clearedAt(Long chatRoomId, Long userId) {
-        return clearStateRepository.findByUserIdAndChatRoomId(userId, chatRoomId)
-                .map(ChatRoomClearState::getClearedAt);
+    private java.util.Optional<Long> clearedBeforeMessageId(Long chatRoomId, Long userId) {
+        return chatRoomRepository.findMember(chatRoomId, userId)
+                .map(ChatRoomMember::getClearedBeforeMessageId)
+                .filter(value -> value != null && value >= 0L);
     }
 
     /**
