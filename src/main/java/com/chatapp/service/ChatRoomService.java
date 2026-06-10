@@ -306,9 +306,9 @@ public class ChatRoomService {
             case "UNHIDE", "RESTORE", "SHOW" ->
                     chatRoomRepository.restoreRoomForMember(roomId, userId);
             case "BLOCK", "BLOCK_ROOM" ->
-                    chatRoomRepository.updateBlockedForMember(roomId, userId, true, LocalDateTime.now());
+                    chatRoomRepository.blockRoomForMember(roomId, userId, LocalDateTime.now());
             case "UNBLOCK", "UNBLOCK_ROOM" ->
-                    chatRoomRepository.updateBlockedForMember(roomId, userId, false, null);
+                    chatRoomRepository.unblockRoomForMember(roomId, userId);
             default -> throw new IllegalArgumentException("不支持的会话状态操作: " + action);
         }
 

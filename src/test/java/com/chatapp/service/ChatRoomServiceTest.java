@@ -363,8 +363,8 @@ class ChatRoomServiceTest {
         chatRoomService.updateDisplayState(10L, 1L, "BLOCK");
         chatRoomService.updateDisplayState(10L, 1L, "UNBLOCK");
 
-        verify(chatRoomRepository).updateBlockedForMember(eq(10L), eq(1L), eq(true), any(LocalDateTime.class));
-        verify(chatRoomRepository).updateBlockedForMember(10L, 1L, false, null);
+        verify(chatRoomRepository).blockRoomForMember(eq(10L), eq(1L), any(LocalDateTime.class));
+        verify(chatRoomRepository).unblockRoomForMember(10L, 1L);
         verify(chatRoomRepository, never()).removeMember(anyLong(), anyLong());
     }
 

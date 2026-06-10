@@ -136,14 +136,16 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
     int restoreRoomForMember(@Param("roomId") Long roomId, @Param("userId") Long userId);
 
     @Modifying
-    @Query("UPDATE ChatRoomMember crm SET crm.isBlocked = :blocked, " +
-           "crm.hiddenAt = CASE WHEN :blocked = true THEN :blockedAt ELSE NULL END, " +
-           "crm.unreadCount = CASE WHEN :blocked = true THEN 0 ELSE COALESCE(crm.unreadCount, 0) END " +
+    @Query("UPDATE ChatRoomMember crm SET crm.isBlocked = true, crm.hiddenAt = :blockedAt, crm.unreadCount = 0 " +
            "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
-    int updateBlockedForMember(@Param("roomId") Long roomId,
-                               @Param("userId") Long userId,
-                               @Param("blocked") boolean blocked,
-                               @Param("blockedAt") java.time.LocalDateTime blockedAt);
+    int blockRoomForMember(@Param("roomId") Long roomId,
+                           @Param("userId") Long userId,
+                           @Param("blockedAt") java.time.LocalDateTime blockedAt);
+
+    @Modifying
+    @Query("UPDATE ChatRoomMember crm SET crm.isBlocked = false, crm.hiddenAt = NULL " +
+           "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    int unblockRoomForMember(@Param("roomId") Long roomId, @Param("userId") Long userId);
 
     @Modifying
     @Query("UPDATE ChatRoomMember crm SET crm.clearedBeforeMessageId = :messageId, crm.unreadCount = 0, crm.lastReadMessageId = :messageId " +
