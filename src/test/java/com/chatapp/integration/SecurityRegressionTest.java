@@ -1,5 +1,6 @@
 package com.chatapp.integration;
 
+import com.chatapp.dto.WebPushDto;
 import com.chatapp.service.CloudStorageService;
 import com.chatapp.service.LLMService;
 import com.chatapp.service.PushNotificationService;
@@ -136,6 +137,26 @@ class SecurityRegressionTest {
                         .header("Authorization", "Bearer " + accessToken))
                 .andReturn().getResponse().getContentAsString();
         assertNoPasswordLeak("validate", json);
+    }
+
+    @Test
+    @DisplayName("web push public key is public but subscription stays authenticated")
+    void web_push_public_key_boundary() throws Exception {
+        when(pushNotificationService.getWebPushPublicKey())
+                .thenReturn(new WebPushDto.VapidPublicKeyResponse("test-public-key", true));
+
+        mockMvc.perform(get("/api/v1/push/web/vapid-public-key"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/push/web/subscribe")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "endpoint":"https://push.example/sub",
+                                  "keys":{"p256dh":"p","auth":"a"}
+                                }
+                                """))
+                .andExpect(status().isUnauthorized());
     }
 
     private static void assertNoPasswordLeak(String label, String json) {

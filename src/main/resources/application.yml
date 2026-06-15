@@ -144,6 +144,12 @@ turn:
   shared-secret: ${TURN_STATIC_AUTH_SECRET:}
   credential-ttl-seconds: ${TURN_CREDENTIAL_TTL_SECONDS:1800}
 
+web-push:
+  vapid:
+    public-key: ${WEB_PUSH_VAPID_PUBLIC_KEY:}
+    private-key: ${WEB_PUSH_VAPID_PRIVATE_KEY:}
+    subject: ${WEB_PUSH_VAPID_SUBJECT:mailto:admin@pm2550.com}
+
 provider-vault:
   # Base64 or raw secret material. If blank, the service derives from jwt.secret.
   master-key: ${PROVIDER_VAULT_MASTER_KEY:${JWT_SECRET:}}

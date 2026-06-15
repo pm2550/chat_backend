@@ -192,6 +192,13 @@
             <version>4.12.0</version>
         </dependency>
 
+        <!-- Standards-based Web Push for PWA/offline browser notifications. -->
+        <dependency>
+            <groupId>nl.martijndwars</groupId>
+            <artifactId>web-push</artifactId>
+            <version>5.1.1</version>
+        </dependency>
+
         <!-- S3-compatible object storage for workspace files (MinIO/AWS S3) -->
         <dependency>
             <groupId>io.minio</groupId>

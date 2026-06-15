@@ -8,6 +8,7 @@
 #   JWT_SECRET                 (>= 64 chars, base64-encoded random)
 #   CORS_ALLOWED_ORIGINS       (comma-separated, NO wildcards)
 #   FILE_UPLOAD_PATH           (writable absolute path)
+#   WEB_PUSH_VAPID_PUBLIC_KEY, WEB_PUSH_VAPID_PRIVATE_KEY
 #   At least one of: OPENAI_API_KEY, CLAUDE_API_KEY, DEEPSEEK_API_KEY,
 #                    OLLAMA_BASE_URL, HERMES_API_KEY + HERMES_BASE_URL,
 #                    or AGENT_GATEWAY_ENABLED=true + AGENT_GATEWAY_BASE_URL
@@ -109,6 +110,12 @@ turn:
   server-port: ${TURN_SERVER_PORT:3478}
   shared-secret: ${TURN_STATIC_AUTH_SECRET}
   credential-ttl-seconds: ${TURN_CREDENTIAL_TTL_SECONDS:1800}
+
+web-push:
+  vapid:
+    public-key: ${WEB_PUSH_VAPID_PUBLIC_KEY:}
+    private-key: ${WEB_PUSH_VAPID_PRIVATE_KEY:}
+    subject: ${WEB_PUSH_VAPID_SUBJECT:mailto:admin@pm2550.com}
 
 provider-vault:
   master-key: ${PROVIDER_VAULT_MASTER_KEY:${JWT_SECRET}}
