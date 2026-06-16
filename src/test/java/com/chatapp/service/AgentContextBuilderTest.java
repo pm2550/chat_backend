@@ -161,6 +161,22 @@ class AgentContextBuilderTest {
     }
 
     @Test
+    @DisplayName("default rules allow public figure and policy evaluation")
+    void defaultRulesAllowPublicFigureEvaluation() {
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5)))
+                .thenReturn(List.of());
+
+        String prompt = builder.assembleSystemPrompt(builder.buildContext(task("如何评价某位政治人物")));
+
+        assertTrue(prompt.contains("evaluate public figures"));
+        assertTrue(prompt.contains("politicians"));
+        assertTrue(prompt.contains("public facts"));
+        assertTrue(prompt.contains("Do not hide behind phrases like 'as an AI, I have no personal opinion'"));
+        assertTrue(prompt.contains("avoid voting persuasion"));
+    }
+
+    @Test
     @DisplayName("system prompt template can use envelope variables")
     void systemPromptTemplateCanUseVariables() {
         bot.setSystemPromptTemplate("Room={{room_name}}; Members={{member_names}}; AskedBy={{initiator_display_name}}; Task={{task}}");
