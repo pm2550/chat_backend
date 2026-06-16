@@ -140,8 +140,8 @@ public class AgentWorkflowService {
                     BotConfig agent = new BotConfig();
                     agent.setBotName("Agent");
                     agent.setBotAvatar("/assets/agent-avatar.png");
-                    agent.setLlmProvider(BotConfig.LLMProvider.OLLAMA);
-                    agent.setModelName("kimi-k2.6");
+                    agent.setLlmProvider(BotConfig.LLMProvider.HERMES);
+                    agent.setModelName("grok-4.3");
                     agent.setSystemPrompt("You are a helpful agent for PM chat. Respond concisely.");
                     agent.setTemperature(0.7);
                     agent.setMaxTokens(2048);

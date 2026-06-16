@@ -53,7 +53,32 @@ class LLMServiceVisionRoutingTest {
     }
 
     @Test
-    void textOnlyDoesNotUseHermesProvider() throws Exception {
+    void hermesGrokTextRoutesToHermesProvider() {
+        HermesProvider hermesProvider = mock(HermesProvider.class);
+        LLMService service = new LLMService(objectMapper, mock(ProviderCredentialService.class), hermesProvider);
+
+        BotConfig bot = new BotConfig();
+        bot.setLlmProvider(BotConfig.LLMProvider.HERMES);
+        bot.setModelName("grok-4.3");
+        bot.setTemperature(0.2);
+        bot.setMaxTokens(128);
+
+        BotDto.ChatMessage user = new BotDto.ChatMessage("user", "hello");
+        BotDto.LLMResponse hermesReply = new BotDto.LLMResponse();
+        hermesReply.setContent("Grok text ok");
+        hermesReply.setTokensUsed(7);
+        hermesReply.setModel("grok-4.3");
+        when(hermesProvider.chat(eq(bot), anyList(), anyList())).thenReturn(hermesReply);
+
+        BotDto.LLMResponse response = service.chat(bot, List.of(user));
+
+        assertEquals("Grok text ok", response.getContent());
+        assertEquals("grok-4.3", response.getModel());
+        verify(hermesProvider).chat(eq(bot), eq(List.of(user)), eq(List.of()));
+    }
+
+    @Test
+    void ollamaTextOnlyDoesNotUseHermesProvider() throws Exception {
         HermesProvider hermesProvider = mock(HermesProvider.class);
         AtomicReference<String> captured = new AtomicReference<>("");
         HttpServer server = server(captured, "text ok", 5);

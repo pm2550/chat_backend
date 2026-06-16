@@ -126,11 +126,22 @@ public class LLMService {
                 }
                 yield callOllama(baseUrl, model, messages, botConfig, tools);
             }
-            case HERMES -> callOpenAICompatible(
-                    requireApiKey(resolveApiKey(botConfig, hermesApiKey), "Hermes"),
-                    resolveBaseUrl(botConfig, hermesBaseUrl),
-                    resolveModel(botConfig, hermesModel),
-                    messages, botConfig, tools);
+            case HERMES -> {
+                String model = resolveModel(botConfig, hermesModel);
+                if (isHermesChatModel(model)) {
+                    if (hermesProvider == null) {
+                        throw new IllegalStateException("Hermes /chat provider is not configured");
+                    }
+                    log.info("LLM text route provider=hermes_chat model={} tools={}",
+                            model, tools == null ? 0 : tools.size());
+                    yield hermesProvider.chat(botConfig, messages, tools);
+                }
+                yield callOpenAICompatible(
+                        requireApiKey(resolveApiKey(botConfig, hermesApiKey), "Hermes"),
+                        resolveBaseUrl(botConfig, hermesBaseUrl),
+                        model,
+                        messages, botConfig, tools);
+            }
             // DashScope chat goes through the OpenAI-compatible proxy. The proxy is
             // typically keyless, so a blank key is allowed (Authorization is omitted).
             case DASHSCOPE -> callOpenAICompatible(
@@ -153,6 +164,10 @@ public class LLMService {
             return 0;
         }
         return messages.stream().mapToInt(message -> message.imageDataUrls().size()).sum();
+    }
+
+    private boolean isHermesChatModel(String model) {
+        return model != null && model.trim().toLowerCase().startsWith("grok");
     }
 
 

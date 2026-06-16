@@ -2,7 +2,10 @@ package com.chatapp.service;
 
 import com.chatapp.dto.BotDto;
 import com.chatapp.entity.BotConfig;
+import com.chatapp.service.tool.Tool;
+import com.chatapp.service.tool.ToolContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -70,6 +73,60 @@ class HermesProviderTest {
     }
 
     @Test
+    void chatWithToolsPostsDefinitionsAndParsesToolCalls() throws Exception {
+        AtomicReference<String> capturedBody = new AtomicReference<>("");
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/chat", exchange -> {
+            capturedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] body = """
+                    {
+                      "model": "grok-4.3",
+                      "choices": [{
+                        "message": {
+                          "role": "assistant",
+                          "content": "",
+                          "tool_calls": [{
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "echo", "arguments": "{\\"value\\":\\"hello\\"}"}
+                          }]
+                        }
+                      }],
+                      "usage": {"total_tokens": 19}
+                    }
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            HermesProvider provider = new HermesProvider(objectMapper, "test-hermes-token");
+            ReflectionTestUtils.setField(provider, "chatUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/chat");
+
+            BotConfig bot = new BotConfig();
+            bot.setModelName("grok-4.3");
+            bot.setTemperature(0.4);
+            bot.setMaxTokens(128);
+
+            BotDto.LLMResponse response = provider.chat(
+                    bot,
+                    List.of(new BotDto.ChatMessage("user", "use a tool")),
+                    List.of(new EchoTool()));
+
+            assertTrue(capturedBody.get().contains("\"model\":\"grok-4.3\""));
+            assertTrue(capturedBody.get().contains("\"tools\""));
+            assertTrue(capturedBody.get().contains("\"tool_choice\":\"auto\""));
+            assertEquals(1, response.getToolCalls().size());
+            assertEquals("echo", response.getToolCalls().get(0).getName());
+            assertEquals("{\"value\":\"hello\"}", response.getToolCalls().get(0).getArgumentsJson());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void hermesHttpErrorPropagatesDetail() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/chat", exchange -> {
@@ -100,6 +157,31 @@ class HermesProviderTest {
                 new HermesProvider(objectMapper, "  "));
 
         assertTrue(thrown.getMessage().contains("HERMES_INTERNAL_TOKEN"));
+    }
+
+    private class EchoTool implements Tool {
+        @Override
+        public String name() {
+            return "echo";
+        }
+
+        @Override
+        public String description() {
+            return "echo values";
+        }
+
+        @Override
+        public JsonNode parametersSchema() {
+            return objectMapper.createObjectNode()
+                    .put("type", "object")
+                    .set("properties", objectMapper.createObjectNode()
+                            .set("value", objectMapper.createObjectNode().put("type", "string")));
+        }
+
+        @Override
+        public JsonNode execute(JsonNode params, ToolContext context) {
+            return objectMapper.createObjectNode().put("value", params.path("value").asText());
+        }
     }
 
 }

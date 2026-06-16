@@ -193,6 +193,38 @@ public class PointsService {
         return getBalanceInTransaction(userId);
     }
 
+    public PointsDto.BalanceResponse adminDebit(Long userId, int points, String memo) {
+        return withUserPointLock(userId, () -> inTransaction(
+                () -> adminDebitInTransaction(userId, points, memo)));
+    }
+
+    private PointsDto.BalanceResponse adminDebitInTransaction(Long userId, int points, String memo) {
+        if (points <= 0) {
+            throw new PointsException(HttpStatus.BAD_REQUEST, "积分必须大于 0");
+        }
+        UserBalance balance = getOrCreateLockedBalance(userId);
+        int currentPaid = nonNegative(balance.getPaidPoints());
+        if (points > currentPaid) {
+            throw new PointsException(HttpStatus.BAD_REQUEST, "积分不足，无法扣减");
+        }
+
+        balance.setPaidPoints(currentPaid - points);
+        balance = userBalanceRepository.save(balance);
+
+        PointsLedgerEntry entry = new PointsLedgerEntry();
+        entry.setUserId(userId);
+        entry.setDelta(-points);
+        entry.setReason(PointsLedgerEntry.LedgerReason.ADMIN_DEBIT);
+        entry.setRefKey("admin_adjustment");
+        entry.setRefId(null);
+        entry.setBalancePaidAfter(nonNegative(balance.getPaidPoints()));
+        entry.setFreeUsed(0);
+        entry.setMemo(memo);
+        ledgerRepository.save(entry);
+
+        return getBalanceInTransaction(userId);
+    }
+
     @Transactional(readOnly = true)
     public PointsDto.CostPreviewResponse previewCost(Long userId, String featureKey) {
         FeatureCost feature = requireEnabledFeature(featureKey);

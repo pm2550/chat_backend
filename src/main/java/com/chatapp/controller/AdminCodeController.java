@@ -66,6 +66,21 @@ public class AdminCodeController {
                 request.getMemo()));
     }
 
+    @PostMapping("/users/{userId}/debit")
+    public ResponseEntity<PointsDto.BalanceResponse> debitUser(
+            @PathVariable Long userId,
+            @Valid @RequestBody PointsDto.AdminDebitRequest request) {
+        return ResponseEntity.ok(pointsService.adminDebit(
+                userId,
+                request.getPoints(),
+                request.getMemo()));
+    }
+
+    @GetMapping("/users/{userId}/points")
+    public ResponseEntity<PointsDto.BalanceResponse> userBalance(@PathVariable Long userId) {
+        return ResponseEntity.ok(pointsService.getBalance(userId));
+    }
+
     @GetMapping("/users/{userId}/ledger")
     public ResponseEntity<List<PointsDto.LedgerEntryResponse>> userLedger(
             @PathVariable Long userId,

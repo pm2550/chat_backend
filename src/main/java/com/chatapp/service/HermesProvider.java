@@ -55,8 +55,9 @@ public class HermesProvider {
 
     public BotDto.LLMResponse chat(BotConfig config, List<BotDto.ChatMessage> messages, List<Tool> tools) {
         try {
+            String model = resolveModel(config);
             ObjectNode requestBody = objectMapper.createObjectNode();
-            requestBody.put("model", visionModel);
+            requestBody.put("model", model);
             requestBody.put("temperature", config.getTemperature() != null ? config.getTemperature() : 0.7);
             requestBody.put("max_tokens", config.getMaxTokens() != null ? config.getMaxTokens() : 2048);
 
@@ -102,14 +103,21 @@ public class HermesProvider {
                     log.error("Hermes /chat failed: {} - {}", response.code(), responseBody);
                     throw new RuntimeException("Hermes /chat failed: HTTP " + response.code() + " " + responseBody);
                 }
-                return parseResponse(responseBody);
+                return parseResponse(responseBody, model);
             }
         } catch (IOException e) {
             throw new RuntimeException("Hermes /chat unreachable or returned invalid JSON", e);
         }
     }
 
-    private BotDto.LLMResponse parseResponse(String responseBody) throws IOException {
+    private String resolveModel(BotConfig config) {
+        if (config.getModelName() != null && !config.getModelName().isBlank()) {
+            return config.getModelName();
+        }
+        return visionModel;
+    }
+
+    private BotDto.LLMResponse parseResponse(String responseBody, String fallbackModel) throws IOException {
         JsonNode responseJson = objectMapper.readTree(responseBody);
         JsonNode messageNode = responseJson.path("choices").path(0).path("message");
         BotDto.LLMResponse llmResponse = new BotDto.LLMResponse();
@@ -117,7 +125,7 @@ public class HermesProvider {
                 ? ""
                 : messageNode.path("content").asText());
         llmResponse.setTokensUsed(responseJson.path("usage").path("total_tokens").asInt(0));
-        llmResponse.setModel(responseJson.path("model").asText(visionModel));
+        llmResponse.setModel(responseJson.path("model").asText(fallbackModel));
         llmResponse.setToolCalls(parseToolCalls(messageNode.path("tool_calls")));
         return llmResponse;
     }

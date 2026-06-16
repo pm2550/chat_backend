@@ -245,6 +245,47 @@ class PointsControllerIntegrationTest {
     }
 
     @Test
+    @DisplayName("admin balance and debit endpoints expose and reduce user paid points")
+    void adminBalanceAndDebit_exposesAndReducesUserPaidPoints() throws Exception {
+        String targetPrefix = "points_debit_" + UUID.randomUUID().toString().substring(0, 8) + "_";
+        registerAndLogin(targetPrefix, User.Role.USER);
+        User target = userRepository.findAll().stream()
+                .filter(user -> user.getUsername().startsWith(targetPrefix))
+                .findFirst()
+                .orElseThrow();
+
+        mockMvc.perform(post("/api/v1/admin/users/{userId}/credit", target.getId())
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"points":30,"memo":"seed for debit"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paid_points").value(30));
+
+        mockMvc.perform(get("/api/v1/admin/users/{userId}/points", target.getId())
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paid_points").value(30));
+
+        mockMvc.perform(post("/api/v1/admin/users/{userId}/debit", target.getId())
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"points":12,"memo":"manual debit"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paid_points").value(18));
+
+        mockMvc.perform(get("/api/v1/admin/users/{userId}/ledger?limit=5", target.getId())
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].reason").value("admin_debit"))
+                .andExpect(jsonPath("$[0].delta").value(-12))
+                .andExpect(jsonPath("$[0].memo").value("manual debit"));
+    }
+
+    @Test
     @DisplayName("duplicate redemption returns 409 body code")
     void redeem_duplicateCode_returnsConflict() throws Exception {
         String issueResponse = mockMvc.perform(post("/api/v1/admin/codes/issue")

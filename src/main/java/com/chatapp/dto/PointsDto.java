@@ -177,6 +177,16 @@ public final class PointsDto {
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
+    public static class AdminDebitRequest {
+        @Min(1)
+        private int points;
+
+        private String memo;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class CodeMetadataResponse {
         @JsonProperty("code_hash")
         private String codeHash;
