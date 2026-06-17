@@ -74,6 +74,13 @@ class PointsControllerIntegrationTest {
                 true,
                 "test",
                 null));
+        featureCostRepository.save(new FeatureCost(
+                "image_generation",
+                10,
+                3,
+                true,
+                "AI image generation in chat",
+                null));
         userToken = registerAndLogin("points_user_", User.Role.USER);
         adminToken = registerAndLogin("points_admin_", User.Role.ADMIN);
     }
@@ -147,7 +154,8 @@ class PointsControllerIntegrationTest {
                         .header("Authorization", "Bearer " + userToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.paid_points").value(0))
-                .andExpect(jsonPath("$.free_remaining_per_feature.test_debit").value(10));
+                .andExpect(jsonPath("$.free_remaining_per_feature.test_debit").value(10))
+                .andExpect(jsonPath("$.free_remaining_per_feature.image_generation").value(3));
     }
 
     @Test
