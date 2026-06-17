@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.ArrayList;
@@ -618,8 +619,20 @@ public class BotService {
         dto.setCharacterAlternateGreetings(readStringList(entity.getCharacterAlternateGreetings()));
         dto.setCharacterBookEntryCount(countCharacterBookEntries(entity.getCharacterBookJson()));
         dto.setEnabledTools(readStringList(entity.getEnabledTools()));
+        dto.setInboundTokenLast4(entity.getInboundTokenLast4());
+        dto.setInboundTokenScopes(readGatewayScopes(entity.getInboundTokenScopes()));
         dto.setCreatedAt(entity.getCreatedAt());
         return dto;
+    }
+
+    private List<String> readGatewayScopes(String rawScopes) {
+        if (rawScopes == null || rawScopes.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(rawScopes.split("[,\\s]+"))
+                .map(String::trim)
+                .filter(scope -> !scope.isBlank())
+                .toList();
     }
 
     /** Stores the enabled-tools whitelist as a JSON array; an empty list clears it (no tools = one-shot path). */

@@ -70,6 +70,28 @@ class BotTokenServiceTest {
     }
 
     @Test
+    void revokeClearsFingerprintAndLast4ButKeepsScopes() {
+        bot.setInboundTokenFingerprint("fp");
+        bot.setInboundTokenLast4("last");
+        bot.setInboundTokenScopes("message:send,message:read");
+        when(botConfigRepository.findById(5L)).thenReturn(Optional.of(bot));
+        when(botConfigRepository.save(any(BotConfig.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.revokeTokenForOwner(5L, 1L);
+
+        assertEquals(null, bot.getInboundTokenFingerprint());
+        assertEquals(null, bot.getInboundTokenLast4());
+        assertEquals("message:send,message:read", bot.getInboundTokenScopes());
+        verify(botConfigRepository).save(bot);
+    }
+
+    @Test
+    void revokeRejectsNonOwner() {
+        when(botConfigRepository.findById(5L)).thenReturn(Optional.of(bot));
+        assertThrows(AccessDeniedException.class, () -> service.revokeTokenForOwner(5L, 999L));
+    }
+
+    @Test
     void resolveByTokenFindsBotByFingerprint() {
         // simulate a previously-rotated token
         String raw = service.generateRawToken();
@@ -85,5 +107,44 @@ class BotTokenServiceTest {
     void resolveByBlankTokenIsEmpty() {
         assertTrue(service.resolveBotByToken("  ").isEmpty());
         assertTrue(service.resolveBotByToken(null).isEmpty());
+    }
+
+    @Test
+    void blankScopesKeepLegacySendOnlyAccess() {
+        bot.setInboundTokenScopes(null);
+
+        assertTrue(service.hasScope(bot, BotTokenService.SCOPE_MESSAGE_SEND));
+        assertTrue(!service.hasScope(bot, BotTokenService.SCOPE_MESSAGE_READ));
+        assertTrue(!service.hasScope(bot, BotTokenService.SCOPE_ROOM_MANAGE));
+    }
+
+    @Test
+    void explicitScopesAreCommaOrWhitespaceSeparatedAndCaseInsensitive() {
+        bot.setInboundTokenScopes("MESSAGE:READ, workspace:write\nfriend:send");
+
+        assertTrue(service.hasScope(bot, BotTokenService.SCOPE_MESSAGE_READ));
+        assertTrue(service.hasScope(bot, BotTokenService.SCOPE_WORKSPACE_WRITE));
+        assertTrue(service.hasScope(bot, BotTokenService.SCOPE_FRIEND_SEND));
+        assertTrue(!service.hasScope(bot, BotTokenService.SCOPE_MESSAGE_SEND));
+    }
+
+    @Test
+    void updateScopesForOwnerPersistsNormalizedScopeList() {
+        when(botConfigRepository.findById(5L)).thenReturn(Optional.of(bot));
+        when(botConfigRepository.save(any(BotConfig.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        var scopes = service.updateScopesForOwner(5L, 1L, java.util.List.of("MESSAGE:SEND", "workspace:read"));
+
+        assertTrue(scopes.contains(BotTokenService.SCOPE_MESSAGE_SEND));
+        assertTrue(scopes.contains(BotTokenService.SCOPE_WORKSPACE_READ));
+        assertEquals("message:send,workspace:read", bot.getInboundTokenScopes());
+    }
+
+    @Test
+    void updateScopesRejectsUnknownScope() {
+        when(botConfigRepository.findById(5L)).thenReturn(Optional.of(bot));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.updateScopesForOwner(5L, 1L, java.util.List.of("root:all")));
     }
 }

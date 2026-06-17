@@ -107,6 +107,9 @@ public class BotConfig {
     @Column(name = "inbound_token_last4", length = 8)
     private String inboundTokenLast4;
 
+    @Column(name = "inbound_token_scopes", columnDefinition = "TEXT")
+    private String inboundTokenScopes;
+
     @Column(name = "max_agent_iterations")
     private Integer maxAgentIterations = 8;
 

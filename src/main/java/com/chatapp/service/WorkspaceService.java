@@ -91,6 +91,25 @@ public class WorkspaceService {
     }
 
     @Transactional(readOnly = true)
+    public List<WorkspaceDto> listWorkspacesForBot(Long botId) {
+        Map<Long, Workspace> workspaces = new LinkedHashMap<>();
+        workspacePermissionRepository.findByPrincipalTypeAndPrincipalId(
+                        WorkspacePermission.PrincipalType.BOT,
+                        botId)
+                .stream()
+                .map(WorkspacePermission::getWorkspace)
+                .filter(workspace -> workspace != null && Boolean.TRUE.equals(workspace.getIsActive()))
+                .filter(workspace -> botGateOpen(workspace, botId))
+                .forEach(workspace -> workspaces.putIfAbsent(workspace.getId(), workspace));
+
+        return workspaces.values().stream()
+                .sorted(Comparator.comparing(Workspace::getUpdatedAt,
+                        Comparator.nullsLast(Comparator.naturalOrder())).reversed())
+                .map(workspace -> WorkspaceDto.fromEntity(workspace, effectiveBotAccess(workspace, botId)))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public WorkspaceDto getWorkspace(Long workspaceId, Long actorId) {
         Workspace workspace = loadWorkspace(workspaceId);
         requireWorkspaceVisible(workspace, actorId);
@@ -589,6 +608,16 @@ public class WorkspaceService {
                 file.getCurrentVersion(), new String(bytes, StandardCharsets.UTF_8));
     }
 
+    @Transactional(readOnly = true)
+    public WorkspaceDto.DownloadedWorkspaceFile downloadFileForBot(Long workspaceId, Long fileId, Long botId) throws IOException {
+        Workspace workspace = loadWorkspace(workspaceId);
+        WorkspaceFile file = loadFile(workspaceId, fileId);
+        requireBotResourceAccess(workspace, fileId, WorkspacePermission.ResourceType.FILE,
+                botId, WorkspacePermission.AccessLevel.VIEW);
+        byte[] bytes = fileStorageService.getWorkspaceFile(file.getStorageProvider(), storageKey(file));
+        return new WorkspaceDto.DownloadedWorkspaceFile(file, bytes);
+    }
+
     @Transactional
     public WorkspaceDto.FileDto createTextFileForBot(Long workspaceId, Long botId, Long folderId,
             String fileName, String content, String versionNote) throws IOException {
@@ -627,6 +656,44 @@ public class WorkspaceService {
         saveVersion(savedFile, 1, storedFile, bytes, owner, bot, versionNote, scan);
         adjustWorkspaceUsage(workspace, storedFile.size());
         auditLogService.record(owner, "WORKSPACE_FILE_BOT_CREATE", "WORKSPACE_FILE",
+                savedFile.getId(), null, savedFile.getDisplayName() + " (bot " + bot.getId() + ")");
+        return WorkspaceDto.FileDto.fromEntity(savedFile);
+    }
+
+    @Transactional
+    public WorkspaceDto.FileDto uploadFileForBot(Long workspaceId, Long botId, Long folderId,
+            String versionNote, MultipartFile multipartFile) throws IOException {
+        Workspace workspace = loadWorkspace(workspaceId);
+        BotConfig bot = requireBotWithOwner(botId);
+        WorkspaceFolder folder = folderId == null ? null : loadFolder(workspaceId, folderId);
+        requireBotWritable(workspace, folder, null, botId);
+
+        byte[] bytes = multipartFile.getBytes();
+        WorkspaceFileScanService.ScanResult scan = workspaceFileScanService.scan(multipartFile, bytes);
+        assertWithinQuota(workspace, bytes.length);
+        FileStorageService.StoredFile storedFile = fileStorageService.uploadWorkspaceFile(multipartFile);
+
+        User owner = bot.getCreatedBy();
+        WorkspaceFile file = new WorkspaceFile();
+        file.setWorkspace(workspace);
+        file.setFolder(folder);
+        file.setDisplayName(storedFile.originalFileName());
+        file.setCurrentStorageName(storedFile.storageFileName());
+        file.setMimeType(storedFile.contentType());
+        file.setFileSize(storedFile.size());
+        file.setCreatedBy(owner);
+        file.setSourceBot(bot);
+        file.setSourceType(WorkspaceFile.SourceType.BOT);
+        file.setBotAccessEnabled(true);
+        file.setScanStatus(scan.status());
+        file.setScanSummary(scan.summary());
+        file.setScannedAt(scan.scannedAt());
+        file.setStorageProvider(storedFile.storageProvider());
+        file.setObjectKey(storedFile.objectKey());
+        WorkspaceFile savedFile = workspaceFileRepository.save(file);
+        saveVersion(savedFile, 1, storedFile, bytes, owner, bot, versionNote, scan);
+        adjustWorkspaceUsage(workspace, storedFile.size());
+        auditLogService.record(owner, "WORKSPACE_FILE_BOT_UPLOAD", "WORKSPACE_FILE",
                 savedFile.getId(), null, savedFile.getDisplayName() + " (bot " + bot.getId() + ")");
         return WorkspaceDto.FileDto.fromEntity(savedFile);
     }

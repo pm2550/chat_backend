@@ -45,6 +45,8 @@ public class BotDto {
     private List<String> characterAlternateGreetings;
     private Integer characterBookEntryCount;
     private List<String> enabledTools;
+    private String inboundTokenLast4;
+    private List<String> inboundTokenScopes;
 
     @Data
     @NoArgsConstructor

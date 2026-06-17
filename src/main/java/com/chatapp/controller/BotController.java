@@ -38,6 +38,30 @@ public class BotController {
                 Map.<String, Object>of("token", rawToken)));
     }
 
+    @PutMapping("/{botId}/token/scopes")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> updateInboundTokenScopes(
+            @PathVariable Long botId,
+            @RequestBody(required = false) Map<String, Object> body,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        Object rawScopes = body == null ? null : body.get("scopes");
+        List<String> scopes = rawScopes instanceof List<?> list
+                ? list.stream().map(item -> item == null ? "" : item.toString()).toList()
+                : rawScopes == null ? List.of() : List.of(rawScopes.toString());
+        return ResponseEntity.ok(ApiResponse.success("令牌权限已更新",
+                Map.<String, Object>of("scopes", botTokenService.updateScopesForOwner(botId, currentUser.getId(), scopes))));
+    }
+
+    /** Revoke this bot's inbound gateway token. Scope selections are preserved. */
+    @DeleteMapping("/{botId}/token")
+    public ResponseEntity<ApiResponse<Void>> revokeInboundToken(
+            @PathVariable Long botId,
+            Authentication auth) {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        botTokenService.revokeTokenForOwner(botId, currentUser.getId());
+        return ResponseEntity.ok(ApiResponse.<Void>success("令牌已吊销", null));
+    }
+
     /** Register an outbound webhook so this bot's room events are pushed to an external URL. */
     @PostMapping("/{botId}/webhooks")
     public ResponseEntity<ApiResponse<BotWebhookService.WebhookView>> registerWebhook(
