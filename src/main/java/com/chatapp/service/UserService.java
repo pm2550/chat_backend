@@ -28,6 +28,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.LocalDateTime;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -307,6 +308,7 @@ public class UserService implements UserDetailsService {
      */
     private UserDto convertToDto(User user) {
         UserDto dto = modelMapper.map(user, UserDto.class);
+        dto.setRoles(new HashSet<>(user.getRoles()));
         userSettingsRepository.findByUserId(user.getId())
                 .ifPresent(settings -> dto.setAvatarFramePreset(settings.getAvatarFramePreset()));
         return dto;

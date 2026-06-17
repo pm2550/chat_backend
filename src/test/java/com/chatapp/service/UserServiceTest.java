@@ -106,16 +106,20 @@ class UserServiceTest {
     @Test
     void testFindByUsername_Found() {
         User user = createTestUser();
+        user.getRoles().add(User.Role.ADMIN);
         UserDto expectedDto = new UserDto();
         expectedDto.setUsername("testuser");
 
         when(userRepository.findByUsername("testuser")).thenReturn(Optional.of(user));
         when(modelMapper.map(user, UserDto.class)).thenReturn(expectedDto);
+        when(userSettingsRepository.findByUserId(1L)).thenReturn(Optional.empty());
 
         UserDto result = userService.findByUsername("testuser");
 
         assertNotNull(result);
         assertEquals("testuser", result.getUsername());
+        assertTrue(result.getRoles().contains(User.Role.USER));
+        assertTrue(result.getRoles().contains(User.Role.ADMIN));
     }
 
     @Test

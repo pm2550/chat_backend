@@ -11,6 +11,7 @@ import lombok.NoArgsConstructor;
 import lombok.ToString;
 
 import java.time.LocalDateTime;
+import java.util.Set;
 
 @Data
 @NoArgsConstructor
@@ -32,6 +33,7 @@ public class UserDto {
     private LocalDateTime lastSeen;
     private Boolean isActive;
     private LocalDateTime createdAt;
+    private Set<User.Role> roles;
 
     @Data
     @NoArgsConstructor
