@@ -82,6 +82,7 @@ public class BotDto {
     public static class UpdateRequest {
         private String botName;
         private String botAvatar;
+        private BotConfig.LLMProvider llmProvider;
         private String apiKey;
         private Long providerCredentialId;
         private String modelName;

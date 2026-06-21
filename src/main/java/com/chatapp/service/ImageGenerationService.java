@@ -2,6 +2,7 @@ package com.chatapp.service;
 
 import com.chatapp.dto.ImageGenerationDto;
 import com.chatapp.dto.MessageDto;
+import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
@@ -63,17 +64,42 @@ public class ImageGenerationService {
 
     @Transactional
     public ImageGenerationDto.GenerateResponse submit(Long userId, ImageGenerationDto.GenerateRequest request) {
+        User sender = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+        return submitInternal(userId, sender, null, null, request);
+    }
+
+    @Transactional
+    public ImageGenerationDto.GenerateResponse submitAsBot(Long chargedUserId,
+                                                           User botSender,
+                                                           BotConfig botConfig,
+                                                           String botDisplayName,
+                                                           ImageGenerationDto.GenerateRequest request) {
+        if (botSender == null) {
+            throw new IllegalArgumentException("机器人发送者不存在");
+        }
+        if (botConfig == null) {
+            throw new IllegalArgumentException("机器人不存在");
+        }
+        return submitInternal(chargedUserId, botSender, botConfig, botDisplayName, request);
+    }
+
+    private ImageGenerationDto.GenerateResponse submitInternal(Long chargedUserId,
+                                                               User sender,
+                                                               BotConfig botConfig,
+                                                               String botDisplayName,
+                                                               ImageGenerationDto.GenerateRequest request) {
         String prompt = normalizePrompt(request.getPrompt());
         int count = request.getN() == null ? 1 : request.getN();
         if (count != 1) {
             throw new IllegalArgumentException("当前仅支持一次生成一张图片");
         }
 
-        User sender = userRepository.findById(userId)
+        userRepository.findById(chargedUserId)
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
         ChatRoom chatRoom = chatRoomRepository.findById(request.getRoomId())
                 .orElseThrow(() -> new IllegalArgumentException("聊天室不存在"));
-        messageService.validateCanSendMessage(userId, chatRoom.getId());
+        messageService.validateCanSendMessage(chargedUserId, chatRoom.getId());
 
         Message message = new Message();
         message.setContent(prompt);
@@ -81,20 +107,26 @@ public class ImageGenerationService {
         message.setMessageStatus(Message.MessageStatus.SENDING);
         message.setSender(sender);
         message.setChatRoom(chatRoom);
+        if (botConfig != null) {
+            message.setBotConfig(botConfig);
+            message.setBotDisplayName(botDisplayName != null && !botDisplayName.isBlank()
+                    ? botDisplayName
+                    : botConfig.getBotName());
+        }
         message.setImageGenPrompt(prompt);
         message.setImageGenStatus(Message.ImageGenerationStatus.QUEUED);
         message.setCreatedAt(LocalDateTime.now());
         message = messageRepository.save(message);
 
         String refId = refId(message.getId());
-        var debit = pointsService.debit(userId, FEATURE_KEY, refId);
-        chatRoomRepository.incrementUnreadForRoomMembersExcept(chatRoom.getId(), userId);
+        var debit = pointsService.debit(chargedUserId, FEATURE_KEY, refId);
+        chatRoomRepository.incrementUnreadForRoomMembersExcept(chatRoom.getId(), chargedUserId);
         rawWebSocketHandler.broadcastMessage(message);
 
         Long messageId = message.getId();
         String size = request.getSize();
         boolean expand = request.getExpand() == null || request.getExpand();
-        runAfterCommit(() -> process(messageId, userId, prompt, size, expand, refId));
+        runAfterCommit(() -> process(messageId, chargedUserId, prompt, size, expand, refId));
 
         return new ImageGenerationDto.GenerateResponse(
                 messageId,

@@ -95,6 +95,7 @@ public class BotService {
 
         if (request.getBotName() != null) bot.setBotName(request.getBotName());
         if (request.getBotAvatar() != null) bot.setBotAvatar(request.getBotAvatar());
+        if (request.getLlmProvider() != null) bot.setLlmProvider(request.getLlmProvider());
         if (request.getProviderCredentialId() != null || request.getApiKey() != null) {
             Long ownerId = bot.getCreatedBy() != null ? bot.getCreatedBy().getId() : null;
             applyCredentialSelection(bot, ownerId, request.getProviderCredentialId(), request.getApiKey());

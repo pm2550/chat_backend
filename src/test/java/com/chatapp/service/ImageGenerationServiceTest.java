@@ -2,6 +2,7 @@ package com.chatapp.service;
 
 import com.chatapp.dto.ImageGenerationDto;
 import com.chatapp.dto.PointsDto;
+import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
@@ -125,6 +126,46 @@ class ImageGenerationServiceTest {
         assertThat(persistedMessage.getImageGenStatus()).isEqualTo(Message.ImageGenerationStatus.FAILED);
         assertThat(persistedMessage.getMessageStatus()).isEqualTo(Message.MessageStatus.FAILED);
         verify(pointsService).refund(1L, "image_generation", "image_generation:77", "图片生成失败自动退还");
+    }
+
+    @Test
+    void submitAsBotChargesUserButMarksMessageAsBot() throws Exception {
+        arrangeRoomAndUser();
+        User botSender = new User();
+        botSender.setId(9L);
+        botSender.setUsername("owner");
+        BotConfig bot = new BotConfig();
+        bot.setId(12L);
+        bot.setBotName("Draw Bot");
+
+        when(pointsService.debit(1L, "image_generation", "image_generation:77"))
+                .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
+        when(generationClient.submit("", "画一座海边城市", 1, "1024*1024", true))
+                .thenReturn(new ImageGenerationClient.SubmitResult("/data2/hermes/data/cache/images/task-3.png"));
+        when(generationClient.poll("", "/data2/hermes/data/cache/images/task-3.png"))
+                .thenReturn(new ImageGenerationClient.PollResult(
+                        ImageGenerationClient.PollResult.Status.SUCCEEDED,
+                        "/data2/hermes/data/cache/images/task-3.png",
+                        null));
+        when(generationClient.download("/data2/hermes/data/cache/images/task-3.png"))
+                .thenReturn(new byte[]{7, 8, 9});
+        when(fileStorageService.uploadGeneratedImage(eq("image-generation-77.png"), eq("image/png"), any(byte[].class)))
+                .thenReturn("/api/files/image-gen/bot-generated.png");
+
+        ImageGenerationDto.GenerateResponse response = service.submitAsBot(
+                1L,
+                botSender,
+                bot,
+                "画图助手",
+                new ImageGenerationDto.GenerateRequest(10L, "画一座海边城市", 1, "1024*1024", true));
+
+        assertThat(response.getMessage().getBotConfigId()).isEqualTo(12L);
+        assertThat(response.getMessage().getBotName()).isEqualTo("画图助手");
+        assertThat(persistedMessage.getSender().getId()).isEqualTo(9L);
+        assertThat(persistedMessage.getBotConfig().getId()).isEqualTo(12L);
+        assertThat(persistedMessage.getBotDisplayName()).isEqualTo("画图助手");
+        verify(pointsService).debit(1L, "image_generation", "image_generation:77");
+        verify(messageService).validateCanSendMessage(1L, 10L);
     }
 
     @Test
