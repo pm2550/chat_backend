@@ -79,6 +79,11 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByIdIn(List<Long> userIds);
 
     /**
+     * 根据用户名列表查找用户。
+     */
+    List<User> findByUsernameIn(List<String> usernames);
+
+    /**
      * 统计在线用户数量
      */
     @Query("SELECT COUNT(u) FROM User u WHERE u.onlineStatus = 'ONLINE'")

@@ -45,8 +45,19 @@ public class BotDto {
     private List<String> characterAlternateGreetings;
     private Integer characterBookEntryCount;
     private List<String> enabledTools;
+    private BotConfig.AccessPolicy accessPolicy;
+    private List<AllowedUser> allowedUsers;
     private String inboundTokenLast4;
     private List<String> inboundTokenScopes;
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class AllowedUser {
+        private Long id;
+        private String username;
+        private String displayName;
+    }
 
     @Data
     @NoArgsConstructor
@@ -74,6 +85,9 @@ public class BotDto {
         private Double temperature;
         private Integer maxTokens;
         private List<String> enabledTools;
+        private BotConfig.AccessPolicy accessPolicy;
+        private List<Long> allowedUserIds;
+        private List<String> allowedUsernames;
     }
 
     @Data
@@ -91,6 +105,9 @@ public class BotDto {
         private Integer maxTokens;
         private Boolean isActive;
         private List<String> enabledTools;
+        private BotConfig.AccessPolicy accessPolicy;
+        private List<Long> allowedUserIds;
+        private List<String> allowedUsernames;
     }
 
     @Data

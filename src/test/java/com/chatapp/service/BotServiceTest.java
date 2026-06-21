@@ -8,6 +8,7 @@ import com.chatapp.entity.Message;
 import com.chatapp.entity.ProviderCredential;
 import com.chatapp.entity.User;
 import com.chatapp.repository.BotConfigRepository;
+import com.chatapp.repository.BotAllowedUserRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MessageRepository;
@@ -37,6 +38,7 @@ import static org.mockito.Mockito.*;
 class BotServiceTest {
 
     @Mock private BotConfigRepository botConfigRepository;
+    @Mock private BotAllowedUserRepository botAllowedUserRepository;
     @Mock private ChatRoomBotRepository chatRoomBotRepository;
     @Mock private ChatRoomRepository chatRoomRepository;
     @Mock private UserRepository userRepository;

@@ -6,7 +6,9 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 
@@ -99,6 +101,11 @@ public class BotConfig {
     @Column(name = "enabled_tools", columnDefinition = "TEXT")
     private String enabledTools;
 
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "access_policy", nullable = false, length = 32)
+    private AccessPolicy accessPolicy = AccessPolicy.PRIVATE;
+
     // Inbound bot token (Phase 4 / F1): lets an external service post AS this bot.
     // Only fingerprint + last4 are stored; the raw token is shown once on rotate.
     @Column(name = "inbound_token_fingerprint", length = 64)
@@ -136,5 +143,14 @@ public class BotConfig {
 
     public enum LLMProvider {
         OPENAI, CLAUDE, DEEPSEEK, OLLAMA, HERMES, DASHSCOPE
+    }
+
+    public enum AccessPolicy {
+        /** Only the owner can install and trigger the bot. */
+        PRIVATE,
+        /** Owner plus explicitly allowed users can install and trigger the bot. */
+        ALLOWLIST,
+        /** Room admins can install it and room members can trigger it after install. */
+        PUBLIC
     }
 }

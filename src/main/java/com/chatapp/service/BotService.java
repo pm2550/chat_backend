@@ -3,6 +3,7 @@ package com.chatapp.service;
 import com.chatapp.dto.BotDto;
 import com.chatapp.entity.*;
 import com.chatapp.repository.AgentTaskRepository;
+import com.chatapp.repository.BotAllowedUserRepository;
 import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
@@ -22,11 +23,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -46,6 +49,7 @@ public class BotService {
     private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
 
     private final BotConfigRepository botConfigRepository;
+    private final BotAllowedUserRepository botAllowedUserRepository;
     private final ChatRoomBotRepository chatRoomBotRepository;
     private final ChatRoomRepository chatRoomRepository;
     private final UserRepository userRepository;
@@ -77,10 +81,14 @@ public class BotService {
         bot.setSystemPrompt(request.getSystemPrompt());
         bot.setTemperature(request.getTemperature() != null ? request.getTemperature() : 0.7);
         bot.setMaxTokens(request.getMaxTokens() != null ? request.getMaxTokens() : 2048);
+        bot.setAccessPolicy(request.getAccessPolicy() != null
+                ? request.getAccessPolicy()
+                : BotConfig.AccessPolicy.PRIVATE);
         applyEnabledTools(bot, request.getEnabledTools());
         bot.setCreatedBy(creator);
 
         bot = botConfigRepository.save(bot);
+        replaceAllowedUsers(bot, request.getAllowedUserIds(), request.getAllowedUsernames());
         log.info("用户 {} 创建了机器人: {} ({})", creatorId, bot.getBotName(), bot.getLlmProvider());
         return toDto(bot, true);
     }
@@ -106,8 +114,12 @@ public class BotService {
         if (request.getMaxTokens() != null) bot.setMaxTokens(request.getMaxTokens());
         if (request.getIsActive() != null) bot.setIsActive(request.getIsActive());
         if (request.getEnabledTools() != null) applyEnabledTools(bot, request.getEnabledTools());
+        if (request.getAccessPolicy() != null) bot.setAccessPolicy(request.getAccessPolicy());
 
         bot = botConfigRepository.save(bot);
+        if (request.getAllowedUserIds() != null || request.getAllowedUsernames() != null) {
+            replaceAllowedUsers(bot, request.getAllowedUserIds(), request.getAllowedUsernames());
+        }
         return toDto(bot, true);
     }
 
@@ -277,6 +289,11 @@ public class BotService {
 
         for (ChatRoomBot crb : bots) {
             if (Boolean.FALSE.equals(crb.getEnabledInRoom())) {
+                continue;
+            }
+            if (!canTriggerBot(crb.getBotConfig(), senderId)) {
+                log.info("机器人 {} 在聊天室 {} 被用户 {} 触发但无使用权限，已跳过",
+                        crb.getBotConfig().getBotName(), chatRoomId, senderId);
                 continue;
             }
             String displayName = roomDisplayName(crb);
@@ -620,10 +637,25 @@ public class BotService {
         dto.setCharacterAlternateGreetings(readStringList(entity.getCharacterAlternateGreetings()));
         dto.setCharacterBookEntryCount(countCharacterBookEntries(entity.getCharacterBookJson()));
         dto.setEnabledTools(readStringList(entity.getEnabledTools()));
+        dto.setAccessPolicy(entity.getAccessPolicy() != null
+                ? entity.getAccessPolicy()
+                : BotConfig.AccessPolicy.PRIVATE);
+        dto.setAllowedUsers(includeCredentialDetails && entity.getId() != null
+                ? readAllowedUsers(entity.getId())
+                : List.of());
         dto.setInboundTokenLast4(entity.getInboundTokenLast4());
         dto.setInboundTokenScopes(readGatewayScopes(entity.getInboundTokenScopes()));
         dto.setCreatedAt(entity.getCreatedAt());
         return dto;
+    }
+
+    private List<BotDto.AllowedUser> readAllowedUsers(Long botId) {
+        return botAllowedUserRepository.findByBotConfigIdOrderByUserUsernameAsc(botId).stream()
+                .map(allowed -> new BotDto.AllowedUser(
+                        allowed.getUser().getId(),
+                        allowed.getUser().getUsername(),
+                        allowed.getUser().getDisplayName()))
+                .toList();
     }
 
     private List<String> readGatewayScopes(String rawScopes) {
@@ -690,6 +722,81 @@ public class BotService {
         if (bot.getCreatedBy() == null || !bot.getCreatedBy().getId().equals(operatorId)) {
             throw new AccessDeniedException("无权限管理该机器人");
         }
+    }
+
+    private void replaceAllowedUsers(BotConfig bot, List<Long> userIds, List<String> usernames) {
+        if (bot.getId() == null) {
+            return;
+        }
+        botAllowedUserRepository.deleteByBotConfigId(bot.getId());
+        List<User> users = resolveAllowedUsers(userIds, usernames);
+        for (User user : users) {
+            if (bot.getCreatedBy() != null && bot.getCreatedBy().getId().equals(user.getId())) {
+                continue;
+            }
+            BotAllowedUser allowed = new BotAllowedUser();
+            allowed.setBotConfig(bot);
+            allowed.setUser(user);
+            botAllowedUserRepository.save(allowed);
+        }
+    }
+
+    private List<User> resolveAllowedUsers(List<Long> userIds, List<String> usernames) {
+        LinkedHashMap<Long, User> resolved = new LinkedHashMap<>();
+        List<Long> ids = userIds == null ? List.of() : userIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (!ids.isEmpty()) {
+            for (User user : userRepository.findByIdIn(ids)) {
+                resolved.put(user.getId(), user);
+            }
+        }
+
+        List<String> tokens = normalizeUserTokens(usernames);
+        List<String> names = new ArrayList<>();
+        List<Long> numericIds = new ArrayList<>();
+        for (String token : tokens) {
+            try {
+                numericIds.add(Long.valueOf(token));
+            } catch (NumberFormatException ignored) {
+                names.add(token);
+            }
+        }
+        if (!numericIds.isEmpty()) {
+            for (User user : userRepository.findByIdIn(numericIds.stream().distinct().toList())) {
+                resolved.put(user.getId(), user);
+            }
+        }
+        if (!names.isEmpty()) {
+            for (User user : userRepository.findByUsernameIn(names.stream().distinct().toList())) {
+                resolved.put(user.getId(), user);
+            }
+        }
+
+        List<String> missing = new ArrayList<>();
+        for (String token : tokens) {
+            boolean found = resolved.values().stream().anyMatch(user ->
+                    token.equals(user.getUsername()) || token.equals(String.valueOf(user.getId())));
+            if (!found) missing.add(token);
+        }
+        if (!missing.isEmpty()) {
+            throw new IllegalArgumentException("找不到允许使用者: " + String.join(", ", missing));
+        }
+        return new ArrayList<>(resolved.values());
+    }
+
+    private List<String> normalizeUserTokens(List<String> rawValues) {
+        if (rawValues == null || rawValues.isEmpty()) {
+            return List.of();
+        }
+        return rawValues.stream()
+                .filter(Objects::nonNull)
+                .flatMap(value -> Arrays.stream(value.split("[,，\\s]+")))
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
     }
 
     @SuppressWarnings("unchecked")
@@ -815,8 +922,29 @@ public class BotService {
         }
         boolean isBotOwner = bot.getCreatedBy() != null && bot.getCreatedBy().getId().equals(operatorId);
         boolean isRoomAdmin = chatRoomRepository.isAdmin(chatRoomId, operatorId);
-        if (!isBotOwner && !isRoomAdmin) {
+        boolean allowedToInstall = isBotOwner || (isRoomAdmin && canTriggerBot(bot, operatorId));
+        if (!allowedToInstall) {
             throw new IllegalArgumentException("无权限管理该聊天室机器人");
         }
+    }
+
+    private boolean canTriggerBot(BotConfig bot, Long userId) {
+        if (bot.getCreatedBy() == null) {
+            return true;
+        }
+        if (userId == null) {
+            return false;
+        }
+        if (bot.getCreatedBy().getId().equals(userId)) {
+            return true;
+        }
+        BotConfig.AccessPolicy policy = bot.getAccessPolicy() != null
+                ? bot.getAccessPolicy()
+                : BotConfig.AccessPolicy.PRIVATE;
+        return switch (policy) {
+            case PUBLIC -> true;
+            case ALLOWLIST -> botAllowedUserRepository.existsByBotConfigIdAndUserId(bot.getId(), userId);
+            case PRIVATE -> false;
+        };
     }
 }

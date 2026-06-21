@@ -8,6 +8,7 @@ import com.chatapp.entity.ChatRoomBot;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.AgentTaskRepository;
+import com.chatapp.repository.BotAllowedUserRepository;
 import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
@@ -41,6 +42,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class BotServiceImageAttachmentTest {
     @Mock private BotConfigRepository botConfigRepository;
+    @Mock private BotAllowedUserRepository botAllowedUserRepository;
     @Mock private ChatRoomBotRepository chatRoomBotRepository;
     @Mock private ChatRoomRepository chatRoomRepository;
     @Mock private UserRepository userRepository;
