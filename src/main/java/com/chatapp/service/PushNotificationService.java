@@ -9,21 +9,29 @@ import com.chatapp.repository.UserRepository;
 import com.chatapp.repository.WebPushSubscriptionRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.auth.oauth2.GoogleCredentials;
+import com.google.firebase.FirebaseApp;
+import com.google.firebase.FirebaseOptions;
+import com.google.firebase.messaging.FirebaseMessaging;
+import com.google.firebase.messaging.Message;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import nl.martijndwars.webpush.Notification;
 import nl.martijndwars.webpush.PushService;
 import org.apache.http.HttpResponse;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.util.Base64;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.HexFormat;
 
 @Service
 @RequiredArgsConstructor
@@ -35,6 +43,17 @@ public class PushNotificationService {
     private final UserRepository userRepository;
     private final WebPushProperties webPushProperties;
     private final ObjectMapper objectMapper;
+
+    @Value("${push.fcm.service-account-json:}")
+    private String fcmServiceAccountJson;
+
+    @Value("${push.fcm.service-account-base64:}")
+    private String fcmServiceAccountBase64;
+
+    @Value("${push.fcm.enabled:true}")
+    private boolean fcmEnabled;
+
+    private volatile FirebaseMessaging firebaseMessaging;
 
     public WebPushDto.VapidPublicKeyResponse getWebPushPublicKey() {
         return new WebPushDto.VapidPublicKeyResponse(
@@ -134,13 +153,28 @@ public class PushNotificationService {
         }
     }
 
-    // Provider adapters log delivery intents unless a deployment wires external SDK credentials.
-    private void sendFCM(String token, String title, String body, String data) {
-        log.info("FCM push: {} - {}", title, body);
+    private void sendFCM(String token, String title, String body, String data) throws Exception {
+        FirebaseMessaging messaging = getFirebaseMessaging();
+        if (messaging == null) {
+            log.warn("FCM push skipped: Firebase credentials are not configured");
+            return;
+        }
+
+        Message message = Message.builder()
+                .setToken(token)
+                .setNotification(com.google.firebase.messaging.Notification.builder()
+                        .setTitle(title)
+                        .setBody(body)
+                        .build())
+                .putAllData(firebaseDataPayload(data))
+                .build();
+        String response = messaging.send(message);
+        log.info("FCM push sent: {}", response);
     }
 
-    private void sendAPNs(String token, String title, String body, String data) {
-        log.info("APNs push: {} - {}", title, body);
+    private void sendAPNs(String token, String title, String body, String data) throws Exception {
+        // iOS app tokens produced by firebase_messaging are FCM registration tokens too.
+        sendFCM(token, title, body, data);
     }
 
     private void sendWebPush(String token, String title, String body, String data) {
@@ -217,6 +251,71 @@ public class PushNotificationService {
         } catch (Exception e) {
             return new LinkedHashMap<>();
         }
+    }
+
+    private Map<String, String> firebaseDataPayload(String data) {
+        Map<String, Object> parsedData = parseData(data);
+        Map<String, String> payload = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : parsedData.entrySet()) {
+            if (entry.getKey() != null && entry.getValue() != null) {
+                payload.put(entry.getKey(), entry.getValue().toString());
+            }
+        }
+        payload.putIfAbsent("url", notificationUrl(parsedData));
+        return payload;
+    }
+
+    private FirebaseMessaging getFirebaseMessaging() {
+        if (!fcmEnabled) {
+            return null;
+        }
+        FirebaseMessaging existing = firebaseMessaging;
+        if (existing != null) {
+            return existing;
+        }
+        synchronized (this) {
+            if (firebaseMessaging != null) {
+                return firebaseMessaging;
+            }
+            String credentialsJson = fcmCredentialsJson();
+            if (credentialsJson.isBlank()) {
+                return null;
+            }
+            try {
+                GoogleCredentials credentials = GoogleCredentials.fromStream(
+                        new ByteArrayInputStream(credentialsJson.getBytes(StandardCharsets.UTF_8))
+                );
+                FirebaseOptions options = FirebaseOptions.builder()
+                        .setCredentials(credentials)
+                        .build();
+                FirebaseApp app;
+                try {
+                    app = FirebaseApp.getInstance("pmchat-fcm");
+                } catch (IllegalStateException ignored) {
+                    app = FirebaseApp.initializeApp(options, "pmchat-fcm");
+                }
+                firebaseMessaging = FirebaseMessaging.getInstance(app);
+                return firebaseMessaging;
+            } catch (Exception e) {
+                log.error("FCM initialization failed: {}", e.getMessage());
+                return null;
+            }
+        }
+    }
+
+    private String fcmCredentialsJson() {
+        if (fcmServiceAccountJson != null && !fcmServiceAccountJson.isBlank()) {
+            return fcmServiceAccountJson;
+        }
+        if (fcmServiceAccountBase64 != null && !fcmServiceAccountBase64.isBlank()) {
+            try {
+                byte[] decoded = Base64.getDecoder().decode(fcmServiceAccountBase64);
+                return new String(decoded, StandardCharsets.UTF_8);
+            } catch (IllegalArgumentException e) {
+                log.error("FCM service account base64 is invalid: {}", e.getMessage());
+            }
+        }
+        return "";
     }
 
     private String notificationUrl(Map<String, Object> data) {

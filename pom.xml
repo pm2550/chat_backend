@@ -199,6 +199,13 @@
             <version>5.1.1</version>
         </dependency>
 
+        <!-- Firebase Cloud Messaging for native Android/iOS app notifications. -->
+        <dependency>
+            <groupId>com.google.firebase</groupId>
+            <artifactId>firebase-admin</artifactId>
+            <version>9.4.3</version>
+        </dependency>
+
         <!-- S3-compatible object storage for workspace files (MinIO/AWS S3) -->
         <dependency>
             <groupId>io.minio</groupId>
