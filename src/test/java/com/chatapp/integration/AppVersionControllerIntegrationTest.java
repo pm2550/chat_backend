@@ -24,6 +24,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.UUID;
 
 import static org.hamcrest.Matchers.startsWith;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -151,6 +152,63 @@ class AppVersionControllerIntegrationTest {
                 .andExpect(jsonPath("$.version.downloadUrl",
                         startsWith("/api/v1/app/download/linux/")))
                 .andExpect(jsonPath("$.version.fileSize").value(10));
+    }
+
+    @Test
+    @DisplayName("CI publish is idempotent for same platform and version code")
+    void publishFromCi_samePlatformAndVersionCode_updatesExistingVersion() throws Exception {
+        int versionCode = 14000 + (int) (System.nanoTime() % 1000);
+        MockMultipartFile firstMetadata = new MockMultipartFile(
+                "metadata",
+                "",
+                MediaType.APPLICATION_JSON_VALUE,
+                ("{\"platform\":\"WINDOWS\",\"versionName\":\"1.1.0-ci\",\"versionCode\":"
+                        + versionCode + ",\"releaseNotes\":\"first\"}").getBytes()
+        );
+        MockMultipartFile firstArtifact = new MockMultipartFile(
+                "artifact",
+                "pm-chat-windows-first.zip",
+                "application/zip",
+                "first".getBytes()
+        );
+
+        mockMvc.perform(multipart("/api/v1/app/version/publish-from-ci")
+                        .file(firstMetadata)
+                        .file(firstArtifact)
+                        .header("Authorization", "Bearer test-ci-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version.fileSize").value(5));
+
+        MockMultipartFile secondMetadata = new MockMultipartFile(
+                "metadata",
+                "",
+                MediaType.APPLICATION_JSON_VALUE,
+                ("{\"platform\":\"WINDOWS\",\"versionName\":\"1.1.0-ci-rerun\",\"versionCode\":"
+                        + versionCode + ",\"releaseNotes\":\"rerun\"}").getBytes()
+        );
+        MockMultipartFile secondArtifact = new MockMultipartFile(
+                "artifact",
+                "pm-chat-windows-rerun.zip",
+                "application/zip",
+                "second-run".getBytes()
+        );
+
+        mockMvc.perform(multipart("/api/v1/app/version/publish-from-ci")
+                        .file(secondMetadata)
+                        .file(secondArtifact)
+                        .header("Authorization", "Bearer test-ci-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version.versionName").value("1.1.0-ci-rerun"))
+                .andExpect(jsonPath("$.version.downloadUrl")
+                        .value("/api/v1/app/download/windows/pm-chat-windows-rerun.zip"))
+                .andExpect(jsonPath("$.version.fileSize").value(10));
+
+        var versions = versionRepository.findByPlatformOrderByVersionCodeDesc(
+                com.chatapp.entity.DeviceToken.Platform.WINDOWS);
+        long matching = versions.stream()
+                .filter(version -> version.getVersionCode().equals(versionCode))
+                .count();
+        assertEquals(1, matching);
     }
 
     @Test

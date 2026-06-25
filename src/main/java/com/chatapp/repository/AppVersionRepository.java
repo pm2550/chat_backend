@@ -14,5 +14,7 @@ public interface AppVersionRepository extends JpaRepository<AppVersion, Long> {
     Optional<AppVersion> findFirstByPlatformAndIsActiveTrueOrderByVersionCodeDesc(
             DeviceToken.Platform platform);
 
+    Optional<AppVersion> findByPlatformAndVersionCode(DeviceToken.Platform platform, Integer versionCode);
+
     List<AppVersion> findByPlatformOrderByVersionCodeDesc(DeviceToken.Platform platform);
 }

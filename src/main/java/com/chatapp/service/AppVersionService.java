@@ -86,7 +86,9 @@ public class AppVersionService {
     private AppVersionDto publishVersionInternal(AppVersionDto.PublishRequest request,
                                                 MultipartFile artifact,
                                                 User publisher) throws IOException {
-        AppVersion version = new AppVersion();
+        AppVersion version = versionRepository
+                .findByPlatformAndVersionCode(request.getPlatform(), request.getVersionCode())
+                .orElseGet(AppVersion::new);
         version.setPlatform(request.getPlatform());
         version.setVersionName(request.getVersionName());
         version.setVersionCode(request.getVersionCode());
@@ -115,24 +117,25 @@ public class AppVersionService {
         // Deactivate older versions for this platform
         versionRepository.findByPlatformOrderByVersionCodeDesc(request.getPlatform())
                 .stream()
+                .filter(v -> !v.equals(version))
                 .filter(v -> Boolean.TRUE.equals(v.getIsActive()))
                 .forEach(v -> {
                     v.setIsActive(false);
                     versionRepository.save(v);
                 });
 
-        version = versionRepository.save(version);
+        AppVersion savedVersion = versionRepository.save(version);
         String publisherName = publisher != null ? publisher.getUsername() : "ci";
         log.info("发布版本: {} {} (code={}) by {}",
-                version.getPlatform(), version.getVersionName(), version.getVersionCode(), publisherName);
+                savedVersion.getPlatform(), savedVersion.getVersionName(), savedVersion.getVersionCode(), publisherName);
 
         try {
-            webSocketHandler.broadcastAppUpdate(version);
+            webSocketHandler.broadcastAppUpdate(savedVersion);
         } catch (Exception e) {
             log.warn("版本发布成功但 WebSocket 更新推送失败: {}", e.getMessage());
         }
 
-        return toDto(version);
+        return toDto(savedVersion);
     }
 
     public Path getArtifactPath(String platform, String filename) {
