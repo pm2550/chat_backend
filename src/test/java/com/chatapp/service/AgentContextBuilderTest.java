@@ -118,6 +118,21 @@ class AgentContextBuilderTest {
     }
 
     @Test
+    @DisplayName("generic Agent prompt keeps a lively non-corporate voice")
+    void genericAgentPromptKeepsLivelyVoice() {
+        bot.setSystemPrompt("You are PM chat's built-in Agent. Do not act like a lifeless support bot. Be candid and playful when the room allows it. Avoid canned phrases like 'as an AI'.");
+        mockMembers();
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of());
+
+        String prompt = builder.assembleSystemPrompt(builder.buildContext(task("guess my IQ")));
+
+        assertTrue(prompt.contains("lively, sharp PM chat participant"));
+        assertTrue(prompt.contains("not a corporate help desk"));
+        assertTrue(prompt.contains("Avoid sterile phrases like 'as an AI'"));
+        assertTrue(prompt.contains("Do not act like a lifeless support bot"));
+    }
+
+    @Test
     @DisplayName("trims oldest history to respect token budget")
     void trimsHistoryByTokenBudget() {
         bot.setMaxHistoryMessages(200);

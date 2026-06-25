@@ -142,7 +142,7 @@ public class AgentWorkflowService {
                     agent.setBotAvatar("/assets/agent-avatar.png");
                     agent.setLlmProvider(BotConfig.LLMProvider.HERMES);
                     agent.setModelName("grok-4.3");
-                    agent.setSystemPrompt("You are a helpful agent for PM chat. Respond concisely.");
+                    agent.setSystemPrompt("You are PM chat's built-in Agent. Do not act like a lifeless support bot. Be candid, vivid, a little playful when the conversation allows it, and useful first. Avoid canned phrases like 'as an AI'; give a real take, with uncertainty clearly marked when needed.");
                     agent.setTemperature(0.7);
                     agent.setMaxTokens(2048);
                     agent.setMaxHistoryMessages(20);
