@@ -67,7 +67,25 @@ public class AppVersionService {
                                         Long publisherId) throws IOException {
         User publisher = userRepository.findById(publisherId)
                 .orElseThrow(() -> new RuntimeException("用户不存在"));
+        return publishVersionInternal(request, artifact, publisher);
+    }
 
+    /**
+     * Publish a version from CI. CI authentication is the publish token itself, so the
+     * release mirror must not depend on a mutable admin/system user existing in DB.
+     */
+    @Transactional
+    public AppVersionDto publishVersionFromCi(AppVersionDto.PublishRequest request,
+                                             MultipartFile artifact) throws IOException {
+        User publisher = userRepository.findByUsername("system")
+                .or(() -> userRepository.findFirstByRolesContainingOrderByIdAsc(User.Role.ADMIN))
+                .orElse(null);
+        return publishVersionInternal(request, artifact, publisher);
+    }
+
+    private AppVersionDto publishVersionInternal(AppVersionDto.PublishRequest request,
+                                                MultipartFile artifact,
+                                                User publisher) throws IOException {
         AppVersion version = new AppVersion();
         version.setPlatform(request.getPlatform());
         version.setVersionName(request.getVersionName());
@@ -104,9 +122,9 @@ public class AppVersionService {
                 });
 
         version = versionRepository.save(version);
-        log.info("发布版本: {} {} v{} (code={})",
-                version.getPlatform(), version.getVersionName(), version.getVersionCode(),
-                publisher.getUsername());
+        String publisherName = publisher != null ? publisher.getUsername() : "ci";
+        log.info("发布版本: {} {} (code={}) by {}",
+                version.getPlatform(), version.getVersionName(), version.getVersionCode(), publisherName);
 
         try {
             webSocketHandler.broadcastAppUpdate(version);
@@ -115,18 +133,6 @@ public class AppVersionService {
         }
 
         return toDto(version);
-    }
-
-    /**
-     * Publish a version from CI using a system/admin publisher identity.
-     */
-    @Transactional
-    public AppVersionDto publishVersionFromCi(AppVersionDto.PublishRequest request,
-                                             MultipartFile artifact) throws IOException {
-        User publisher = userRepository.findByUsername("system")
-                .or(() -> userRepository.findFirstByRolesContainingOrderByIdAsc(User.Role.ADMIN))
-                .orElseThrow(() -> new RuntimeException("未找到 system 或 ADMIN 发布用户"));
-        return publishVersion(request, artifact, publisher.getId());
     }
 
     public Path getArtifactPath(String platform, String filename) {

@@ -116,6 +116,43 @@ class AppVersionControllerIntegrationTest {
         org.junit.jupiter.api.Assertions.assertEquals(versionCode, latest.get().getVersionCode());
     }
 
+
+    @Test
+    @DisplayName("CI publish succeeds even when no system or admin publisher exists")
+    void publishFromCi_withoutSystemOrAdminPublisher_stillPersistsVersion() throws Exception {
+        userRepository.findAll().forEach(user -> {
+            user.getRoles().remove(User.Role.ADMIN);
+            userRepository.save(user);
+        });
+
+        int versionCode = 13000 + (int) (System.nanoTime() % 1000);
+        MockMultipartFile metadata = new MockMultipartFile(
+                "metadata",
+                "",
+                MediaType.APPLICATION_JSON_VALUE,
+                ("{\"platform\":\"LINUX\",\"versionName\":\"1.1.0-ci-no-admin\",\"versionCode\":"
+                        + versionCode + "}").getBytes()
+        );
+        MockMultipartFile artifact = new MockMultipartFile(
+                "artifact",
+                "pm-chat-linux-v1.1.0-ci.tar.gz",
+                "application/gzip",
+                "fake-linux".getBytes()
+        );
+
+        mockMvc.perform(multipart("/api/v1/app/version/publish-from-ci")
+                        .file(metadata)
+                        .file(artifact)
+                        .header("Authorization", "Bearer test-ci-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version.platform").value("LINUX"))
+                .andExpect(jsonPath("$.version.versionName").value("1.1.0-ci-no-admin"))
+                .andExpect(jsonPath("$.version.versionCode").value(versionCode))
+                .andExpect(jsonPath("$.version.downloadUrl",
+                        startsWith("/api/v1/app/download/linux/")))
+                .andExpect(jsonPath("$.version.fileSize").value(10));
+    }
+
     @Test
     @DisplayName("CI publish without token is rejected")
     void publishFromCi_withoutToken_isRejected() throws Exception {
