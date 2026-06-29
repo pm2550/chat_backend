@@ -329,16 +329,23 @@ class BotServiceTest {
     }
 
     @Test
-    @DisplayName("processMessageForBots swallows LLM errors without failing")
-    void process_llm_error_swallowed() {
+    @DisplayName("processMessageForBots surfaces LLM errors as safe bot messages")
+    void process_llm_error_saves_safe_error_message() {
         ChatRoomBot crb = new ChatRoomBot();
         crb.setBotConfig(bot);
         crb.setTriggerMode(ChatRoomBot.TriggerMode.ALL);
         when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
-        when(llmService.chat(any(), any())).thenThrow(new RuntimeException("LLM down"));
+        when(llmService.chat(any(), any())).thenThrow(new RuntimeException("LLM API调用失败: 429 quota exceeded"));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        // should not propagate
-        assertDoesNotThrow(() -> service.processMessageForBots(100L, "anything", 1L));
+        List<Message> replies = assertDoesNotThrow(() -> service.processMessageForBots(100L, "anything", 1L));
+
+        assertEquals(1, replies.size());
+        assertTrue(replies.get(0).getContent().contains("额度不足或被限流"));
+        assertFalse(replies.get(0).getContent().contains("quota exceeded"));
+        assertEquals(bot, replies.get(0).getBotConfig());
     }
 
     @Test

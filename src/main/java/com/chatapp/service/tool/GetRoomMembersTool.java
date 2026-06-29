@@ -38,8 +38,17 @@ public class GetRoomMembersTool implements Tool {
     public JsonNode execute(JsonNode params, ToolContext context) {
         ObjectNode root = objectMapper.createObjectNode();
         root.put("roomId", context.roomId());
+        var roomMembers = chatRoomRepository.findMembersByRoomId(context.roomId());
+        root.put("memberCount", roomMembers.size());
+        if (context.anonymousRequest()) {
+            root.put("anonymousMode", true);
+            root.put("membersHidden", true);
+            root.put("note", "The triggering user is anonymous, so real member identities are hidden from this tool result.");
+            root.putArray("members");
+            return root;
+        }
         ArrayNode members = root.putArray("members");
-        for (ChatRoomMember member : chatRoomRepository.findMembersByRoomId(context.roomId())) {
+        for (ChatRoomMember member : roomMembers) {
             ObjectNode node = members.addObject();
             node.put("userId", member.getUser().getId());
             node.put("displayName", displayName(member));

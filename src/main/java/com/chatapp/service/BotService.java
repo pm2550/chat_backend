@@ -348,10 +348,40 @@ public class BotService {
                     }
                 } catch (Exception e) {
                     log.error("机器人 {} 处理消息失败: {}", crb.getBotConfig().getBotName(), e.getMessage());
+                    Message errorMessage = saveBotFailureMessage(chatRoomId, crb, e);
+                    if (errorMessage != null) {
+                        botMessages.add(errorMessage);
+                    }
                 }
             }
         }
         return botMessages;
+    }
+
+
+
+    private Message saveBotFailureMessage(Long chatRoomId, ChatRoomBot crb, Exception cause) {
+        try {
+            return saveBotMessage(chatRoomId, crb, botFailureMessage(cause));
+        } catch (Exception saveError) {
+            log.warn("机器人 {} 错误提示保存失败: {}",
+                    crb.getBotConfig().getBotName(), saveError.getMessage());
+            return null;
+        }
+    }
+
+    private String botFailureMessage(Exception e) {
+        String message = e != null && e.getMessage() != null ? e.getMessage() : "";
+        String lower = message.toLowerCase();
+        if (lower.contains("401") || lower.contains("unauthorized") || lower.contains("invalid_request_error")
+                || lower.contains("authentication") || lower.contains("api key")) {
+            return "⚠️ 这个 bot 的模型 API 认证失败了。请检查它绑定的 Provider 凭据/API key 是否正确。";
+        }
+        if (lower.contains("429") || lower.contains("quota") || lower.contains("rate limit")
+                || lower.contains("billing")) {
+            return "⚠️ 这个 bot 的模型额度不足或被限流了。请检查模型账号余额、套餐或限流设置。";
+        }
+        return "⚠️ 这个 bot 调用模型失败了，后台已经记录错误；请检查它的模型配置和服务状态。";
     }
 
     /**
@@ -388,6 +418,12 @@ public class BotService {
         }
         task.setPrompt(cleanPrompt);
         task.setImageAttachments(sourceImage.attachments());
+        if (sourceMessage != null
+                && Boolean.TRUE.equals(sourceMessage.getIsAnonymous())
+                && sourceMessage.getAnonymousIdentity() != null) {
+            task.setAnonymousRequester(true);
+            task.setAnonymousRequesterName(sourceMessage.getAnonymousIdentity().getAnonymousName());
+        }
         task.setStatus(AgentTask.Status.RUNNING);
         task = agentTaskRepository.save(task);
 

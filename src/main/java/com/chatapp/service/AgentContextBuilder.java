@@ -82,11 +82,13 @@ public class AgentContextBuilder {
                 || botConfig.getIncludeMemorySection() == null
                 || botConfig.getIncludeMemorySection();
 
+        boolean anonymousRequest = Boolean.TRUE.equals(task.getAnonymousRequester());
+        String anonymousName = firstText(task.getAnonymousRequesterName(), "Anonymous user");
         RoomMetadata roomMetadata = includeRoomMetadata
-                ? buildRoomMetadata(room, initiator)
+                ? buildRoomMetadata(room, initiator, anonymousRequest)
                 : RoomMetadata.empty(room != null ? room.getName() : "",
                         room == null || room.getRoomType() != ChatRoom.RoomType.PRIVATE);
-        InitiatorInfo initiatorInfo = buildInitiatorInfo(room, initiator);
+        InitiatorInfo initiatorInfo = buildInitiatorInfo(room, initiator, anonymousRequest, anonymousName);
         AgentIdentity agentIdentity = new AgentIdentity(
                 botConfig != null ? defaultString(botConfig.getBotName(), "Agent") : "Agent",
                 botConfig != null ? botConfig.getBotAvatar() : null,
@@ -277,21 +279,24 @@ public class AgentContextBuilder {
         return (int) Math.ceil(han / 1.5d + ascii / 4.0d + other / 3.0d);
     }
 
-    private RoomMetadata buildRoomMetadata(ChatRoom room, User initiator) {
+    private RoomMetadata buildRoomMetadata(ChatRoom room, User initiator, boolean anonymousRequest) {
         if (room == null || room.getId() == null) {
             return RoomMetadata.empty("");
         }
         List<ChatRoomMember> members = chatRoomRepository.findMembersByRoomId(room.getId());
-        List<String> names = members.stream()
-                .map(member -> displayName(member.getUser(), member.getNickname()))
-                .filter(AgentContextBuilder::hasText)
-                .distinct()
-                .limit(TOP_MEMBER_LIMIT)
-                .collect(Collectors.toCollection(ArrayList::new));
-        if (names.isEmpty() && initiator != null) {
+        boolean hideMemberNames = anonymousRequest && Boolean.TRUE.equals(room.getAnonymousEnabled());
+        List<String> names = hideMemberNames
+                ? new ArrayList<>()
+                : members.stream()
+                        .map(member -> displayName(member.getUser(), member.getNickname()))
+                        .filter(AgentContextBuilder::hasText)
+                        .distinct()
+                        .limit(TOP_MEMBER_LIMIT)
+                        .collect(Collectors.toCollection(ArrayList::new));
+        if (!hideMemberNames && names.isEmpty() && initiator != null) {
             names.add(displayName(initiator, null));
         }
-        long memberCount = Math.max(chatRoomRepository.countChatRoomMembers(room.getId()), names.size());
+        long memberCount = Math.max(chatRoomRepository.countChatRoomMembers(room.getId()), members.size());
         if (memberCount <= 0 && initiator != null) {
             memberCount = 1;
         }
@@ -305,7 +310,10 @@ public class AgentContextBuilder {
                 room.getRoomType() != ChatRoom.RoomType.PRIVATE);
     }
 
-    private InitiatorInfo buildInitiatorInfo(ChatRoom room, User initiator) {
+    private InitiatorInfo buildInitiatorInfo(ChatRoom room, User initiator, boolean anonymousRequest, String anonymousName) {
+        if (anonymousRequest) {
+            return new InitiatorInfo(defaultString(anonymousName, "Anonymous user"), "anonymous member", false);
+        }
         if (initiator == null) {
             return new InitiatorInfo("unknown", "member", false);
         }
@@ -356,13 +364,27 @@ public class AgentContextBuilder {
                 continue;
             }
             history.add(new HistoricalMessage(
-                    displayName(message.getSender(), null),
+                    displayNameForHistory(message),
                     message.getMessageType() != null ? message.getMessageType().name() : "TEXT",
                     content,
                     formatTimestamp(message.getCreatedAt()),
                     imageContext.attachments()));
         }
         return history;
+    }
+
+
+    private String displayNameForHistory(Message message) {
+        if (message != null
+                && Boolean.TRUE.equals(message.getIsAnonymous())
+                && message.getAnonymousIdentity() != null
+                && hasText(message.getAnonymousIdentity().getAnonymousName())) {
+            return message.getAnonymousIdentity().getAnonymousName();
+        }
+        if (message != null && message.getBotConfig() != null) {
+            return firstText(message.getBotDisplayName(), message.getBotConfig().getBotName(), "Bot");
+        }
+        return message != null ? displayName(message.getSender(), null) : "Unknown";
     }
 
     private static final Pattern TEMPLATE_TOKEN = Pattern.compile("\\{\\{(\\w+)\\}\\}");
@@ -614,6 +636,7 @@ public class AgentContextBuilder {
         return List.of(
                 "Reply in the language the user wrote in. Sound like a lively, sharp PM chat participant, not a corporate help desk: direct, warm, playful when the room allows it, and willing to give a take instead of flattening everything into boilerplate.",
                 "Avoid sterile phrases like 'as an AI' unless the user explicitly asks about model internals; if a playful guess or opinion is requested, give one and label uncertainty instead of refusing by default.",
+                "Respect PM chat anonymous mode: if a message or task is anonymous, use only the anonymous display name provided by the system and never infer, reveal, or guess the real account behind it.",
                 "If the current task is a complete question or statement, answer it directly and use recent conversation only as background.",
                 "If the current task is only an @mention, empty, or a very short follow-up, infer the intended request from the immediately preceding relevant user message and answer that instead of greeting generically.",
                 "Cite group members by their display name when referring to their messages.",

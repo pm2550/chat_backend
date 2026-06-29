@@ -1,11 +1,13 @@
 package com.chatapp.service.tool;
 
+import com.chatapp.dto.UserDto;
 import com.chatapp.entity.ChatRoomMember;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MessageRepository;
 import com.chatapp.service.BotRateLimitService;
+import com.chatapp.service.UserService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -20,8 +22,10 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentToolsTest {
@@ -75,6 +79,47 @@ class AgentToolsTest {
         assertEquals(2, result.path("members").size());
         assertEquals("Alice", result.path("members").path(0).path("displayName").asText());
         assertEquals("OWNER", result.path("members").path(0).path("role").asText());
+    }
+
+
+    @Test
+    void getRoomMembersHidesIdentitiesForAnonymousTrigger() {
+        ChatRoomRepository repository = mock(ChatRoomRepository.class);
+        when(repository.findMembersByRoomId(10L)).thenReturn(List.of(
+                member(user(1L, "alice", "Alice"), ChatRoomMember.MemberRole.OWNER),
+                member(user(2L, "bob", "Bob"), ChatRoomMember.MemberRole.MEMBER)));
+        GetRoomMembersTool tool = new GetRoomMembersTool(repository, objectMapper);
+
+        JsonNode result = tool.execute(objectMapper.createObjectNode().put("roomId", 999),
+                new ToolContext(10L, 1L, 77L, 99L, true, "匿名狂野狐狸"));
+
+        assertEquals(2, result.path("memberCount").asInt());
+        assertTrue(result.path("anonymousMode").asBoolean());
+        assertTrue(result.path("membersHidden").asBoolean());
+        assertEquals(0, result.path("members").size());
+        assertTrue(result.toString().contains("identities are hidden"));
+        assertTrue(!result.toString().contains("Alice"));
+        assertTrue(!result.toString().contains("Bob"));
+    }
+
+    @Test
+    void setMyProfileCardUpdatesInitiatingUserTitle() {
+        UserService userService = mock(UserService.class);
+        UserDto saved = new UserDto();
+        saved.setId(42L);
+        saved.setTitle("陆大师");
+        saved.setTitleColor("#7C3AED");
+        saved.setTitleEffect("glow");
+        when(userService.updateTitle(eq(42L), any(UserDto.TitleRequest.class))).thenReturn(saved);
+        SetMyProfileCardTool tool = new SetMyProfileCardTool(userService, objectMapper);
+
+        JsonNode result = tool.execute(objectMapper.createObjectNode().put("title", "陆大师"),
+                new ToolContext(10L, 42L, 77L, 99L));
+
+        assertTrue(result.path("updated").asBoolean());
+        assertEquals("陆大师", result.path("title").asText());
+        assertEquals("glow", result.path("titleEffect").asText());
+        verify(userService).updateTitle(eq(42L), any(UserDto.TitleRequest.class));
     }
 
     @Test

@@ -42,7 +42,9 @@ public class AgentExecutionLoop {
                 task.getChatRoom().getId(),
                 task.getRequestedBy().getId(),
                 task.getId(),
-                bot != null ? bot.getId() : null);
+                bot != null ? bot.getId() : null,
+                Boolean.TRUE.equals(task.getAnonymousRequester()),
+                task.getAnonymousRequesterName());
         List<ToolCallRecord> toolCalls = new ArrayList<>();
         Budget budget = Budget.from(bot);
         Instant startedAt = Instant.now();

@@ -1,6 +1,7 @@
 package com.chatapp.service;
 
 import com.chatapp.entity.AgentTask;
+import com.chatapp.entity.AnonymousIdentity;
 import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.ChatRoomMember;
@@ -525,6 +526,33 @@ class AgentContextBuilderTest {
         assertFalse(prompt.contains("one-on-one"));
     }
 
+
+    @Test
+    @DisplayName("anonymous trigger hides real user identity from agent prompt")
+    void anonymousTriggerHidesRealUserIdentity() {
+        room.setRoomType(ChatRoom.RoomType.GROUP);
+        room.setAnonymousEnabled(true);
+        mockMembers();
+        Message anonymousMessage = message(1L, alice, "@Agent 你知道我是谁吗", 1);
+        anonymousMessage.setIsAnonymous(true);
+        anonymousMessage.setAnonymousIdentity(anonymousIdentity(88L, "匿名狂野狐狸"));
+        when(messageRepository.findRecentMessages(eq(10L), eq(5))).thenReturn(List.of(anonymousMessage));
+
+        AgentTask task = task("你知道我是谁吗");
+        task.setAnonymousRequester(true);
+        task.setAnonymousRequesterName("匿名狂野狐狸");
+        String prompt = builder.assembleSystemPrompt(builder.buildContext(task));
+
+        assertTrue(prompt.contains("匿名狂野狐狸"));
+        assertTrue(prompt.contains("anonymous member"));
+        assertTrue(prompt.contains("Respect PM chat anonymous mode"));
+        assertFalse(prompt.contains("Alice"));
+        assertFalse(prompt.contains("alice"));
+        assertFalse(prompt.contains("Bob"));
+        assertFalse(prompt.contains("bob"));
+        assertFalse(prompt.contains("Members (2): Alice, Bob"));
+    }
+
     @Test
     @DisplayName("mention-only task is instructed to answer the previous relevant message")
     void mentionOnlyTaskUsesPreviousRelevantMessage() {
@@ -557,7 +585,7 @@ class AgentContextBuilderTest {
         ChatRoomMember member = member(bob, ChatRoomMember.MemberRole.MEMBER);
         when(chatRoomRepository.findMembersByRoomId(10L)).thenReturn(List.of(owner, member));
         when(chatRoomRepository.countChatRoomMembers(10L)).thenReturn(2L);
-        when(chatRoomRepository.findMember(10L, 1L)).thenReturn(Optional.of(owner));
+        lenient().when(chatRoomRepository.findMember(10L, 1L)).thenReturn(Optional.of(owner));
     }
 
     private ChatRoomMember member(User user, ChatRoomMember.MemberRole role) {
@@ -585,6 +613,17 @@ class AgentContextBuilderTest {
         message.setContent(content);
         message.setCreatedAt(LocalDateTime.of(2026, 6, 1, 8, 0).minusMinutes(minutesAgo));
         return message;
+    }
+
+
+    private AnonymousIdentity anonymousIdentity(Long id, String name) {
+        AnonymousIdentity identity = new AnonymousIdentity();
+        identity.setId(id);
+        identity.setAnonymousName(name);
+        identity.setAnonymousAvatar("anon-avatar");
+        identity.setUser(alice);
+        identity.setChatRoom(room);
+        return identity;
     }
 
     private MemoryEntry memoryEntry(Long id, String title, String content, boolean pinned,

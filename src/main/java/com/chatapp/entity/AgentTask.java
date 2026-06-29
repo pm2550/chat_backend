@@ -48,6 +48,13 @@ public class AgentTask {
     @Transient
     private List<BotDto.ImageAttachment> imageAttachments = new ArrayList<>();
 
+
+    
+    private Boolean anonymousRequester = false;
+
+    
+    private String anonymousRequesterName;
+
     @Column(columnDefinition = "TEXT")
     private String result;
 

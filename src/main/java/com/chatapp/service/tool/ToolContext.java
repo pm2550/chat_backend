@@ -6,10 +6,21 @@ package com.chatapp.service.tool;
  * workspace, moderation) can resolve the calling bot. It may be {@code null} for
  * contexts not bound to a specific bot.
  */
-public record ToolContext(Long roomId, Long userId, Long taskId, Long botConfigId) {
+public record ToolContext(
+        Long roomId,
+        Long userId,
+        Long taskId,
+        Long botConfigId,
+        boolean anonymousRequest,
+        String anonymousName) {
 
     /** Backward-compatible constructor for contexts without a bound bot. */
     public ToolContext(Long roomId, Long userId, Long taskId) {
-        this(roomId, userId, taskId, null);
+        this(roomId, userId, taskId, null, false, null);
+    }
+
+    /** Backward-compatible constructor for contexts without anonymous metadata. */
+    public ToolContext(Long roomId, Long userId, Long taskId, Long botConfigId) {
+        this(roomId, userId, taskId, botConfigId, false, null);
     }
 }
