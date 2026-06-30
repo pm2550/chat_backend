@@ -285,6 +285,29 @@ class BotServiceTest {
     }
 
     @Test
+    @DisplayName("processMessageForBots CHUNKED reply mode saves sentence bubbles")
+    void process_chunked_reply_mode_saves_multiple_messages() {
+        bot.setReplyMode(BotConfig.ReplyMode.CHUNKED);
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.ALL);
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(llmService.chat(any(BotConfig.class), any()))
+                .thenReturn(new BotDto.LLMResponse("第一句。第二句！第三句？", 9, "m"));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        List<Message> replies = service.processMessageForBots(100L, "anything", 1L);
+
+        assertEquals(3, replies.size());
+        assertEquals("第一句。", replies.get(0).getContent());
+        assertEquals("第二句！", replies.get(1).getContent());
+        assertEquals("第三句？", replies.get(2).getContent());
+        verify(messageRepository, times(3)).save(any(Message.class));
+    }
+
+    @Test
     @DisplayName("processMessageForBots skips MENTION-mode bot when not @-ed")
     void process_mention_skip() {
         ChatRoomBot crb = new ChatRoomBot();

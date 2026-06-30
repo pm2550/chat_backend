@@ -83,6 +83,11 @@ public class BotConfig {
     @Column(name = "max_tokens")
     private Integer maxTokens = 2048;
 
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "reply_mode", nullable = false, length = 32)
+    private ReplyMode replyMode = ReplyMode.SINGLE;
+
     @Column(name = "max_history_messages")
     private Integer maxHistoryMessages = 20;
 
@@ -152,5 +157,12 @@ public class BotConfig {
         ALLOWLIST,
         /** Room admins can install it and room members can trigger it after install. */
         PUBLIC
+    }
+
+    public enum ReplyMode {
+        /** Current behavior: send the whole LLM answer as one chat bubble. */
+        SINGLE,
+        /** Human-like behavior: split a plain text answer into sentence bubbles. */
+        CHUNKED
     }
 }

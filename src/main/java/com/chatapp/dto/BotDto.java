@@ -26,6 +26,7 @@ public class BotDto {
     private String systemPrompt;
     private Double temperature;
     private Integer maxTokens;
+    private BotConfig.ReplyMode replyMode;
     private Boolean isActive;
     private Long providerCredentialId;
     private String providerCredentialLabel;
@@ -84,6 +85,7 @@ public class BotDto {
         private String systemPrompt;
         private Double temperature;
         private Integer maxTokens;
+        private BotConfig.ReplyMode replyMode;
         private List<String> enabledTools;
         private BotConfig.AccessPolicy accessPolicy;
         private List<Long> allowedUserIds;
@@ -103,6 +105,7 @@ public class BotDto {
         private String systemPrompt;
         private Double temperature;
         private Integer maxTokens;
+        private BotConfig.ReplyMode replyMode;
         private Boolean isActive;
         private List<String> enabledTools;
         private BotConfig.AccessPolicy accessPolicy;

@@ -44,6 +44,7 @@ public class BotService {
     // never on stray * or _ in casual prose (rendering is also gated to bot messages).
     private static final Pattern MD_HEADING = Pattern.compile("(?m)^#{1,6}\\s+\\S");
     private static final Pattern MD_TABLE_SEP = Pattern.compile("(?m)^\\s*\\|?[ :|-]*-{2,}[ :|-]*\\|?\\s*$");
+    private static final Pattern SENTENCE_BOUNDARY = Pattern.compile("(?<=[。！？!?；;])\\s+|(?<=[。！？!?；;])|\\n+");
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
     private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
@@ -81,6 +82,9 @@ public class BotService {
         bot.setSystemPrompt(request.getSystemPrompt());
         bot.setTemperature(request.getTemperature() != null ? request.getTemperature() : 0.7);
         bot.setMaxTokens(request.getMaxTokens() != null ? request.getMaxTokens() : 2048);
+        bot.setReplyMode(request.getReplyMode() != null
+                ? request.getReplyMode()
+                : BotConfig.ReplyMode.SINGLE);
         bot.setAccessPolicy(request.getAccessPolicy() != null
                 ? request.getAccessPolicy()
                 : BotConfig.AccessPolicy.PRIVATE);
@@ -112,6 +116,7 @@ public class BotService {
         if (request.getSystemPrompt() != null) bot.setSystemPrompt(request.getSystemPrompt());
         if (request.getTemperature() != null) bot.setTemperature(request.getTemperature());
         if (request.getMaxTokens() != null) bot.setMaxTokens(request.getMaxTokens());
+        if (request.getReplyMode() != null) bot.setReplyMode(request.getReplyMode());
         if (request.getIsActive() != null) bot.setIsActive(request.getIsActive());
         if (request.getEnabledTools() != null) applyEnabledTools(bot, request.getEnabledTools());
         if (request.getAccessPolicy() != null) bot.setAccessPolicy(request.getAccessPolicy());
@@ -341,10 +346,7 @@ public class BotService {
                     }
 
                     if (replyContent != null) {
-                        Message botMessage = saveBotMessage(chatRoomId, crb, replyContent);
-                        if (botMessage != null) {
-                            botMessages.add(botMessage);
-                        }
+                        botMessages.addAll(saveBotReplyMessages(chatRoomId, crb, replyContent));
                     }
                 } catch (Exception e) {
                     log.error("机器人 {} 处理消息失败: {}", crb.getBotConfig().getBotName(), e.getMessage());
@@ -367,6 +369,53 @@ public class BotService {
             log.warn("机器人 {} 错误提示保存失败: {}",
                     crb.getBotConfig().getBotName(), saveError.getMessage());
             return null;
+        }
+    }
+
+    private List<Message> saveBotReplyMessages(Long chatRoomId, ChatRoomBot crb, String content) {
+        List<String> chunks = splitReplyIntoChunks(crb.getBotConfig(), content);
+        List<Message> messages = new ArrayList<>();
+        for (String chunk : chunks) {
+            Message botMessage = saveBotMessage(chatRoomId, crb, chunk);
+            if (botMessage != null) {
+                messages.add(botMessage);
+            }
+        }
+        return messages;
+    }
+
+    private List<String> splitReplyIntoChunks(BotConfig config, String content) {
+        if (content == null || content.isBlank()) {
+            return List.of();
+        }
+        if (config == null || config.getReplyMode() != BotConfig.ReplyMode.CHUNKED) {
+            return List.of(content);
+        }
+        if (extractMediaAttachment(content) != null || looksLikeMarkdown(content)) {
+            return List.of(content);
+        }
+
+        String normalized = content.trim().replace("\r\n", "\n");
+        List<String> chunks = new ArrayList<>();
+        Matcher matcher = SENTENCE_BOUNDARY.matcher(normalized);
+        int start = 0;
+        while (matcher.find()) {
+            int end = matcher.end();
+            addReplyChunk(chunks, normalized.substring(start, end));
+            start = end;
+        }
+        addReplyChunk(chunks, normalized.substring(start));
+
+        if (chunks.size() <= 1) {
+            return List.of(content);
+        }
+        return chunks;
+    }
+
+    private void addReplyChunk(List<String> chunks, String raw) {
+        String chunk = raw == null ? "" : raw.trim();
+        if (!chunk.isBlank()) {
+            chunks.add(chunk);
         }
     }
 
@@ -655,6 +704,9 @@ public class BotService {
         dto.setSystemPrompt(entity.getSystemPrompt());
         dto.setTemperature(entity.getTemperature());
         dto.setMaxTokens(entity.getMaxTokens());
+        dto.setReplyMode(entity.getReplyMode() != null
+                ? entity.getReplyMode()
+                : BotConfig.ReplyMode.SINGLE);
         dto.setIsActive(entity.getIsActive());
         if (includeCredentialDetails && entity.getProviderCredential() != null) {
             dto.setProviderCredentialId(entity.getProviderCredential().getId());
