@@ -59,6 +59,19 @@ class FileStorageServiceEncryptionTest {
         assertThat(Files.exists(vault.metaPath(base))).isFalse();
     }
 
+
+    @Test
+    void deleteFileRemovesGeneratedImageEncryptedSidecars() throws Exception {
+        String url = service.uploadGeneratedImage("generated.png", "image/png", new byte[] {4, 5, 6});
+        String fileName = url.substring("/api/files/image-gen/".length());
+        Path base = Path.of(config.getFullImageGenDir()).resolve(fileName);
+
+        assertThat(Files.exists(vault.cipherPath(base))).isTrue();
+        assertThat(service.deleteFile(url)).isTrue();
+        assertThat(Files.exists(vault.cipherPath(base))).isFalse();
+        assertThat(Files.exists(vault.metaPath(base))).isFalse();
+    }
+
     @Test
     void legacyPlaintextStillReadsBeforeMigration() throws Exception {
         Path base = Path.of(config.getFullAvatarDir()).resolve("legacy.png");

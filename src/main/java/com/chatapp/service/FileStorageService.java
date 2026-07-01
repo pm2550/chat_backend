@@ -27,10 +27,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -213,6 +219,10 @@ public class FileStorageService {
             } else if (filePath.startsWith("/api/files/chat/")) {
                 String fileName = filePath.substring("/api/files/chat/".length());
                 Path file = Paths.get(fileStorageConfig.getFullChatFileDir()).resolve(fileName);
+                return deleteLocalFile(file);
+            } else if (filePath.startsWith("/api/files/image-gen/")) {
+                String fileName = filePath.substring("/api/files/image-gen/".length());
+                Path file = Paths.get(fileStorageConfig.getFullImageGenDir()).resolve(fileName);
                 return deleteLocalFile(file);
             } else if (filePath.startsWith("/api/files/background/")) {
                 String fileName = filePath.substring("/api/files/background/".length());
@@ -415,6 +425,35 @@ public class FileStorageService {
         return deletedEncrypted || deletedPlain;
     }
 
+
+    public List<String> listExpiredImageGenFileUrls(LocalDateTime cutoff, int maxFiles) throws IOException {
+        if (cutoff == null || maxFiles <= 0) {
+            return List.of();
+        }
+        Path dir = Paths.get(fileStorageConfig.getFullImageGenDir());
+        if (!Files.exists(dir)) {
+            return List.of();
+        }
+
+        Instant cutoffInstant = cutoff.atZone(ZoneId.systemDefault()).toInstant();
+        Set<String> urls = new LinkedHashSet<>();
+        try (var stream = Files.list(dir)) {
+            var iterator = stream.filter(Files::isRegularFile).iterator();
+            while (iterator.hasNext() && urls.size() < maxFiles) {
+                Path path = iterator.next();
+                FileTime modifiedAt = Files.getLastModifiedTime(path);
+                if (!modifiedAt.toInstant().isBefore(cutoffInstant)) {
+                    continue;
+                }
+                String baseName = imageGenBaseName(path.getFileName().toString());
+                if (baseName != null && !baseName.isBlank()) {
+                    urls.add("/api/files/image-gen/" + baseName);
+                }
+            }
+        }
+        return List.copyOf(urls);
+    }
+
     /**
      * 验证头像文件
      */
@@ -505,6 +544,16 @@ public class FileStorageService {
         }
         int lastDotIndex = filename.lastIndexOf('.');
         return lastDotIndex > 0 ? filename.substring(lastDotIndex + 1) : "";
+    }
+
+
+    private String imageGenBaseName(String fileName) {
+        if (fileName == null || fileName.isBlank() || fileName.endsWith(".meta.json")) {
+            return null;
+        }
+        return fileName.endsWith(".enc")
+                ? fileName.substring(0, fileName.length() - ".enc".length())
+                : fileName;
     }
 
     private String cleanFileName(String filename, String fallback) {

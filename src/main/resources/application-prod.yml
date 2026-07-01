@@ -78,6 +78,13 @@ file:
     legacy-encrypt-exclude-dirs: ${FILE_LEGACY_EXCLUDE_DIRS:app-releases}
     streaming-threshold-bytes: ${FILE_STREAMING_THRESHOLD:1048576}
 
+message:
+  retention:
+    enabled: ${MESSAGE_RETENTION_ENABLED:true}
+    days: ${MESSAGE_RETENTION_DAYS:30}
+    batch-size: ${MESSAGE_RETENTION_BATCH_SIZE:500}
+    cleanup-cron: ${MESSAGE_RETENTION_CLEANUP_CRON:0 30 3 * * *}
+
 app:
   version:
     publish-token: ${PMCHAT_PUBLISH_TOKEN:}

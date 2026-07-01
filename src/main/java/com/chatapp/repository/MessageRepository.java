@@ -201,6 +201,13 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
                                                        @Param("clearedBeforeMessageId") Long clearedBeforeMessageId,
                                                        Pageable pageable);
 
+    @Query("SELECT m FROM Message m WHERE m.isDeleted = false AND m.createdAt < :cutoff ORDER BY m.createdAt ASC")
+    Page<Message> findExpiredForRetention(@Param("cutoff") LocalDateTime cutoff, Pageable pageable);
+
+    @Query("SELECT CASE WHEN COUNT(m) > 0 THEN true ELSE false END " +
+           "FROM Message m WHERE m.isDeleted = false AND (m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl)")
+    boolean existsActiveMessageReferencingFileUrl(@Param("fileUrl") String fileUrl);
+
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom"})
     Optional<Message> findFirstByFileUrlAndIsDeletedFalse(String fileUrl);
 }

@@ -114,6 +114,13 @@ file:
     message-path: ${FILE_UPLOAD_PATH:./uploads/}messages/
     max-size: 52428800  # 50MB
 
+message:
+  retention:
+    enabled: ${MESSAGE_RETENTION_ENABLED:true}
+    days: ${MESSAGE_RETENTION_DAYS:30}
+    batch-size: ${MESSAGE_RETENTION_BATCH_SIZE:500}
+    cleanup-cron: ${MESSAGE_RETENTION_CLEANUP_CRON:0 30 3 * * *}
+
 # WebSocket configuration
 websocket:
   allowed-origins: ${WS_ALLOWED_ORIGINS:*}
