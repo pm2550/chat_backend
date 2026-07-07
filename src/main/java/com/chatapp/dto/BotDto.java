@@ -26,6 +26,8 @@ public class BotDto {
     private String systemPrompt;
     private Double temperature;
     private Integer maxTokens;
+    private Integer maxHistoryMessages;
+    private Boolean includeRoomMetadata;
     private BotConfig.ReplyMode replyMode;
     private Boolean isActive;
     private Long providerCredentialId;
@@ -85,6 +87,8 @@ public class BotDto {
         private String systemPrompt;
         private Double temperature;
         private Integer maxTokens;
+        private Integer maxHistoryMessages;
+        private Boolean includeRoomMetadata;
         private BotConfig.ReplyMode replyMode;
         private List<String> enabledTools;
         private BotConfig.AccessPolicy accessPolicy;
@@ -105,6 +109,8 @@ public class BotDto {
         private String systemPrompt;
         private Double temperature;
         private Integer maxTokens;
+        private Integer maxHistoryMessages;
+        private Boolean includeRoomMetadata;
         private BotConfig.ReplyMode replyMode;
         private Boolean isActive;
         private List<String> enabledTools;

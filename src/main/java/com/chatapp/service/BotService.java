@@ -82,6 +82,8 @@ public class BotService {
         bot.setSystemPrompt(request.getSystemPrompt());
         bot.setTemperature(request.getTemperature() != null ? request.getTemperature() : 0.7);
         bot.setMaxTokens(request.getMaxTokens() != null ? request.getMaxTokens() : 2048);
+        bot.setMaxHistoryMessages(request.getMaxHistoryMessages() != null ? request.getMaxHistoryMessages() : 20);
+        bot.setIncludeRoomMetadata(request.getIncludeRoomMetadata() == null || request.getIncludeRoomMetadata());
         bot.setReplyMode(request.getReplyMode() != null
                 ? request.getReplyMode()
                 : BotConfig.ReplyMode.SINGLE);
@@ -116,6 +118,8 @@ public class BotService {
         if (request.getSystemPrompt() != null) bot.setSystemPrompt(request.getSystemPrompt());
         if (request.getTemperature() != null) bot.setTemperature(request.getTemperature());
         if (request.getMaxTokens() != null) bot.setMaxTokens(request.getMaxTokens());
+        if (request.getMaxHistoryMessages() != null) bot.setMaxHistoryMessages(request.getMaxHistoryMessages());
+        if (request.getIncludeRoomMetadata() != null) bot.setIncludeRoomMetadata(request.getIncludeRoomMetadata());
         if (request.getReplyMode() != null) bot.setReplyMode(request.getReplyMode());
         if (request.getIsActive() != null) bot.setIsActive(request.getIsActive());
         if (request.getEnabledTools() != null) applyEnabledTools(bot, request.getEnabledTools());
@@ -338,7 +342,7 @@ public class BotService {
                         replyContent = respondViaAgentLoop(chatRoomId, crb, safeContent, senderId, sourceMessage);
                     } else {
                         // Persona / tool-less bots keep the lightweight one-shot path.
-                        List<BotDto.ChatMessage> chatMessages = buildContext(crb, safeContent, sourceMessage);
+                        List<BotDto.ChatMessage> chatMessages = buildContext(chatRoomId, crb, safeContent, sourceMessage);
                         BotDto.LLMResponse response = llmService.chat(config, chatMessages);
                         replyContent = response.getContent();
                         log.info("机器人 {} 在聊天室 {} 回复了消息 (tokens: {})",
@@ -511,7 +515,7 @@ public class BotService {
                 : cleaned;
     }
 
-    private List<BotDto.ChatMessage> buildContext(ChatRoomBot crb, String userMessage, Message sourceMessage) {
+    private List<BotDto.ChatMessage> buildContext(Long chatRoomId, ChatRoomBot crb, String userMessage, Message sourceMessage) {
         BotConfig config = crb.getBotConfig();
         List<BotDto.ChatMessage> messages = new ArrayList<>();
 
@@ -534,13 +538,62 @@ public class BotService {
         if (sourceImage.annotation() != null && !sourceImage.annotation().isBlank()) {
             cleanMessage = cleanMessage + "\n" + sourceImage.annotation();
         }
-        messages.add(BotDto.ChatMessage.userWithImages(cleanMessage, sourceImage.attachments()));
+
+        messages.clear();
+        messages.add(new BotDto.ChatMessage("system", buildRoomAwareOneShotSystemPrompt(chatRoomId, crb, cleanMessage, sourceMessage)));
         if (config.getCharacterPostHistoryInstructions() != null
                 && !config.getCharacterPostHistoryInstructions().isBlank()) {
             messages.add(new BotDto.ChatMessage("system", config.getCharacterPostHistoryInstructions().trim()));
         }
+        messages.add(BotDto.ChatMessage.userWithImages(cleanMessage, sourceImage.attachments()));
 
         return messages;
+    }
+
+    private String buildRoomAwareOneShotSystemPrompt(Long chatRoomId, ChatRoomBot crb, String cleanMessage, Message sourceMessage) {
+        BotConfig config = crb.getBotConfig();
+        ChatRoom chatRoom = crb.getChatRoom();
+        if (chatRoom == null && sourceMessage != null) {
+            chatRoom = sourceMessage.getChatRoom();
+        }
+        if (chatRoom == null && chatRoomId != null) {
+            chatRoom = chatRoomRepository.findById(chatRoomId).orElse(null);
+        }
+        User requester = sourceMessage != null ? sourceMessage.getSender() : null;
+        if (requester == null && config.getCreatedBy() != null) {
+            requester = config.getCreatedBy();
+        }
+        if (requester == null && chatRoom != null) {
+            requester = chatRoom.getCreatedBy();
+        }
+
+        AgentTask task = new AgentTask();
+        task.setChatRoom(chatRoom);
+        task.setRequestedBy(requester);
+        task.setBotConfig(config);
+        task.setPrompt(cleanMessage);
+        if (sourceMessage != null
+                && Boolean.TRUE.equals(sourceMessage.getIsAnonymous())
+                && sourceMessage.getAnonymousIdentity() != null) {
+            task.setAnonymousRequester(true);
+            task.setAnonymousRequesterName(sourceMessage.getAnonymousIdentity().getAnonymousName());
+        }
+
+        AgentContextBuilder.AgentContextEnvelope envelope = agentContextBuilder.buildContext(task);
+        String prompt = agentContextBuilder.assembleSystemPrompt(envelope);
+        String displayName = roomDisplayName(crb);
+        StringBuilder builder = new StringBuilder(prompt == null ? "" : prompt.strip());
+        builder.append("\n\n[ROOM BOT BINDING]\n")
+                .append("In this room, your visible bot name is \"")
+                .append(displayName)
+                .append("\". Know that you are currently speaking inside this room as that bot. ")
+                .append("Use the room context and recent conversation when the user only mentions you or asks a short follow-up.\n");
+        if (crb.getRoomPromptSuffix() != null && !crb.getRoomPromptSuffix().isBlank()) {
+            builder.append("\n[ROOM-SPECIFIC INSTRUCTIONS]\n")
+                    .append(crb.getRoomPromptSuffix().trim())
+                    .append("\n");
+        }
+        return builder.toString();
     }
 
 
@@ -704,6 +757,8 @@ public class BotService {
         dto.setSystemPrompt(entity.getSystemPrompt());
         dto.setTemperature(entity.getTemperature());
         dto.setMaxTokens(entity.getMaxTokens());
+        dto.setMaxHistoryMessages(entity.getMaxHistoryMessages() != null ? entity.getMaxHistoryMessages() : 20);
+        dto.setIncludeRoomMetadata(entity.getIncludeRoomMetadata() == null || entity.getIncludeRoomMetadata());
         dto.setReplyMode(entity.getReplyMode() != null
                 ? entity.getReplyMode()
                 : BotConfig.ReplyMode.SINGLE);

@@ -1,6 +1,7 @@
 package com.chatapp.service;
 
 import com.chatapp.dto.BotDto;
+import com.chatapp.entity.AgentTask;
 import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.ChatRoomBot;
@@ -78,7 +79,42 @@ class BotServiceTest {
         room = new ChatRoom();
         room.setId(100L);
         room.setName("test-room");
+        room.setRoomType(ChatRoom.RoomType.GROUP);
         room.setCreatedBy(alice);
+
+        lenient().when(agentContextBuilder.buildContext(any(AgentTask.class)))
+                .thenAnswer(inv -> {
+                    AgentTask task = inv.getArgument(0);
+                    return new AgentContextBuilder.AgentContextEnvelope(
+                            new AgentContextBuilder.AgentIdentity(
+                                    task.getBotConfig().getBotName(), null,
+                                    task.getBotConfig().getSystemPrompt(),
+                                    task.getBotConfig().getSystemPromptTemplate()),
+                            new AgentContextBuilder.RoomMetadata(
+                                    true,
+                                    task.getChatRoom() != null ? task.getChatRoom().getName() : "",
+                                    "",
+                                    2,
+                                    List.of("alice", "bob"),
+                                    null,
+                                    true),
+                            List.of(new AgentContextBuilder.HistoricalMessage(
+                                    "alice", "TEXT", "previous room message", "2026-07-01 00:00:00 UTC")),
+                            new AgentContextBuilder.InitiatorInfo("alice", "MEMBER", true),
+                            List.of("Use room context."),
+                            task.getPrompt(),
+                            6000,
+                            120);
+                });
+        lenient().when(agentContextBuilder.assembleSystemPrompt(any(AgentContextBuilder.AgentContextEnvelope.class)))
+                .thenAnswer(inv -> {
+                    AgentContextBuilder.AgentContextEnvelope env = inv.getArgument(0);
+                    return "Room: " + env.roomMetadata().name()
+                            + "\nMembers (" + env.roomMetadata().memberCount() + "): "
+                            + String.join(", ", env.roomMetadata().memberNames())
+                            + "\nRecent: " + env.conversationHistory().get(0).content()
+                            + "\nTask: " + env.taskText();
+                });
     }
 
     @Test
@@ -401,16 +437,21 @@ class BotServiceTest {
     }
 
     @Test
-    @DisplayName("processMessageForBots injects persona matched lore and post history in order")
-    void process_character_context_order() {
+    @DisplayName("processMessageForBots injects room-aware context for tool-less bots")
+    void process_room_aware_context_for_toolless_bot() {
         ChatRoomBot crb = new ChatRoomBot();
+        crb.setChatRoom(room);
         crb.setBotConfig(bot);
         crb.setTriggerMode(ChatRoomBot.TriggerMode.ALL);
-        bot.setCharacterPersona("Persona: fox courier");
-        bot.setCharacterScenario("Scenario: delivery guild");
-        bot.setCharacterSystemPrompt("Character system");
+        crb.setRoomNickname("无敌高");
         bot.setCharacterPostHistoryInstructions("Post history instruction");
-        bot.setCharacterBookJson("{\"entries\":[{\"keys\":[\"parcel\"],\"content\":\"Lore: parcels are sacred\",\"enabled\":true}]}");
+
+        Message source = new Message();
+        source.setId(500L);
+        source.setChatRoom(room);
+        source.setSender(alice);
+        source.setContent("@无敌高");
+        source.setMessageType(Message.MessageType.TEXT);
 
         when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
         when(llmService.chat(any(), any())).thenReturn(new BotDto.LLMResponse("ack", 1, "m"));
@@ -418,19 +459,28 @@ class BotServiceTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
         when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.processMessageForBots(100L, "the parcel is late", 1L);
+        service.processMessageForBots(100L, "@无敌高", 1L, source);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<BotDto.ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
         verify(llmService).chat(eq(bot), captor.capture());
         List<BotDto.ChatMessage> messages = captor.getValue();
         assertEquals("system", messages.get(0).getRole());
-        assertTrue(messages.get(0).textContent().contains("Character system"));
-        assertTrue(messages.get(0).textContent().contains("Persona: fox courier"));
-        assertTrue(messages.get(0).textContent().contains("Lore: parcels are sacred"));
-        assertEquals("user", messages.get(1).getRole());
-        assertEquals("system", messages.get(2).getRole());
-        assertEquals("Post history instruction", messages.get(2).textContent());
+        assertTrue(messages.get(0).textContent().contains("Room: test-room"));
+        assertTrue(messages.get(0).textContent().contains("Members (2): alice, bob"));
+        assertTrue(messages.get(0).textContent().contains("Recent: previous room message"));
+        assertTrue(messages.get(0).textContent().contains("visible bot name is \"无敌高\""));
+        assertTrue(messages.get(0).textContent().contains("[MENTION_ONLY]"));
+        assertEquals("system", messages.get(1).getRole());
+        assertEquals("Post history instruction", messages.get(1).textContent());
+        assertEquals("user", messages.get(2).getRole());
+        assertTrue(messages.get(2).textContent().contains("[MENTION_ONLY]"));
+
+        ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(agentContextBuilder).buildContext(taskCaptor.capture());
+        assertEquals(room, taskCaptor.getValue().getChatRoom());
+        assertEquals(alice, taskCaptor.getValue().getRequestedBy());
+        assertEquals(bot, taskCaptor.getValue().getBotConfig());
     }
 
     @Test
