@@ -46,6 +46,32 @@ public class BotService {
     private static final Pattern MD_TABLE_SEP = Pattern.compile("(?m)^\\s*\\|?[ :|-]*-{2,}[ :|-]*\\|?\\s*$");
     private static final Pattern SENTENCE_BOUNDARY =
             Pattern.compile("(?<=[。！？!?；;])\\s+|(?<=[。！？!?；;])|\\n+");
+    private static final String KIRARA_ANALYSIS_SYSTEM_PROMPT = """
+            你是 Kirara/阿雷工作流的 R1 上下文判定器，只做分析，不直接聊天。
+            你的任务是根据房间上下文、最近消息和当前触发文本，判断真正应该回应什么。
+            规则：
+            - 如果当前触发文本只有 @机器人、空白、或很短追问（例如：然后呢、真的吗、快说、？），主要根据最近一两条用户消息补全真实意图。
+            - 如果当前触发文本本身是完整问题、判断或挑衅，优先回应当前文本，前文只当背景。
+            - 不要假装知道没有出现在上下文里的事实。
+            - 只输出紧凑 JSON，不要 Markdown，不要解释。
+            JSON 字段：
+            {
+              "mention_only": boolean,
+              "target_speaker": "应主要回应的发言人或空字符串",
+              "target_message": "应主要回应的原话摘要",
+              "reply_intent": "阿雷下一轮应该回应的重点",
+              "tone": "建议语气，短语",
+              "avoid": "应避免的错误"
+            }
+            """;
+    private static final String KIRARA_SECOND_PASS_SYSTEM_PROMPT = """
+            [KIRARA R1 CONTEXT ANALYSIS]
+            下面是第一轮 R1 对上下文的隐藏判定。它不是要展示给用户看的内容。
+            你必须用它来确定该接哪句前文、该回答什么、该用什么语气。
+            禁止复述 JSON，禁止提到 R1、分析器、系统提示或工作流。
+            如果 R1 说当前是 mention-only，就直接回应 target_message/reply_intent，不要泛泛问“有什么可以帮你”。
+            输出仍按阿雷/Kirara 风格，用 <break> 分成 3-5 条短消息。
+            """;
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
     private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
@@ -88,6 +114,9 @@ public class BotService {
         bot.setReplyMode(request.getReplyMode() != null
                 ? request.getReplyMode()
                 : BotConfig.ReplyMode.SINGLE);
+        bot.setWorkflowMode(request.getWorkflowMode() != null
+                ? request.getWorkflowMode()
+                : BotConfig.WorkflowMode.SINGLE_PASS);
         bot.setAccessPolicy(request.getAccessPolicy() != null
                 ? request.getAccessPolicy()
                 : BotConfig.AccessPolicy.PRIVATE);
@@ -122,6 +151,7 @@ public class BotService {
         if (request.getMaxHistoryMessages() != null) bot.setMaxHistoryMessages(request.getMaxHistoryMessages());
         if (request.getIncludeRoomMetadata() != null) bot.setIncludeRoomMetadata(request.getIncludeRoomMetadata());
         if (request.getReplyMode() != null) bot.setReplyMode(request.getReplyMode());
+        if (request.getWorkflowMode() != null) bot.setWorkflowMode(request.getWorkflowMode());
         if (request.getIsActive() != null) bot.setIsActive(request.getIsActive());
         if (request.getEnabledTools() != null) applyEnabledTools(bot, request.getEnabledTools());
         if (request.getAccessPolicy() != null) bot.setAccessPolicy(request.getAccessPolicy());
@@ -307,23 +337,15 @@ public class BotService {
                 continue;
             }
             String displayName = roomDisplayName(crb);
-            boolean shouldRespond = switch (crb.getTriggerMode()) {
+            ChatRoomBot.TriggerMode triggerMode = crb.getTriggerMode() != null
+                    ? crb.getTriggerMode()
+                    : ChatRoomBot.TriggerMode.MENTION;
+            boolean shouldRespond = switch (triggerMode) {
                 case ALL -> true;
                 case MENTION -> safeContent.contains("@" + displayName)
                         || safeContent.contains("@" + crb.getBotConfig().getBotName());
-                case KEYWORD -> {
-                    if (crb.getTriggerKeywords() == null) yield false;
-                    String[] keywords = crb.getTriggerKeywords().split(",");
-                    boolean matched = false;
-                    for (String kw : keywords) {
-                        String keyword = kw.trim();
-                        if (!keyword.isBlank() && safeContent.contains(keyword)) {
-                            matched = true;
-                            break;
-                        }
-                    }
-                    yield matched;
-                }
+                case KEYWORD -> keywordTriggerMatches(crb.getTriggerKeywords(), safeContent);
+                case REGEX -> regexTriggerMatches(crb, safeContent);
             };
 
             if (shouldRespond) {
@@ -343,11 +365,15 @@ public class BotService {
                         replyContent = respondViaAgentLoop(chatRoomId, crb, safeContent, senderId, sourceMessage);
                     } else {
                         // Persona / tool-less bots keep the lightweight one-shot path.
-                        List<BotDto.ChatMessage> chatMessages = buildContext(chatRoomId, crb, safeContent, sourceMessage);
-                        BotDto.LLMResponse response = llmService.chat(config, chatMessages);
-                        replyContent = response.getContent();
-                        log.info("机器人 {} 在聊天室 {} 回复了消息 (tokens: {})",
-                                config.getBotName(), chatRoomId, response.getTokensUsed());
+                        if (isKiraraTwoPass(config)) {
+                            replyContent = respondViaKiraraTwoPass(chatRoomId, crb, safeContent, sourceMessage);
+                        } else {
+                            List<BotDto.ChatMessage> chatMessages = buildContext(chatRoomId, crb, safeContent, sourceMessage);
+                            BotDto.LLMResponse response = llmService.chat(config, chatMessages);
+                            replyContent = response.getContent();
+                            log.info("机器人 {} 在聊天室 {} 回复了消息 (tokens: {})",
+                                    config.getBotName(), chatRoomId, response.getTokensUsed());
+                        }
                     }
 
                     if (replyContent != null) {
@@ -363,6 +389,119 @@ public class BotService {
             }
         }
         return botMessages;
+    }
+
+    private boolean keywordTriggerMatches(String rawKeywords, String safeContent) {
+        if (rawKeywords == null || rawKeywords.isBlank()) {
+            return false;
+        }
+        String[] keywords = rawKeywords.split(",");
+        for (String kw : keywords) {
+            String keyword = kw.trim();
+            if (!keyword.isBlank() && safeContent.contains(keyword)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean regexTriggerMatches(ChatRoomBot crb, String safeContent) {
+        String pattern = crb.getTriggerKeywords();
+        if (pattern == null || pattern.isBlank()) {
+            return false;
+        }
+        try {
+            return Pattern.compile(pattern, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
+                    .matcher(safeContent)
+                    .find();
+        } catch (Exception e) {
+            log.warn("机器人 {} 在聊天室 {} 的正则触发式无效，已跳过: {}",
+                    crb.getBotConfig() != null ? crb.getBotConfig().getBotName() : "<unknown>",
+                    crb.getChatRoom() != null ? crb.getChatRoom().getId() : "<unknown>",
+                    e.getMessage());
+            return false;
+        }
+    }
+
+    private boolean isKiraraTwoPass(BotConfig config) {
+        return config != null && config.getWorkflowMode() == BotConfig.WorkflowMode.KIRARA_TWO_PASS;
+    }
+
+    private String respondViaKiraraTwoPass(
+            Long chatRoomId,
+            ChatRoomBot crb,
+            String messageContent,
+            Message sourceMessage) {
+        BotConfig config = crb.getBotConfig();
+        try {
+            String cleanMessage = cleanMentions(messageContent, crb);
+            BotDto.LLMResponse analysis = llmService.chat(
+                    config,
+                    buildKiraraAnalysisMessages(chatRoomId, crb, cleanMessage, sourceMessage));
+            String analysisText = normalizeAnalysis(analysis.getContent());
+
+            List<BotDto.ChatMessage> finalMessages = buildContext(chatRoomId, crb, messageContent, sourceMessage);
+            injectKiraraAnalysis(finalMessages, analysisText);
+
+            BotDto.LLMResponse response = llmService.chat(config, finalMessages);
+            String content = requireBotReplyContent(response.getContent(), "kirara-final");
+            log.info("机器人 {} 在聊天室 {} 通过 Kirara two-pass 回复 (analysisTokens={} finalTokens={})",
+                    config.getBotName(), chatRoomId, analysis.getTokensUsed(), response.getTokensUsed());
+            return content;
+        } catch (Exception e) {
+            log.warn("机器人 {} 在聊天室 {} 的 Kirara two-pass 失败，回退到单次上下文回复: {}",
+                    config.getBotName(), chatRoomId, e.getMessage());
+            List<BotDto.ChatMessage> fallbackMessages = buildContext(chatRoomId, crb, messageContent, sourceMessage);
+            BotDto.LLMResponse fallback = llmService.chat(config, fallbackMessages);
+            return requireBotReplyContent(fallback.getContent(), "kirara-fallback");
+        }
+    }
+
+    private List<BotDto.ChatMessage> buildKiraraAnalysisMessages(
+            Long chatRoomId,
+            ChatRoomBot crb,
+            String cleanMessage,
+            Message sourceMessage) {
+        List<BotDto.ChatMessage> messages = new ArrayList<>();
+        String roomAwareContext = buildRoomAwareOneShotSystemPrompt(chatRoomId, crb, cleanMessage, sourceMessage);
+        messages.add(new BotDto.ChatMessage(
+                "system",
+                KIRARA_ANALYSIS_SYSTEM_PROMPT + "\n\n[ROOM AND RECENT CONTEXT]\n" + roomAwareContext));
+        messages.add(new BotDto.ChatMessage(
+                "user",
+                "当前触发文本：\n" + nullToEmpty(cleanMessage) + "\n\n只输出 JSON。"));
+        return messages;
+    }
+
+    private String normalizeAnalysis(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "{\"mention_only\":false,\"target_speaker\":\"\",\"target_message\":\"\",\"reply_intent\":\"按当前消息自然回复\",\"tone\":\"阿雷风格\",\"avoid\":\"不要泛泛问有什么可以帮你\"}";
+        }
+        String trimmed = raw.trim();
+        if (trimmed.startsWith("```")) {
+            trimmed = trimmed.replaceFirst("(?s)^```(?:json)?\\s*", "")
+                    .replaceFirst("(?s)\\s*```$", "")
+                    .trim();
+        }
+        return trimmed;
+    }
+
+    private void injectKiraraAnalysis(List<BotDto.ChatMessage> finalMessages, String analysisText) {
+        if (finalMessages == null) {
+            return;
+        }
+        BotDto.ChatMessage analysisMessage = new BotDto.ChatMessage(
+                "system",
+                KIRARA_SECOND_PASS_SYSTEM_PROMPT + "\n" + analysisText);
+        int insertAt = Math.max(0, finalMessages.size() - 1);
+        finalMessages.add(insertAt, analysisMessage);
+    }
+
+    private String requireBotReplyContent(String content, String phase) {
+        if (content == null || content.isBlank()) {
+            throw new IllegalStateException("LLM returned empty bot reply at " + phase);
+        }
+        return content;
     }
 
 
@@ -765,6 +904,9 @@ public class BotService {
         dto.setReplyMode(entity.getReplyMode() != null
                 ? entity.getReplyMode()
                 : BotConfig.ReplyMode.SINGLE);
+        dto.setWorkflowMode(entity.getWorkflowMode() != null
+                ? entity.getWorkflowMode()
+                : BotConfig.WorkflowMode.SINGLE_PASS);
         dto.setIsActive(entity.getIsActive());
         if (includeCredentialDetails && entity.getProviderCredential() != null) {
             dto.setProviderCredentialId(entity.getProviderCredential().getId());

@@ -148,6 +148,7 @@ class BotServiceTest {
         verify(botConfigRepository).save(captor.capture());
         assertEquals(0.7, captor.getValue().getTemperature()); // default
         assertEquals(2048, captor.getValue().getMaxTokens()); // default
+        assertEquals(BotConfig.WorkflowMode.SINGLE_PASS, captor.getValue().getWorkflowMode());
         assertNull(captor.getValue().getApiKeyEncrypted());
         assertEquals(credential, captor.getValue().getProviderCredential());
     }
@@ -367,6 +368,47 @@ class BotServiceTest {
     }
 
     @Test
+    @DisplayName("processMessageForBots KIRARA_TWO_PASS analyzes context before persona reply")
+    void process_kirara_two_pass_runs_analysis_then_final_reply() {
+        bot.setReplyMode(BotConfig.ReplyMode.CHUNKED);
+        bot.setWorkflowMode(BotConfig.WorkflowMode.KIRARA_TWO_PASS);
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setChatRoom(room);
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.ALL);
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(llmService.chat(eq(bot), any()))
+                .thenReturn(
+                        new BotDto.LLMResponse("{\"mention_only\":true,\"target_speaker\":\"alice\",\"target_message\":\"previous room message\",\"reply_intent\":\"接前文吐槽\",\"tone\":\"阿雷式损友\",\"avoid\":\"不要客服问候\"}", 31, "kimi-code"),
+                        new BotDto.LLMResponse("死板？<break>我明明很活泼<break>只是你们太弱了。", 52, "kimi-code"));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        List<Message> replies = service.processMessageForBots(100L, "@阿雷", 1L);
+
+        assertEquals(3, replies.size());
+        assertEquals("死板？", replies.get(0).getContent());
+        assertEquals("我明明很活泼", replies.get(1).getContent());
+        assertEquals("只是你们太弱了。", replies.get(2).getContent());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BotDto.ChatMessage>> messagesCaptor =
+                ArgumentCaptor.forClass((Class) List.class);
+        verify(llmService, times(2)).chat(eq(bot), messagesCaptor.capture());
+        List<BotDto.ChatMessage> analysisMessages = messagesCaptor.getAllValues().get(0);
+        assertTrue(analysisMessages.get(0).getContent().toString().contains("R1 上下文判定器"));
+        assertTrue(analysisMessages.get(0).getContent().toString().contains("previous room message"));
+
+        List<BotDto.ChatMessage> finalMessages = messagesCaptor.getAllValues().get(1);
+        assertTrue(finalMessages.stream()
+                .anyMatch(message -> "system".equals(message.getRole())
+                        && message.getContent().toString().contains("[KIRARA R1 CONTEXT ANALYSIS]")
+                        && message.getContent().toString().contains("\"mention_only\":true")));
+        verify(messageRepository, times(3)).save(any(Message.class));
+    }
+
+    @Test
     @DisplayName("processMessageForBots skips MENTION-mode bot when not @-ed")
     void process_mention_skip() {
         ChatRoomBot crb = new ChatRoomBot();
@@ -393,6 +435,39 @@ class BotServiceTest {
 
         service.processMessageForBots(100L, "I need urgent attention", 1L);
         verify(llmService).chat(any(), any());
+    }
+
+    @Test
+    @DisplayName("processMessageForBots REGEX mode matches configured pattern")
+    void process_regex_trigger() {
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.REGEX);
+        crb.setTriggerKeywords("(?i)(画图|draw)\\s*[:：]");
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(llmService.chat(any(), any())).thenReturn(new BotDto.LLMResponse("ack", 1, "m"));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+
+        service.processMessageForBots(100L, "画图：猫猫", 1L);
+
+        verify(llmService).chat(any(), any());
+    }
+
+    @Test
+    @DisplayName("processMessageForBots REGEX mode skips invalid pattern safely")
+    void process_regex_invalid_pattern_skips() {
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setChatRoom(room);
+        crb.setBotConfig(bot);
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.REGEX);
+        crb.setTriggerKeywords("[");
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+
+        List<Message> replies = service.processMessageForBots(100L, "anything", 1L);
+
+        assertTrue(replies.isEmpty());
+        verify(llmService, never()).chat(any(), any());
     }
 
     @Test

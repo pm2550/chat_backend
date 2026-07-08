@@ -88,6 +88,11 @@ public class BotConfig {
     @Column(name = "reply_mode", nullable = false, length = 32)
     private ReplyMode replyMode = ReplyMode.SINGLE;
 
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "workflow_mode", nullable = false, length = 32)
+    private WorkflowMode workflowMode = WorkflowMode.SINGLE_PASS;
+
     @Column(name = "max_history_messages")
     private Integer maxHistoryMessages = 20;
 
@@ -164,5 +169,12 @@ public class BotConfig {
         SINGLE,
         /** Human-like behavior: split a plain text answer into sentence bubbles. */
         CHUNKED
+    }
+
+    public enum WorkflowMode {
+        /** Current behavior: one context build and one LLM call. */
+        SINGLE_PASS,
+        /** Kirara-style two-pass flow: infer context first, then speak in persona. */
+        KIRARA_TWO_PASS
     }
 }

@@ -29,6 +29,7 @@ public class BotDto {
     private Integer maxHistoryMessages;
     private Boolean includeRoomMetadata;
     private BotConfig.ReplyMode replyMode;
+    private BotConfig.WorkflowMode workflowMode;
     private Boolean isActive;
     private Long providerCredentialId;
     private String providerCredentialLabel;
@@ -90,6 +91,7 @@ public class BotDto {
         private Integer maxHistoryMessages;
         private Boolean includeRoomMetadata;
         private BotConfig.ReplyMode replyMode;
+        private BotConfig.WorkflowMode workflowMode;
         private List<String> enabledTools;
         private BotConfig.AccessPolicy accessPolicy;
         private List<Long> allowedUserIds;
@@ -112,6 +114,7 @@ public class BotDto {
         private Integer maxHistoryMessages;
         private Boolean includeRoomMetadata;
         private BotConfig.ReplyMode replyMode;
+        private BotConfig.WorkflowMode workflowMode;
         private Boolean isActive;
         private List<String> enabledTools;
         private BotConfig.AccessPolicy accessPolicy;

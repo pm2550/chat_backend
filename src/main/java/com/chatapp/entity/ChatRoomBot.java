@@ -62,6 +62,7 @@ public class ChatRoomBot {
     public enum TriggerMode {
         MENTION,    // @机器人 触发
         KEYWORD,    // 关键词触发
+        REGEX,      // 正则触发
         ALL         // 所有消息都触发
     }
 
