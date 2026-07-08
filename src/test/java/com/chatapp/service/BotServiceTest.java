@@ -344,6 +344,29 @@ class BotServiceTest {
     }
 
     @Test
+    @DisplayName("processMessageForBots CHUNKED reply mode treats Kirara break markers as bubbles")
+    void process_chunked_reply_mode_splits_kirara_break_markers() {
+        bot.setReplyMode(BotConfig.ReplyMode.CHUNKED);
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.ALL);
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(llmService.chat(any(BotConfig.class), any()))
+                .thenReturn(new BotDto.LLMResponse("dds<break>可惜<break>笨笨高。", 9, "m"));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        List<Message> replies = service.processMessageForBots(100L, "anything", 1L);
+
+        assertEquals(3, replies.size());
+        assertEquals("dds", replies.get(0).getContent());
+        assertEquals("可惜", replies.get(1).getContent());
+        assertEquals("笨笨高。", replies.get(2).getContent());
+        verify(messageRepository, times(3)).save(any(Message.class));
+    }
+
+    @Test
     @DisplayName("processMessageForBots skips MENTION-mode bot when not @-ed")
     void process_mention_skip() {
         ChatRoomBot crb = new ChatRoomBot();

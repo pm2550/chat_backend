@@ -44,7 +44,8 @@ public class BotService {
     // never on stray * or _ in casual prose (rendering is also gated to bot messages).
     private static final Pattern MD_HEADING = Pattern.compile("(?m)^#{1,6}\\s+\\S");
     private static final Pattern MD_TABLE_SEP = Pattern.compile("(?m)^\\s*\\|?[ :|-]*-{2,}[ :|-]*\\|?\\s*$");
-    private static final Pattern SENTENCE_BOUNDARY = Pattern.compile("(?<=[。！？!?；;])\\s+|(?<=[。！？!?；;])|\\n+");
+    private static final Pattern SENTENCE_BOUNDARY =
+            Pattern.compile("(?<=[。！？!?；;])\\s+|(?<=[。！？!?；;])|\\n+");
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
     private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
@@ -399,7 +400,9 @@ public class BotService {
             return List.of(content);
         }
 
-        String normalized = content.trim().replace("\r\n", "\n");
+        String normalized = content.trim()
+                .replace("\r\n", "\n")
+                .replaceAll("(?i)<break>", "\n");
         List<String> chunks = new ArrayList<>();
         Matcher matcher = SENTENCE_BOUNDARY.matcher(normalized);
         int start = 0;
