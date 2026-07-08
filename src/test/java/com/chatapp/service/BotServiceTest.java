@@ -26,6 +26,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -406,6 +407,59 @@ class BotServiceTest {
                         && message.getContent().toString().contains("[KIRARA R1 CONTEXT ANALYSIS]")
                         && message.getContent().toString().contains("\"mention_only\":true")));
         verify(messageRepository, times(3)).save(any(Message.class));
+    }
+
+    @Test
+    @DisplayName("processMessageForBots KIRARA_TWO_PASS mention-only never saves generic model failure on empty LLM replies")
+    void process_kirara_two_pass_mention_only_empty_llm_uses_contextual_fallback() {
+        bot.setBotName("阿雷");
+        bot.setReplyMode(BotConfig.ReplyMode.CHUNKED);
+        bot.setWorkflowMode(BotConfig.WorkflowMode.KIRARA_TWO_PASS);
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setChatRoom(room);
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.MENTION);
+
+        Message source = new Message();
+        source.setId(200L);
+        source.setContent("@阿雷");
+        source.setCreatedAt(LocalDateTime.of(2026, 7, 8, 8, 48, 57));
+        source.setSender(alice);
+        source.setChatRoom(room);
+
+        Message previous = new Message();
+        previous.setId(199L);
+        previous.setContent("腾讯把隐秘的阿雷给封了，是不是很愚蠢");
+        previous.setCreatedAt(LocalDateTime.of(2026, 7, 8, 8, 47, 57));
+        previous.setSender(alice);
+        previous.setChatRoom(room);
+
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(messageRepository.findContextBefore(eq(100L), eq(source.getCreatedAt()), any()))
+                .thenReturn(List.of(previous));
+        when(llmService.chat(eq(bot), any()))
+                .thenReturn(
+                        new BotDto.LLMResponse("{\"mention_only\":true,\"target_speaker\":\"alice\",\"target_message\":\"腾讯封号\",\"reply_intent\":\"接前文吐槽\",\"tone\":\"阿雷式损友\",\"avoid\":\"不要客服问候\"}", 21, "kimi-code"),
+                        new BotDto.LLMResponse("", 22, "kimi-code"),
+                        new BotDto.LLMResponse("", 23, "kimi-code"));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        List<Message> replies = service.processMessageForBots(100L, "@阿雷", 1L, source);
+
+        assertEquals(3, replies.size());
+        assertEquals("看到了。", replies.get(0).getContent());
+        assertTrue(replies.get(1).getContent().contains("腾讯把隐秘的阿雷给封了"));
+        assertEquals("我接这句。", replies.get(2).getContent());
+        assertTrue(replies.stream().noneMatch(message -> message.getContent().contains("调用模型失败")));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BotDto.ChatMessage>> messagesCaptor =
+                ArgumentCaptor.forClass((Class) List.class);
+        verify(llmService, times(3)).chat(eq(bot), messagesCaptor.capture());
+        assertTrue(messagesCaptor.getAllValues().get(0).get(1).getContent().toString()
+                .contains("腾讯把隐秘的阿雷给封了"));
     }
 
     @Test

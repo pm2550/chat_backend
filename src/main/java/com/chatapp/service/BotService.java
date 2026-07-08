@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -72,6 +73,7 @@ public class BotService {
             如果 R1 说当前是 mention-only，就直接回应 target_message/reply_intent，不要泛泛问“有什么可以帮你”。
             输出仍按阿雷/Kirara 风格，用 <break> 分成 3-5 条短消息。
             """;
+    private static final String MENTION_ONLY_MARKER = "[MENTION_ONLY]";
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
     private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
@@ -434,7 +436,7 @@ public class BotService {
             Message sourceMessage) {
         BotConfig config = crb.getBotConfig();
         try {
-            String cleanMessage = cleanMentions(messageContent, crb);
+            String cleanMessage = kiraraTaskText(chatRoomId, crb, messageContent, sourceMessage);
             BotDto.LLMResponse analysis = llmService.chat(
                     config,
                     buildKiraraAnalysisMessages(chatRoomId, crb, cleanMessage, sourceMessage));
@@ -453,6 +455,11 @@ public class BotService {
                     config.getBotName(), chatRoomId, e.getMessage());
             List<BotDto.ChatMessage> fallbackMessages = buildContext(chatRoomId, crb, messageContent, sourceMessage);
             BotDto.LLMResponse fallback = llmService.chat(config, fallbackMessages);
+            if (isMentionOnlyTrigger(messageContent, crb)) {
+                return fallback.getContent() != null && !fallback.getContent().isBlank()
+                        ? fallback.getContent()
+                        : defaultMentionOnlyReply(chatRoomId, crb, sourceMessage);
+            }
             return requireBotReplyContent(fallback.getContent(), "kirara-fallback");
         }
     }
@@ -502,6 +509,71 @@ public class BotService {
             throw new IllegalStateException("LLM returned empty bot reply at " + phase);
         }
         return content;
+    }
+
+    private String kiraraTaskText(
+            Long chatRoomId,
+            ChatRoomBot crb,
+            String userMessage,
+            Message sourceMessage) {
+        String cleanMessage = cleanMentions(userMessage, crb);
+        if (!cleanMessage.startsWith(MENTION_ONLY_MARKER)) {
+            return cleanMessage;
+        }
+        Message previous = findPreviousHumanMessage(chatRoomId, sourceMessage);
+        if (previous == null || previous.getContent() == null || previous.getContent().isBlank()) {
+            return cleanMessage + "\n没有找到明确前文时，也要用阿雷/Kirara 风格自然接话，不要问“有什么可以帮你”。";
+        }
+        String speaker = previous.getSender() != null
+                ? previous.getSender().getDisplayName() != null && !previous.getSender().getDisplayName().isBlank()
+                    ? previous.getSender().getDisplayName()
+                    : previous.getSender().getUsername()
+                : "前一个用户";
+        return MENTION_ONLY_MARKER + """
+                
+                用户这条消息只有 @ 机器人，没有新的正文。
+                请主要回应最近一条真实用户发言，而不是泛泛打招呼：
+                发言人：%s
+                原话：%s
+                如果这句本身也是召唤或很短，就结合再前面的群聊语境自然接话。
+                """.formatted(speaker, previous.getContent().trim());
+    }
+
+    private boolean isMentionOnlyTrigger(String userMessage, ChatRoomBot crb) {
+        return cleanMentions(userMessage, crb).startsWith(MENTION_ONLY_MARKER);
+    }
+
+    private Message findPreviousHumanMessage(Long chatRoomId, Message sourceMessage) {
+        if (sourceMessage == null || sourceMessage.getCreatedAt() == null || chatRoomId == null) {
+            return null;
+        }
+        List<Message> previousMessages = messageRepository.findContextBefore(
+                chatRoomId,
+                sourceMessage.getCreatedAt(),
+                PageRequest.of(0, 12));
+        for (Message message : previousMessages) {
+            if (message == null) {
+                continue;
+            }
+            if (sourceMessage.getId() != null && sourceMessage.getId().equals(message.getId())) {
+                continue;
+            }
+            if (message.getBotConfig() != null) {
+                continue;
+            }
+            if (message.getContent() != null && !message.getContent().isBlank()) {
+                return message;
+            }
+        }
+        return null;
+    }
+
+    private String defaultMentionOnlyReply(Long chatRoomId, ChatRoomBot crb, Message sourceMessage) {
+        Message previous = findPreviousHumanMessage(chatRoomId, sourceMessage);
+        if (previous != null && previous.getContent() != null && !previous.getContent().isBlank()) {
+            return "看到了。<break>你刚才说的是：“%s”<break>我接这句。".formatted(previous.getContent().trim());
+        }
+        return "在。<break>别只 @ 我装高手。<break>把话扔出来。";
     }
 
 
@@ -653,7 +725,7 @@ public class BotService {
                 .replaceAll("@" + Pattern.quote(roomDisplayName(crb)) + "\\s*", "")
                 .trim();
         return cleaned.isEmpty()
-                ? "[MENTION_ONLY] The user only mentioned this bot. Infer the intended request from the immediately preceding relevant user message in the recent conversation, and answer that request instead of greeting generically."
+                ? MENTION_ONLY_MARKER + " The user only mentioned this bot. Infer the intended request from the immediately preceding relevant user message in the recent conversation, and answer that request instead of greeting generically."
                 : cleaned;
     }
 
