@@ -6,6 +6,9 @@ import com.chatapp.entity.ChatRoomBot;
 import com.chatapp.entity.ChatRoomMember;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
+import com.chatapp.dto.ChatRoomParticipantDto;
+import com.chatapp.dto.ChatRoomSummaryDto;
+import com.chatapp.dto.MessageDto;
 import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
@@ -16,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -25,6 +29,9 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
@@ -243,6 +250,98 @@ public class ChatRoomService {
                 includeBlocked,
                 roomType,
                 unsortedPageable);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ChatRoomSummaryDto> getUserChatRoomSummaries(Long userId,
+                                                             Pageable pageable,
+                                                             boolean includeHidden,
+                                                             boolean includeBlocked,
+                                                             ChatRoom.RoomType roomType) {
+        Page<ChatRoom> rooms = getUserChatRooms(
+                userId,
+                pageable,
+                includeHidden,
+                includeBlocked,
+                roomType);
+        if (rooms.isEmpty()) {
+            return new PageImpl<>(List.of(), rooms.getPageable(), rooms.getTotalElements());
+        }
+
+        List<Long> roomIds = rooms.getContent().stream().map(ChatRoom::getId).toList();
+        Map<Long, ChatRoomMember> memberships = new HashMap<>();
+        for (ChatRoomMember membership :
+                chatRoomRepository.findMembershipsByUserIdAndRoomIds(userId, roomIds)) {
+            memberships.put(membership.getChatRoom().getId(), membership);
+        }
+
+        Map<Long, Long> memberCounts = new HashMap<>();
+        for (ChatRoomRepository.RoomMemberCountProjection count :
+                chatRoomRepository.countMembersByRoomIds(roomIds)) {
+            memberCounts.put(count.getRoomId(), count.getMemberCount());
+        }
+
+        Map<Long, List<ChatRoomParticipantDto>> privateParticipants = new HashMap<>();
+        for (ChatRoomRepository.PrivateRoomParticipantProjection participant :
+                chatRoomRepository.findPrivateParticipantsByRoomIds(roomIds)) {
+            privateParticipants.computeIfAbsent(participant.getRoomId(), ignored -> new ArrayList<>())
+                    .add(ChatRoomParticipantDto.builder()
+                            .id(participant.getUserId())
+                            .username(participant.getUsername())
+                            .displayName(participant.getDisplayName())
+                            .avatarUrl(participant.getAvatarUrl())
+                            .title(participant.getTitle())
+                            .titleColor(participant.getTitleColor())
+                            .titleEffect(participant.getTitleEffect())
+                            .onlineStatus(participant.getOnlineStatus())
+                            .lastSeen(participant.getLastSeen())
+                            .isActive(participant.getActive())
+                            .createdAt(participant.getCreatedAt())
+                            .updatedAt(participant.getUpdatedAt())
+                            .build());
+        }
+
+        Map<Long, Message> latestMessages = new HashMap<>();
+        for (Message message : messageRepository.findLatestVisibleMessagesForRooms(userId, roomIds)) {
+            latestMessages.put(message.getChatRoom().getId(), message);
+        }
+
+        List<ChatRoomSummaryDto> summaries = rooms.getContent().stream().map(room -> {
+            ChatRoomMember membership = memberships.get(room.getId());
+            Message lastMessage = latestMessages.get(room.getId());
+            return ChatRoomSummaryDto.builder()
+                    .id(room.getId())
+                    .name(room.getName())
+                    .description(room.getDescription())
+                    .announcement(room.getAnnouncement())
+                    .announcementUpdatedAt(room.getAnnouncementUpdatedAt())
+                    .announcementUpdatedBy(room.getAnnouncementUpdatedBy())
+                    .roomType(room.getRoomType())
+                    .avatarUrl(room.getAvatarUrl())
+                    .customBackgroundPreset(room.getCustomBackgroundPreset())
+                    .customBackgroundUrl(room.getCustomBackgroundUrl())
+                    .createdBy(room.getCreatedBy() == null ? null : room.getCreatedBy().getId())
+                    .isActive(room.getIsActive())
+                    .isPrivate(room.getIsPrivate())
+                    .maxMembers(room.getMaxMembers())
+                    .anonymousEnabled(room.getAnonymousEnabled())
+                    .anonymousTheme(room.getAnonymousTheme())
+                    .createdAt(room.getCreatedAt())
+                    .updatedAt(room.getUpdatedAt())
+                    .participants(privateParticipants.getOrDefault(room.getId(), List.of()))
+                    .memberCount(memberCounts.getOrDefault(room.getId(), 0L))
+                    .lastMessage(lastMessage == null ? null : MessageDto.fromEntity(lastMessage))
+                    .unreadCount(membership == null || membership.getUnreadCount() == null
+                            ? 0 : membership.getUnreadCount())
+                    .isPinned(membership != null && Boolean.TRUE.equals(membership.getIsPinned()))
+                    .isMuted(membership != null && Boolean.TRUE.equals(membership.getIsNotificationMuted()))
+                    .hiddenAt(membership == null ? null : membership.getHiddenAt())
+                    .isBlocked(membership != null && Boolean.TRUE.equals(membership.getIsBlocked()))
+                    .clearedBeforeMessageId(
+                            membership == null ? null : membership.getClearedBeforeMessageId())
+                    .build();
+        }).toList();
+        return new PageImpl<>(summaries, rooms.getPageable(), rooms.getTotalElements());
     }
 
     /**

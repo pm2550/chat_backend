@@ -1,6 +1,7 @@
 package com.chatapp.controller;
 
 import com.chatapp.dto.MessageDto;
+import com.chatapp.dto.ChatRoomSummaryDto;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.ChatRoomBot;
 import com.chatapp.entity.ChatRoomMember;
@@ -164,6 +165,38 @@ public class ChatRoomController {
             log.error("获取聊天室列表失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    /**
+     * 获取消息工作台所需的完整房间摘要。该接口用固定数量的批量查询返回
+     * 最后消息、未读、成员数、私聊对方和当前用户偏好，避免客户端逐房间补数据。
+     */
+    @GetMapping("/summaries")
+    public ResponseEntity<?> getUserChatRoomSummaries(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "30") int size,
+            @RequestParam(defaultValue = "false") boolean includeHidden,
+            @RequestParam(defaultValue = "false") boolean includeBlocked,
+            @RequestParam(required = false) String roomType,
+            @RequestParam(required = false) String type,
+            Authentication auth) {
+        User currentUser = userService.findUserByUsername(auth.getName());
+        Pageable pageable = PageRequest.of(page, Math.min(Math.max(size, 1), 100));
+        Page<ChatRoomSummaryDto> summaries = chatRoomService.getUserChatRoomSummaries(
+                currentUser.getId(),
+                pageable,
+                includeHidden,
+                includeBlocked,
+                parseRoomType(roomType != null ? roomType : type));
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("chatRooms", summaries.getContent());
+        response.put("currentPage", summaries.getNumber());
+        response.put("totalPages", summaries.getTotalPages());
+        response.put("totalElements", summaries.getTotalElements());
+        response.put("hasNext", summaries.hasNext());
+        response.put("hasPrevious", summaries.hasPrevious());
+        return ResponseEntity.ok(response);
     }
 
     /**

@@ -6,6 +6,7 @@ import com.chatapp.entity.ChatRoomBot;
 import com.chatapp.entity.ChatRoomMember;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
+import com.chatapp.dto.ChatRoomSummaryDto;
 import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
@@ -315,6 +316,87 @@ class ChatRoomServiceTest {
                 true,
                 ChatRoom.RoomType.GROUP,
                 pageable);
+    }
+
+    @Test
+    void getUserChatRoomSummaries_batchesListDecorations() {
+        PageRequest pageable = PageRequest.of(0, 30);
+        groupRoom.setCreatedAt(LocalDateTime.of(2026, 7, 10, 10, 0));
+        groupRoom.setUpdatedAt(LocalDateTime.of(2026, 7, 10, 10, 5));
+        privateRoom.setCreatedAt(LocalDateTime.of(2026, 7, 10, 9, 0));
+        privateRoom.setUpdatedAt(LocalDateTime.of(2026, 7, 10, 9, 5));
+        Page<ChatRoom> roomPage = new PageImpl<>(List.of(groupRoom, privateRoom), pageable, 2);
+
+        ChatRoomMember groupMembership = new ChatRoomMember();
+        groupMembership.setChatRoom(groupRoom);
+        groupMembership.setUser(user1);
+        groupMembership.setUnreadCount(4);
+        groupMembership.setIsPinned(true);
+        groupMembership.setIsNotificationMuted(true);
+        ChatRoomMember privateMembership = new ChatRoomMember();
+        privateMembership.setChatRoom(privateRoom);
+        privateMembership.setUser(user1);
+        privateMembership.setUnreadCount(1);
+
+        ChatRoomRepository.RoomMemberCountProjection groupCount =
+                mock(ChatRoomRepository.RoomMemberCountProjection.class);
+        when(groupCount.getRoomId()).thenReturn(10L);
+        when(groupCount.getMemberCount()).thenReturn(7L);
+        ChatRoomRepository.RoomMemberCountProjection privateCount =
+                mock(ChatRoomRepository.RoomMemberCountProjection.class);
+        when(privateCount.getRoomId()).thenReturn(20L);
+        when(privateCount.getMemberCount()).thenReturn(2L);
+
+        ChatRoomRepository.PrivateRoomParticipantProjection peer =
+                mock(ChatRoomRepository.PrivateRoomParticipantProjection.class);
+        when(peer.getRoomId()).thenReturn(20L);
+        when(peer.getUserId()).thenReturn(2L);
+        when(peer.getUsername()).thenReturn("user2");
+        when(peer.getDisplayName()).thenReturn("User Two");
+        when(peer.getOnlineStatus()).thenReturn(User.OnlineStatus.ONLINE);
+
+        Message latest = new Message();
+        latest.setId(88L);
+        latest.setContent("latest room message");
+        latest.setSender(user2);
+        latest.setChatRoom(groupRoom);
+        latest.setMessageType(Message.MessageType.TEXT);
+        latest.setMessageStatus(Message.MessageStatus.SENT);
+        latest.setCreatedAt(LocalDateTime.of(2026, 7, 10, 10, 6));
+
+        when(chatRoomRepository.findByUserIdWithDisplayState(
+                1L, false, false, null, pageable)).thenReturn(roomPage);
+        when(chatRoomRepository.findMembershipsByUserIdAndRoomIds(1L, List.of(10L, 20L)))
+                .thenReturn(List.of(groupMembership, privateMembership));
+        when(chatRoomRepository.countMembersByRoomIds(List.of(10L, 20L)))
+                .thenReturn(List.of(groupCount, privateCount));
+        when(chatRoomRepository.findPrivateParticipantsByRoomIds(List.of(10L, 20L)))
+                .thenReturn(List.of(peer));
+        when(messageRepository.findLatestVisibleMessagesForRooms(1L, List.of(10L, 20L)))
+                .thenReturn(List.of(latest));
+
+        Page<ChatRoomSummaryDto> result = chatRoomService.getUserChatRoomSummaries(
+                1L, pageable, false, false, null);
+
+        assertEquals(2, result.getTotalElements());
+        ChatRoomSummaryDto group = result.getContent().get(0);
+        assertEquals(7, group.getMemberCount());
+        assertEquals(4, group.getUnreadCount());
+        assertTrue(group.isPinned());
+        assertTrue(group.isMuted());
+        assertEquals("latest room message", group.getLastMessage().getContent());
+        ChatRoomSummaryDto direct = result.getContent().get(1);
+        assertEquals(2, direct.getMemberCount());
+        assertEquals("User Two", direct.getParticipants().get(0).getDisplayName());
+
+        verify(chatRoomRepository, times(1))
+                .findMembershipsByUserIdAndRoomIds(1L, List.of(10L, 20L));
+        verify(chatRoomRepository, times(1)).countMembersByRoomIds(List.of(10L, 20L));
+        verify(chatRoomRepository, times(1))
+                .findPrivateParticipantsByRoomIds(List.of(10L, 20L));
+        verify(messageRepository, times(1))
+                .findLatestVisibleMessagesForRooms(1L, List.of(10L, 20L));
+        verify(messageRepository, never()).findLatestMessageByChatRoomId(anyLong(), any());
     }
 
     @Test

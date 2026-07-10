@@ -376,6 +376,56 @@ public class ChatRoomIntegrationTest {
     }
 
     @Test
+    @DisplayName("Room summaries include last message, unread, preferences and member count")
+    void testGetUserChatRoomSummaries() throws Exception {
+        Object[] owner = createUserAndLogin("summaryowner");
+        String ownerToken = (String) owner[0];
+        Object[] member = createUserAndLogin("summarymember");
+        String memberToken = (String) member[0];
+        Long memberId = (Long) member[1];
+        Long roomId = createGroupChat(
+                ownerToken,
+                "Summary Room " + uniqueSuffix,
+                "summary",
+                List.of(memberId));
+
+        mockMvc.perform(post("/api/v1/messages")
+                .header("Authorization", "Bearer " + ownerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(Map.of(
+                        "chatRoomId", roomId,
+                        "content", "summary latest message",
+                        "messageType", "TEXT"))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(put("/api/v1/chat-rooms/" + roomId + "/notification-settings")
+                .header("Authorization", "Bearer " + ownerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"muted\":true,\"pinned\":true}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/chat-rooms/summaries")
+                .header("Authorization", "Bearer " + ownerToken)
+                .param("page", "0")
+                .param("size", "30"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.chatRooms.length()").value(1))
+                .andExpect(jsonPath("$.chatRooms[0].id").value(roomId))
+                .andExpect(jsonPath("$.chatRooms[0].memberCount").value(2))
+                .andExpect(jsonPath("$.chatRooms[0].lastMessage.content")
+                        .value("summary latest message"))
+                .andExpect(jsonPath("$.chatRooms[0].unreadCount").value(0))
+                .andExpect(jsonPath("$.chatRooms[0].pinned").value(true))
+                .andExpect(jsonPath("$.chatRooms[0].muted").value(true))
+                .andExpect(jsonPath("$.chatRooms[0].participants").isEmpty());
+
+        mockMvc.perform(get("/api/v1/chat-rooms/summaries")
+                .header("Authorization", "Bearer " + memberToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.chatRooms[0].unreadCount").value(1));
+    }
+
+    @Test
     @DisplayName("Search public chat rooms")
     void testSearchPublicChatRooms() throws Exception {
         Object[] user = createUserAndLogin("searcher");

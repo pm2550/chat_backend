@@ -2,6 +2,7 @@ package com.chatapp.repository;
 
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.ChatRoomMember;
+import com.chatapp.entity.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -88,6 +89,46 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
                                                 @Param("includeBlocked") boolean includeBlocked,
                                                 @Param("roomType") ChatRoom.RoomType roomType,
                                                 Pageable pageable);
+
+    @Query("SELECT crm FROM ChatRoomMember crm WHERE crm.user.id = :userId " +
+           "AND crm.chatRoom.id IN :roomIds")
+    List<ChatRoomMember> findMembershipsByUserIdAndRoomIds(@Param("userId") Long userId,
+                                                           @Param("roomIds") List<Long> roomIds);
+
+    interface RoomMemberCountProjection {
+        Long getRoomId();
+        Long getMemberCount();
+    }
+
+    @Query("SELECT crm.chatRoom.id AS roomId, COUNT(crm.id) AS memberCount " +
+           "FROM ChatRoomMember crm WHERE crm.chatRoom.id IN :roomIds GROUP BY crm.chatRoom.id")
+    List<RoomMemberCountProjection> countMembersByRoomIds(@Param("roomIds") List<Long> roomIds);
+
+    interface PrivateRoomParticipantProjection {
+        Long getRoomId();
+        Long getUserId();
+        String getUsername();
+        String getDisplayName();
+        String getAvatarUrl();
+        String getTitle();
+        String getTitleColor();
+        String getTitleEffect();
+        User.OnlineStatus getOnlineStatus();
+        java.time.LocalDateTime getLastSeen();
+        Boolean getActive();
+        java.time.LocalDateTime getCreatedAt();
+        java.time.LocalDateTime getUpdatedAt();
+    }
+
+    @Query("SELECT crm.chatRoom.id AS roomId, u.id AS userId, u.username AS username, " +
+           "u.displayName AS displayName, u.avatarUrl AS avatarUrl, u.title AS title, " +
+           "u.titleColor AS titleColor, u.titleEffect AS titleEffect, " +
+           "u.onlineStatus AS onlineStatus, u.lastSeen AS lastSeen, u.isActive AS active, " +
+           "u.createdAt AS createdAt, u.updatedAt AS updatedAt " +
+           "FROM ChatRoomMember crm JOIN crm.user u " +
+           "WHERE crm.chatRoom.id IN :roomIds AND crm.chatRoom.roomType = 'PRIVATE'")
+    List<PrivateRoomParticipantProjection> findPrivateParticipantsByRoomIds(
+            @Param("roomIds") List<Long> roomIds);
 
     @Query("SELECT crm FROM ChatRoomMember crm JOIN FETCH crm.user WHERE crm.chatRoom.id = :roomId")
     List<ChatRoomMember> findMembersByRoomId(@Param("roomId") Long roomId);

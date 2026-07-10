@@ -135,6 +135,19 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
         return messages.isEmpty() ? null : messages.get(0);
     }
 
+    @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {
+            "sender", "chatRoom", "anonymousIdentity", "botConfig",
+            "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"
+    })
+    @Query("SELECT m FROM Message m WHERE m.id IN (" +
+           "SELECT MAX(m2.id) FROM Message m2, ChatRoomMember crm " +
+           "WHERE crm.user.id = :userId AND crm.chatRoom = m2.chatRoom " +
+           "AND m2.chatRoom.id IN :roomIds AND m2.isDeleted = false " +
+           "AND (crm.clearedBeforeMessageId IS NULL OR m2.id > crm.clearedBeforeMessageId) " +
+           "GROUP BY m2.chatRoom.id)")
+    List<Message> findLatestVisibleMessagesForRooms(@Param("userId") Long userId,
+                                                     @Param("roomIds") List<Long> roomIds);
+
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false AND " +
            "LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) ORDER BY m.createdAt DESC")
