@@ -415,6 +415,31 @@ public class MessageIntegrationTest {
     }
 
     @Test
+    @DisplayName("Get only messages newer than a cached message id")
+    void testGetMessageDelta() throws Exception {
+        Object[] user1 = createUserAndLogin("deltasender");
+        String token1 = (String) user1[0];
+        Object[] user2 = createUserAndLogin("deltareceiver");
+        Long roomId = createGroupChat(
+                token1,
+                "Delta Room " + uniqueSuffix,
+                List.of((Long) user2[1]));
+
+        Long cursor = sendMessage(token1, roomId, "cached message");
+        sendMessage(token1, roomId, "delta one");
+        sendMessage(token1, roomId, "delta two");
+
+        mockMvc.perform(get("/api/v1/messages/chat-room/" + roomId)
+                .header("Authorization", "Bearer " + token1)
+                .param("afterMessageId", cursor.toString())
+                .param("size", "50"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages", hasSize(2)))
+                .andExpect(jsonPath("$.messages[0].content").value("delta one"))
+                .andExpect(jsonPath("$.messages[1].content").value("delta two"));
+    }
+
+    @Test
     @DisplayName("Send encrypted text message preserves ciphertext envelope")
     void testSendEncryptedTextMessage() throws Exception {
         Object[] user1 = createUserAndLogin("encryptedsender");

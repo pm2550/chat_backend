@@ -317,6 +317,23 @@ public class MessageService {
                 .orElseGet(() -> messageRepository.findByChatRoomIdOrderByCreatedAtDesc(chatRoomId, pageable));
     }
 
+    public Page<Message> getChatRoomMessagesAfter(
+            Long chatRoomId,
+            Long userId,
+            Long afterMessageId,
+            Pageable pageable) {
+        if (!chatRoomRepository.isMember(chatRoomId, userId)) {
+            throw new IllegalArgumentException("您不是该聊天室的成员");
+        }
+        long effectiveCursor = clearedBeforeMessageId(chatRoomId, userId)
+                .map(clearedBefore -> Math.max(clearedBefore, afterMessageId))
+                .orElse(afterMessageId);
+        return messageRepository.findByChatRoomIdAfterMessage(
+                chatRoomId,
+                effectiveCursor,
+                pageable);
+    }
+
     /**
      * 获取当前用户在聊天室内被 @ 的消息。
      */

@@ -335,6 +335,23 @@ class MessageServiceTest {
         assertTrue(ex.getMessage().contains("不是该聊天室的成员"));
     }
 
+    @Test
+    void testGetChatRoomMessagesAfterHonorsTheLaterClearCursor() {
+        Pageable pageable = PageRequest.of(0, 20);
+        Page<Message> page = new PageImpl<>(Collections.emptyList());
+        ChatRoomMember member = new ChatRoomMember();
+        member.setClearedBeforeMessageId(55L);
+
+        when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
+        when(chatRoomRepository.findMember(10L, 1L)).thenReturn(Optional.of(member));
+        when(messageRepository.findByChatRoomIdAfterMessage(10L, 55L, pageable)).thenReturn(page);
+
+        assertSame(
+                page,
+                messageService.getChatRoomMessagesAfter(10L, 1L, 40L, pageable));
+        verify(messageRepository).findByChatRoomIdAfterMessage(10L, 55L, pageable);
+    }
+
     // ---- markMessageAsRead ----
 
     @Test

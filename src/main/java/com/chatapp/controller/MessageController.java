@@ -193,12 +193,22 @@ public class MessageController {
             @PathVariable Long chatRoomId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size,
+            @RequestParam(required = false) Long afterMessageId,
             Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
             
-            Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
-            Page<Message> messages = messageService.getChatRoomMessages(chatRoomId, currentUser.getId(), pageable);
+            int safeSize = Math.max(1, Math.min(size, 100));
+            Pageable pageable = afterMessageId == null
+                    ? PageRequest.of(Math.max(0, page), safeSize, Sort.by("createdAt").descending())
+                    : PageRequest.of(0, safeSize, Sort.by("createdAt").ascending());
+            Page<Message> messages = afterMessageId == null
+                    ? messageService.getChatRoomMessages(chatRoomId, currentUser.getId(), pageable)
+                    : messageService.getChatRoomMessagesAfter(
+                            chatRoomId,
+                            currentUser.getId(),
+                            afterMessageId,
+                            pageable);
             
             Map<String, Object> response = new HashMap<>();
             response.put("messages", toMessageDtos(messages.getContent(), currentUser.getId()));
