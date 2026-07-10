@@ -20,7 +20,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Collections;
@@ -92,6 +94,7 @@ public class BotService {
     private final BotRateLimitService botRateLimitService;
     private final RichContentSanitizer richContentSanitizer;
     private final BotWebhookService botWebhookService;
+    private final FileStorageService fileStorageService;
     private final AgentVisionAttachmentService agentVisionAttachmentService;
     // Lazy to break the cycle: AgentExecutionLoop -> AgentToolDispatcher ->
     // RawWebSocketHandler -> BotService.
@@ -176,6 +179,21 @@ public class BotService {
         if (bot.getCreatedBy() == null || !bot.getCreatedBy().getId().equals(operatorId)) {
             throw new AccessDeniedException("无权限查看该机器人");
         }
+        return toDto(bot, true);
+    }
+
+    @Transactional
+    public BotDto updateBotAvatar(Long botId, Long operatorId, MultipartFile avatarFile) throws IOException {
+        if (avatarFile == null || avatarFile.isEmpty()) {
+            throw new IllegalArgumentException("请选择有效头像");
+        }
+        BotConfig bot = botConfigRepository.findById(botId)
+                .orElseThrow(() -> new RuntimeException("机器人不存在"));
+        ensureBotOwner(bot, operatorId);
+
+        String avatarUrl = fileStorageService.uploadAvatar(avatarFile);
+        bot.setBotAvatar(avatarUrl);
+        bot = botConfigRepository.save(bot);
         return toDto(bot, true);
     }
 

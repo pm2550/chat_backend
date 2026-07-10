@@ -30,6 +30,64 @@ class LLMServiceProviderToolTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
+    void kimiCodeUsesCodingEndpointBearerAuthAndToolCalls() throws Exception {
+        AtomicReference<String> capturedPath = new AtomicReference<>();
+        AtomicReference<String> authHeader = new AtomicReference<>();
+        StringBuilder capturedRequest = new StringBuilder();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/coding/v1/chat/completions", exchange -> {
+            capturedPath.set(exchange.getRequestURI().getPath());
+            authHeader.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            capturedRequest.append(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] body = """
+                    {
+                      "choices": [{
+                        "message": {
+                          "role": "assistant",
+                          "content": "",
+                          "tool_calls": [{
+                            "id": "call-kimi-code",
+                            "type": "function",
+                            "function": {"name": "echo", "arguments": "{\\\"value\\\":\\\"kimi\\\"}"}
+                          }]
+                        }
+                      }],
+                      "usage": {"total_tokens": 17}
+                    }
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            LLMService service = new LLMService(objectMapper, mock(ProviderCredentialService.class));
+            ReflectionTestUtils.setField(service, "kimiBaseUrl",
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/coding/v1");
+            ReflectionTestUtils.setField(service, "kimiModel", "kimi-code");
+            ReflectionTestUtils.setField(service, "kimiApiKey", "kimi-test-key");
+
+            BotConfig bot = new BotConfig();
+            bot.setLlmProvider(BotConfig.LLMProvider.KIMI);
+            BotDto.LLMResponse response = service.chat(bot,
+                    List.of(new BotDto.ChatMessage("user", "use a tool")),
+                    List.of(new EchoTool()));
+
+            assertEquals("/coding/v1/chat/completions", capturedPath.get());
+            assertEquals("Bearer kimi-test-key", authHeader.get());
+            assertTrue(capturedRequest.toString().contains("\"model\":\"kimi-code\""));
+            assertTrue(capturedRequest.toString().contains("\"tools\""));
+            assertEquals(1, response.getToolCalls().size());
+            assertEquals("echo", response.getToolCalls().get(0).getName());
+            assertEquals("{\"value\":\"kimi\"}", response.getToolCalls().get(0).getArgumentsJson());
+            assertEquals(17, response.getTokensUsed());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void ollamaCloudWithApiKeyUsesOpenAiCompatibleEndpointAndBearerAuth() throws Exception {
         AtomicReference<String> capturedPath = new AtomicReference<>();
         AtomicReference<String> authHeader = new AtomicReference<>("__unset__");

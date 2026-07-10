@@ -25,6 +25,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.security.access.AccessDeniedException;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -52,6 +54,7 @@ class BotServiceTest {
     @Mock private AgentTaskRepository agentTaskRepository;
     @Mock private BotRateLimitService botRateLimitService;
     @Mock private BotWebhookService botWebhookService;
+    @Mock private FileStorageService fileStorageService;
     @Mock private ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
 
     @InjectMocks private BotService service;
@@ -193,6 +196,36 @@ class BotServiceTest {
         assertThrows(IllegalArgumentException.class,
                 () -> service.updateBot(10L, 999L, req));
         verify(providerCredentialService, never()).getOwnedCredential(any(), any());
+        verify(botConfigRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("updateBotAvatar stores the image and updates the owner's bot")
+    void update_avatar() throws Exception {
+        MockMultipartFile avatar = new MockMultipartFile(
+                "avatar", "bot.png", "image/png", new byte[] {1, 2, 3});
+        when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));
+        when(fileStorageService.uploadAvatar(avatar)).thenReturn("/api/files/avatar/bot.png");
+        when(botConfigRepository.save(bot)).thenReturn(bot);
+
+        BotDto dto = service.updateBotAvatar(10L, alice.getId(), avatar);
+
+        assertEquals("/api/files/avatar/bot.png", dto.getBotAvatar());
+        verify(fileStorageService).uploadAvatar(avatar);
+        verify(botConfigRepository).save(bot);
+    }
+
+    @Test
+    @DisplayName("updateBotAvatar rejects a non-owner before storing bytes")
+    void update_avatar_non_owner_forbidden() {
+        MockMultipartFile avatar = new MockMultipartFile(
+                "avatar", "bot.png", "image/png", new byte[] {1, 2, 3});
+        when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));
+
+        assertThrows(AccessDeniedException.class,
+                () -> service.updateBotAvatar(10L, 999L, avatar));
+
+        verifyNoInteractions(fileStorageService);
         verify(botConfigRepository, never()).save(any());
     }
 

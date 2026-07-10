@@ -152,7 +152,7 @@ public class BotConfig {
     private LocalDateTime updatedAt;
 
     public enum LLMProvider {
-        OPENAI, CLAUDE, DEEPSEEK, OLLAMA, HERMES, DASHSCOPE
+        OPENAI, CLAUDE, DEEPSEEK, OLLAMA, HERMES, DASHSCOPE, KIMI
     }
 
     public enum AccessPolicy {

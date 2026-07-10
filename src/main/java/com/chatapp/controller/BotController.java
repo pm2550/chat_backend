@@ -12,7 +12,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
@@ -113,6 +115,18 @@ public class BotController {
         UserDto currentUser = userService.findByUsername(auth.getName());
         BotDto result = botService.updateBot(botId, currentUser.getId(), request);
         return ResponseEntity.ok(ApiResponse.success("机器人更新成功", result));
+    }
+
+    @PostMapping("/{botId}/avatar")
+    public ResponseEntity<ApiResponse<BotDto>> uploadBotAvatar(
+            @PathVariable Long botId,
+            @RequestParam(value = "avatar", required = false) MultipartFile avatar,
+            @RequestParam(value = "file", required = false) MultipartFile file,
+            Authentication auth) throws IOException {
+        UserDto currentUser = userService.findByUsername(auth.getName());
+        MultipartFile avatarFile = avatar != null ? avatar : file;
+        BotDto result = botService.updateBotAvatar(botId, currentUser.getId(), avatarFile);
+        return ResponseEntity.ok(ApiResponse.success("机器人头像已更新", result));
     }
 
     @GetMapping("/my")

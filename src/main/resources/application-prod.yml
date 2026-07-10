@@ -11,6 +11,7 @@
 #   WEB_PUSH_VAPID_PUBLIC_KEY, WEB_PUSH_VAPID_PRIVATE_KEY
 #   At least one of: OPENAI_API_KEY, CLAUDE_API_KEY, DEEPSEEK_API_KEY,
 #                    OLLAMA_BASE_URL, HERMES_API_KEY + HERMES_BASE_URL,
+#                    KIMI_API_KEY,
 #                    or AGENT_GATEWAY_ENABLED=true + AGENT_GATEWAY_BASE_URL
 spring:
   datasource:
@@ -97,6 +98,10 @@ llm:
     api-key: ${HERMES_API_KEY:}
     base-url: ${HERMES_BASE_URL:}
     model: ${HERMES_MODEL:hermes-agent}
+  kimi:
+    api-key: ${KIMI_API_KEY:${KIMICODE_API_KEY:}}
+    base-url: ${KIMI_BASE_URL:https://api.kimi.com/coding/v1}
+    model: ${KIMI_MODEL:kimi-code}
 
 agent:
   gateway:

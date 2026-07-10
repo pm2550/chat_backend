@@ -204,6 +204,14 @@ llm:
     api-key: ${DASHSCOPE_API_KEY:}
     base-url: ${DASHSCOPE_BASE_URL:http://localhost/dashscope/v1}
     model: ${DASHSCOPE_MODEL:qwen-plus}
+  kimi:
+    # Kimi Coding API, mirrored from OpenClaw's kimi/kimi-coding provider.
+    # OpenClaw's canonical endpoint is https://api.kimi.com/coding/ with
+    # anthropic-messages; PM chat uses the OpenAI-compatible /v1 route so
+    # existing tool_calls continue to work.
+    api-key: ${KIMI_API_KEY:${KIMICODE_API_KEY:}}
+    base-url: ${KIMI_BASE_URL:https://api.kimi.com/coding/v1}
+    model: ${KIMI_MODEL:kimi-code}
 
 # Per-bot / per-room rate limiting for agent runs (bucket4j; <=0 disables a limit).
 bot:

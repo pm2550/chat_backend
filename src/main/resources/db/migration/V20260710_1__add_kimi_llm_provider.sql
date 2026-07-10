@@ -1,0 +1,5 @@
+ALTER TABLE `bot_configs`
+  MODIFY COLUMN `llm_provider` enum('OPENAI','CLAUDE','DEEPSEEK','OLLAMA','HERMES','DASHSCOPE','KIMI') NOT NULL;
+
+ALTER TABLE `provider_credentials`
+  MODIFY COLUMN `llm_provider` enum('OPENAI','CLAUDE','DEEPSEEK','OLLAMA','HERMES','DASHSCOPE','KIMI') NOT NULL;

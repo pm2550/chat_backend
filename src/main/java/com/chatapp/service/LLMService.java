@@ -72,6 +72,13 @@ public class LLMService {
     @Value("${llm.dashscope.model:qwen-plus}")
     private String dashscopeModel;
 
+    @Value("${llm.kimi.api-key:}")
+    private String kimiApiKey;
+    @Value("${llm.kimi.base-url:https://api.kimi.com/coding/v1}")
+    private String kimiBaseUrl;
+    @Value("${llm.kimi.model:kimi-code}")
+    private String kimiModel;
+
     public LLMService(ObjectMapper objectMapper, ProviderCredentialService providerCredentialService) {
         this(objectMapper, providerCredentialService, null);
     }
@@ -148,6 +155,11 @@ public class LLMService {
                     resolveApiKey(botConfig, dashscopeApiKey),
                     resolveBaseUrl(botConfig, dashscopeBaseUrl),
                     resolveModel(botConfig, dashscopeModel),
+                    messages, botConfig, tools);
+            case KIMI -> callOpenAICompatible(
+                    requireApiKey(resolveApiKey(botConfig, kimiApiKey), "Kimi"),
+                    resolveBaseUrl(botConfig, kimiBaseUrl),
+                    resolveModel(botConfig, kimiModel),
                     messages, botConfig, tools);
         };
     }
