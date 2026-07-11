@@ -5,6 +5,7 @@ import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.service.AuditLogService;
 import com.chatapp.service.BotService;
+import com.chatapp.service.BotReplyDeliveryService;
 import com.chatapp.service.FileStorageService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.MessageReactionService;
@@ -40,6 +41,7 @@ public class MessageController {
     private final FileStorageService fileStorageService;
     private final RawWebSocketHandler rawWebSocketHandler;
     private final BotService botService;
+    private final BotReplyDeliveryService botReplyDeliveryService;
     private final AuditLogService auditLogService;
     private final MessageReactionService messageReactionService;
 
@@ -748,6 +750,8 @@ public class MessageController {
                 message.getContent(),
                 senderId,
                 message);
-        botMessages.forEach(rawWebSocketHandler::broadcastMessage);
+        botReplyDeliveryService.deliver(
+                botMessages,
+                rawWebSocketHandler::broadcastMessage);
     }
 }

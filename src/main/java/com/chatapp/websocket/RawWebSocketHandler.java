@@ -8,6 +8,7 @@ import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.service.BotService;
+import com.chatapp.service.BotReplyDeliveryService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.PushNotificationService;
 import com.chatapp.service.RoomTypingAggregator;
@@ -60,6 +61,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     private final ObjectMapper objectMapper;
     private final MessageService messageService;
     private final BotService botService;
+    private final BotReplyDeliveryService botReplyDeliveryService;
     private final ChatRoomRepository chatRoomRepository;
     private final PushNotificationService pushNotificationService;
     private final RoomTypingAggregator roomTypingAggregator;
@@ -176,8 +178,9 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         broadcastMessage(saved);
         if (messageType == Message.MessageType.TEXT
                 && (encryptedContent == null || encryptedContent.isBlank())) {
-            botService.processMessageForBots(chatRoomId, content, user.getId())
-                    .forEach(this::broadcastMessage);
+            botReplyDeliveryService.deliver(
+                    botService.processMessageForBots(chatRoomId, content, user.getId()),
+                    this::broadcastMessage);
         }
     }
 
