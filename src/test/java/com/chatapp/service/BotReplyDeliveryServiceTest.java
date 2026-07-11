@@ -3,11 +3,10 @@ package com.chatapp.service;
 import com.chatapp.entity.Message;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.scheduling.TaskScheduler;
-
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -19,7 +18,7 @@ class BotReplyDeliveryServiceTest {
 
     @Test
     void deliversFirstReplyImmediatelyAndSchedulesFollowingRepliesInOrder() {
-        TaskScheduler scheduler = mock(TaskScheduler.class);
+        ScheduledExecutorService scheduler = mock(ScheduledExecutorService.class);
         BotReplyDeliveryService service = new BotReplyDeliveryService(scheduler);
         List<Message> delivered = new ArrayList<>();
         Message first = message("第一句。");
@@ -30,9 +29,10 @@ class BotReplyDeliveryServiceTest {
 
         assertEquals(List.of(first), delivered);
         ArgumentCaptor<Runnable> tasks = ArgumentCaptor.forClass(Runnable.class);
-        ArgumentCaptor<Instant> instants = ArgumentCaptor.forClass(Instant.class);
-        verify(scheduler, times(2)).schedule(tasks.capture(), instants.capture());
-        assertTrue(instants.getAllValues().get(1).isAfter(instants.getAllValues().get(0)));
+        ArgumentCaptor<Long> delays = ArgumentCaptor.forClass(Long.class);
+        verify(scheduler, times(2)).schedule(
+                tasks.capture(), delays.capture(), org.mockito.ArgumentMatchers.eq(TimeUnit.MILLISECONDS));
+        assertTrue(delays.getAllValues().get(1) > delays.getAllValues().get(0));
 
         tasks.getAllValues().forEach(Runnable::run);
         assertEquals(List.of(first, second, third), delivered);
