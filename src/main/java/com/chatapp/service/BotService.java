@@ -122,6 +122,15 @@ public class BotService {
         bot.setWorkflowMode(request.getWorkflowMode() != null
                 ? request.getWorkflowMode()
                 : BotConfig.WorkflowMode.SINGLE_PASS);
+        applyImageGenerationSettings(
+                bot,
+                creatorId,
+                request.getImageGenerationProvider(),
+                request.getImageProviderCredentialId(),
+                request.getImageApiKey(),
+                request.getImageBaseUrl(),
+                request.getImageModel(),
+                request.getImageNegativePrompt());
         bot.setAccessPolicy(request.getAccessPolicy() != null
                 ? request.getAccessPolicy()
                 : BotConfig.AccessPolicy.PRIVATE);
@@ -157,6 +166,21 @@ public class BotService {
         if (request.getIncludeRoomMetadata() != null) bot.setIncludeRoomMetadata(request.getIncludeRoomMetadata());
         if (request.getReplyMode() != null) bot.setReplyMode(request.getReplyMode());
         if (request.getWorkflowMode() != null) bot.setWorkflowMode(request.getWorkflowMode());
+        if (request.getImageGenerationProvider() != null
+                || request.getImageProviderCredentialId() != null
+                || (request.getImageApiKey() != null && !request.getImageApiKey().isBlank())
+                || request.getImageModel() != null
+                || request.getImageNegativePrompt() != null) {
+            applyImageGenerationSettings(
+                    bot,
+                    bot.getCreatedBy().getId(),
+                    request.getImageGenerationProvider(),
+                    request.getImageProviderCredentialId(),
+                    request.getImageApiKey(),
+                    request.getImageBaseUrl(),
+                    request.getImageModel(),
+                    request.getImageNegativePrompt());
+        }
         if (request.getIsActive() != null) bot.setIsActive(request.getIsActive());
         if (request.getEnabledTools() != null) applyEnabledTools(bot, request.getEnabledTools());
         if (request.getAccessPolicy() != null) bot.setAccessPolicy(request.getAccessPolicy());
@@ -997,6 +1021,17 @@ public class BotService {
         dto.setWorkflowMode(entity.getWorkflowMode() != null
                 ? entity.getWorkflowMode()
                 : BotConfig.WorkflowMode.SINGLE_PASS);
+        dto.setImageGenerationProvider(entity.getImageGenerationProvider() != null
+                ? entity.getImageGenerationProvider()
+                : BotConfig.ImageGenerationProvider.HERMES);
+        dto.setImageModel(entity.getImageModel());
+        dto.setImageNegativePrompt(entity.getImageNegativePrompt());
+        if (includeCredentialDetails && entity.getImageProviderCredential() != null) {
+            dto.setImageProviderCredentialId(entity.getImageProviderCredential().getId());
+            dto.setImageProviderCredentialLabel(entity.getImageProviderCredential().getLabel());
+            dto.setImageProviderCredentialLast4(entity.getImageProviderCredential().getSecretLast4());
+        }
+        dto.setHasImageProviderCredential(entity.getImageProviderCredential() != null);
         dto.setIsActive(entity.getIsActive());
         if (includeCredentialDetails && entity.getProviderCredential() != null) {
             dto.setProviderCredentialId(entity.getProviderCredential().getId());
@@ -1079,6 +1114,72 @@ public class BotService {
                     rawApiKey.trim());
             bot.setProviderCredential(credential);
             bot.setApiKeyEncrypted(null);
+        }
+    }
+
+    private void applyImageGenerationSettings(
+            BotConfig bot,
+            Long ownerId,
+            BotConfig.ImageGenerationProvider requestedProvider,
+            Long credentialId,
+            String rawApiKey,
+            String baseUrl,
+            String model,
+            String negativePrompt) {
+        BotConfig.ImageGenerationProvider provider = requestedProvider != null
+                ? requestedProvider
+                : bot.getImageGenerationProvider() != null
+                        ? bot.getImageGenerationProvider()
+                        : BotConfig.ImageGenerationProvider.HERMES;
+        bot.setImageGenerationProvider(provider);
+        if (model != null) {
+            bot.setImageModel(model.isBlank() ? null : model.trim());
+        }
+        if (negativePrompt != null) {
+            bot.setImageNegativePrompt(negativePrompt.isBlank() ? null : negativePrompt.trim());
+        }
+
+        if (provider == BotConfig.ImageGenerationProvider.HERMES) {
+            bot.setImageProviderCredential(null);
+            return;
+        }
+        if (credentialId != null) {
+            ProviderCredential credential = providerCredentialService.getOwnedCredential(ownerId, credentialId);
+            validateImageCredentialProvider(provider, credential);
+            bot.setImageProviderCredential(credential);
+            return;
+        }
+        if (rawApiKey != null && !rawApiKey.isBlank()) {
+            BotConfig.LLMProvider credentialProvider = provider == BotConfig.ImageGenerationProvider.NOVELAI
+                    ? BotConfig.LLMProvider.NOVELAI
+                    : BotConfig.LLMProvider.IMAGE_API;
+            String endpoint = baseUrl;
+            if (provider == BotConfig.ImageGenerationProvider.NOVELAI
+                    && (endpoint == null || endpoint.isBlank())) {
+                endpoint = "https://api.novelai.net/ai/generate-image";
+            }
+            ProviderCredential credential = providerCredentialService.createForBot(
+                    ownerId,
+                    credentialProvider,
+                    bot.getBotName() + " image key " + System.currentTimeMillis(),
+                    rawApiKey.trim(),
+                    endpoint,
+                    model);
+            bot.setImageProviderCredential(credential);
+        }
+    }
+
+    private void validateImageCredentialProvider(
+            BotConfig.ImageGenerationProvider provider,
+            ProviderCredential credential) {
+        boolean valid = switch (provider) {
+            case HERMES -> false;
+            case NOVELAI -> credential.getLlmProvider() == BotConfig.LLMProvider.NOVELAI;
+            case OPENAI_COMPATIBLE -> credential.getLlmProvider() == BotConfig.LLMProvider.IMAGE_API
+                    || credential.getLlmProvider() == BotConfig.LLMProvider.OPENAI;
+        };
+        if (!valid) {
+            throw new IllegalArgumentException("画图凭据与选择的图片 Provider 不匹配");
         }
     }
 

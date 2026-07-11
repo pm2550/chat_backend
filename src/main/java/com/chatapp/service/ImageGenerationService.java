@@ -34,6 +34,7 @@ public class ImageGenerationService {
     private final MessageService messageService;
     private final PointsService pointsService;
     private final ImageGenerationClient generationClient;
+    private final BotImageGenerationClient botImageGenerationClient;
     private final FileStorageService fileStorageService;
     private final RawWebSocketHandler rawWebSocketHandler;
     private final TransactionTemplate transactionTemplate;
@@ -46,6 +47,7 @@ public class ImageGenerationService {
             MessageService messageService,
             PointsService pointsService,
             ImageGenerationClient generationClient,
+            BotImageGenerationClient botImageGenerationClient,
             FileStorageService fileStorageService,
             RawWebSocketHandler rawWebSocketHandler,
             TransactionTemplate transactionTemplate,
@@ -56,6 +58,7 @@ public class ImageGenerationService {
         this.messageService = messageService;
         this.pointsService = pointsService;
         this.generationClient = generationClient;
+        this.botImageGenerationClient = botImageGenerationClient;
         this.fileStorageService = fileStorageService;
         this.rawWebSocketHandler = rawWebSocketHandler;
         this.transactionTemplate = transactionTemplate;
@@ -126,7 +129,16 @@ public class ImageGenerationService {
         Long messageId = message.getId();
         String size = request.getSize();
         boolean expand = request.getExpand() == null || request.getExpand();
-        runAfterCommit(() -> process(messageId, chargedUserId, prompt, size, expand, refId));
+        BotImageGenerationClient.ProviderConfig providerConfig =
+                botImageGenerationClient.resolve(botConfig);
+        runAfterCommit(() -> process(
+                messageId,
+                chargedUserId,
+                prompt,
+                size,
+                expand,
+                refId,
+                providerConfig));
 
         return new ImageGenerationDto.GenerateResponse(
                 messageId,
@@ -136,23 +148,38 @@ public class ImageGenerationService {
         );
     }
 
-    private void process(Long messageId, Long userId, String prompt, String size, boolean expand, String refId) {
+    private void process(Long messageId,
+                         Long userId,
+                         String prompt,
+                         String size,
+                         boolean expand,
+                         String refId,
+                         BotImageGenerationClient.ProviderConfig providerConfig) {
         try {
             updateStatus(messageId, Message.ImageGenerationStatus.PROCESSING, Message.MessageStatus.SENDING, null, null);
-            ImageGenerationClient.SubmitResult submit = generationClient.submit("", prompt, 1, size, expand);
-            updateProviderTask(messageId, submit.taskId());
-
-            ImageGenerationClient.PollResult result = waitForResult("", submit.taskId());
-            if (result.status() != ImageGenerationClient.PollResult.Status.SUCCEEDED) {
-                throw new IllegalStateException(result.errorMessage() == null
-                        ? "图片生成失败"
-                        : result.errorMessage());
+            byte[] bytes;
+            String mimeType;
+            if (providerConfig == null
+                    || providerConfig.provider() == BotConfig.ImageGenerationProvider.HERMES) {
+                ImageGenerationClient.SubmitResult submit = generationClient.submit("", prompt, 1, size, expand);
+                updateProviderTask(messageId, submit.taskId());
+                ImageGenerationClient.PollResult result = waitForResult("", submit.taskId());
+                if (result.status() != ImageGenerationClient.PollResult.Status.SUCCEEDED) {
+                    throw new IllegalStateException(result.errorMessage() == null
+                            ? "图片生成失败"
+                            : result.errorMessage());
+                }
+                bytes = generationClient.download(result.imageUrl());
+                mimeType = "image/png";
+            } else {
+                BotImageGenerationClient.GeneratedImage generated =
+                        botImageGenerationClient.generate(providerConfig, prompt, size);
+                bytes = generated.bytes();
+                mimeType = generated.mimeType();
             }
-
-            byte[] bytes = generationClient.download(result.imageUrl());
             String fileUrl = fileStorageService.uploadGeneratedImage(
                     "image-generation-" + messageId + ".png",
-                    "image/png",
+                    mimeType,
                     bytes);
             complete(messageId, fileUrl, bytes.length);
         } catch (Exception e) {

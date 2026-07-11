@@ -25,6 +25,9 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.atLeastOnce;
@@ -41,6 +44,7 @@ class ImageGenerationServiceTest {
     @Mock private MessageService messageService;
     @Mock private PointsService pointsService;
     @Mock private ImageGenerationClient generationClient;
+    @Mock private BotImageGenerationClient botImageGenerationClient;
     @Mock private FileStorageService fileStorageService;
     @Mock private RawWebSocketHandler rawWebSocketHandler;
     @Mock private TransactionTemplate transactionTemplate;
@@ -58,6 +62,7 @@ class ImageGenerationServiceTest {
                 messageService,
                 pointsService,
                 generationClient,
+                botImageGenerationClient,
                 fileStorageService,
                 rawWebSocketHandler,
                 transactionTemplate,
@@ -166,6 +171,42 @@ class ImageGenerationServiceTest {
         assertThat(persistedMessage.getBotDisplayName()).isEqualTo("画图助手");
         verify(pointsService).debit(1L, "image_generation", "image_generation:77");
         verify(messageService).validateCanSendMessage(1L, 10L);
+    }
+
+    @Test
+    void submitAsBotUsesItsConfiguredImageProviderInsteadOfHermes() throws Exception {
+        arrangeRoomAndUser();
+        User botSender = new User();
+        botSender.setId(9L);
+        BotConfig bot = new BotConfig();
+        bot.setId(12L);
+        bot.setBotName("BYO Draw Bot");
+        var providerConfig = new BotImageGenerationClient.ProviderConfig(
+                BotConfig.ImageGenerationProvider.NOVELAI,
+                "secret",
+                "https://api.novelai.net/ai/generate-image",
+                "nai-diffusion-3",
+                null);
+        when(botImageGenerationClient.resolve(bot)).thenReturn(providerConfig);
+        when(botImageGenerationClient.generate(providerConfig, "draw a library", "1024*1024"))
+                .thenReturn(new BotImageGenerationClient.GeneratedImage(new byte[]{5, 6, 7}, "image/png"));
+        when(pointsService.debit(1L, "image_generation", "image_generation:77"))
+                .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
+        when(fileStorageService.uploadGeneratedImage(
+                eq("image-generation-77.png"), eq("image/png"), any(byte[].class)))
+                .thenReturn("/api/files/image-gen/byo.png");
+
+        service.submitAsBot(
+                1L,
+                botSender,
+                bot,
+                "BYO Draw Bot",
+                new ImageGenerationDto.GenerateRequest(
+                        10L, "draw a library", 1, "1024*1024", true));
+
+        assertThat(persistedMessage.getFileUrl()).isEqualTo("/api/files/image-gen/byo.png");
+        verify(generationClient, never()).submit(anyString(), anyString(), anyInt(), anyString(), anyBoolean());
+        verify(botImageGenerationClient).generate(providerConfig, "draw a library", "1024*1024");
     }
 
     @Test

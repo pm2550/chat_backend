@@ -41,6 +41,16 @@ public class ProviderCredentialService {
 
     @Transactional
     public ProviderCredential createForBot(Long ownerId, BotConfig.LLMProvider provider, String label, String secret) {
+        return createForBot(ownerId, provider, label, secret, null, null);
+    }
+
+    @Transactional
+    public ProviderCredential createForBot(Long ownerId,
+                                           BotConfig.LLMProvider provider,
+                                           String label,
+                                           String secret,
+                                           String baseUrl,
+                                           String modelOverride) {
         User owner = userRepository.findById(ownerId)
                 .orElseThrow(() -> new RuntimeException("用户不存在"));
         ProviderCredential credential = new ProviderCredential();
@@ -48,6 +58,7 @@ public class ProviderCredentialService {
         credential.setLlmProvider(provider);
         credential.setLabel(normalizeLabel(label));
         setSecret(credential, secret);
+        applyEndpoint(credential, baseUrl, modelOverride);
         credential.setIsActive(true);
         return credentialRepository.save(credential);
     }

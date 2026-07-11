@@ -161,6 +161,8 @@ public class LLMService {
                     resolveBaseUrl(botConfig, kimiBaseUrl),
                     resolveModel(botConfig, kimiModel),
                     messages, botConfig, tools);
+            case IMAGE_API, NOVELAI -> throw new IllegalArgumentException(
+                    "Image-only credentials cannot be used as a text LLM provider");
         };
     }
 

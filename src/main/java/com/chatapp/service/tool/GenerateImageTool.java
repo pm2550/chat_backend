@@ -70,7 +70,7 @@ public class GenerateImageTool implements Tool {
                 .put("description", "Optional aspect ratio. Supported hints: 1:1, 3:4, 4:3, 9:16, 16:9.");
         properties.putObject("expand")
                 .put("type", "boolean")
-                .put("description", "Whether Hermes/Grok should expand the prompt before drawing. Default true.");
+                .put("description", "For the platform Hermes provider only: whether Grok should expand the prompt before drawing. Default true.");
         schema.putArray("required").add("prompt");
         return schema;
     }

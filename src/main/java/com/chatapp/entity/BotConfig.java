@@ -93,6 +93,21 @@ public class BotConfig {
     @Column(name = "workflow_mode", nullable = false, length = 32)
     private WorkflowMode workflowMode = WorkflowMode.SINGLE_PASS;
 
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "image_generation_provider", nullable = false, length = 32)
+    private ImageGenerationProvider imageGenerationProvider = ImageGenerationProvider.HERMES;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "image_provider_credential_id")
+    private ProviderCredential imageProviderCredential;
+
+    @Column(name = "image_model", length = 120)
+    private String imageModel;
+
+    @Column(name = "image_negative_prompt", columnDefinition = "TEXT")
+    private String imageNegativePrompt;
+
     @Column(name = "max_history_messages")
     private Integer maxHistoryMessages = 20;
 
@@ -152,7 +167,7 @@ public class BotConfig {
     private LocalDateTime updatedAt;
 
     public enum LLMProvider {
-        OPENAI, CLAUDE, DEEPSEEK, OLLAMA, HERMES, DASHSCOPE, KIMI
+        OPENAI, CLAUDE, DEEPSEEK, OLLAMA, HERMES, DASHSCOPE, KIMI, IMAGE_API, NOVELAI
     }
 
     public enum AccessPolicy {
@@ -176,5 +191,14 @@ public class BotConfig {
         SINGLE_PASS,
         /** Kirara-style two-pass flow: infer context first, then speak in persona. */
         KIRARA_TWO_PASS
+    }
+
+    public enum ImageGenerationProvider {
+        /** PM chat's managed Hermes /draw service. */
+        HERMES,
+        /** A user-supplied OpenAI-compatible /images/generations endpoint. */
+        OPENAI_COMPATIBLE,
+        /** NovelAI's official /ai/generate-image API. */
+        NOVELAI
     }
 }

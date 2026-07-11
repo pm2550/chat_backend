@@ -11,16 +11,16 @@ import java.util.Optional;
 @Repository
 public interface BotConfigRepository extends JpaRepository<BotConfig, Long> {
     @Override
-    @EntityGraph(attributePaths = {"providerCredential"})
+    @EntityGraph(attributePaths = {"providerCredential", "imageProviderCredential"})
     Optional<BotConfig> findById(Long id);
 
-    @EntityGraph(attributePaths = {"providerCredential"})
+    @EntityGraph(attributePaths = {"providerCredential", "imageProviderCredential"})
     List<BotConfig> findByCreatedById(Long userId);
 
-    @EntityGraph(attributePaths = {"providerCredential"})
+    @EntityGraph(attributePaths = {"providerCredential", "imageProviderCredential"})
     List<BotConfig> findByIsActiveTrue();
 
-    @EntityGraph(attributePaths = {"providerCredential"})
+    @EntityGraph(attributePaths = {"providerCredential", "imageProviderCredential"})
     Optional<BotConfig> findFirstByBotNameAndCreatedByIsNullOrderByIdAsc(String botName);
 
     Optional<BotConfig> findByInboundTokenFingerprint(String inboundTokenFingerprint);

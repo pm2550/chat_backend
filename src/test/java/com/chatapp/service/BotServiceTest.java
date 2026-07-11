@@ -158,6 +158,48 @@ class BotServiceTest {
     }
 
     @Test
+    @DisplayName("createBot stores a NovelAI key in the credential vault")
+    void create_with_novelai_image_provider() {
+        BotDto.CreateRequest req = new BotDto.CreateRequest();
+        req.setBotName("Novel Draw");
+        req.setLlmProvider(BotConfig.LLMProvider.OPENAI);
+        req.setImageGenerationProvider(BotConfig.ImageGenerationProvider.NOVELAI);
+        req.setImageApiKey("novel-secret");
+        req.setImageBaseUrl("https://api.novelai.net/ai/generate-image");
+        req.setImageModel("nai-diffusion-3");
+        ProviderCredential credential = new ProviderCredential();
+        credential.setId(120L);
+        credential.setLlmProvider(BotConfig.LLMProvider.NOVELAI);
+        credential.setLabel("Novel Draw image key");
+        credential.setSecretLast4("cret");
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(providerCredentialService.createForBot(
+                eq(1L),
+                eq(BotConfig.LLMProvider.NOVELAI),
+                anyString(),
+                eq("novel-secret"),
+                eq("https://api.novelai.net/ai/generate-image"),
+                eq("nai-diffusion-3")))
+                .thenReturn(credential);
+        when(botConfigRepository.save(any(BotConfig.class))).thenAnswer(invocation -> {
+            BotConfig saved = invocation.getArgument(0);
+            saved.setId(33L);
+            return saved;
+        });
+
+        BotDto dto = service.createBot(1L, req);
+
+        ArgumentCaptor<BotConfig> captor = ArgumentCaptor.forClass(BotConfig.class);
+        verify(botConfigRepository).save(captor.capture());
+        assertEquals(BotConfig.ImageGenerationProvider.NOVELAI,
+                captor.getValue().getImageGenerationProvider());
+        assertEquals(credential, captor.getValue().getImageProviderCredential());
+        assertEquals("nai-diffusion-3", captor.getValue().getImageModel());
+        assertEquals(120L, dto.getImageProviderCredentialId());
+        assertTrue(dto.getHasImageProviderCredential());
+    }
+
+    @Test
     @DisplayName("createBot rejects when creator missing")
     void create_unknown_creator() {
         when(userRepository.findById(99L)).thenReturn(Optional.empty());
