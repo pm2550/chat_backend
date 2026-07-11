@@ -9,9 +9,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 class BotReplyDeliveryServiceTest {
@@ -30,11 +28,20 @@ class BotReplyDeliveryServiceTest {
         assertEquals(List.of(first), delivered);
         ArgumentCaptor<Runnable> tasks = ArgumentCaptor.forClass(Runnable.class);
         ArgumentCaptor<Long> delays = ArgumentCaptor.forClass(Long.class);
-        verify(scheduler, times(2)).schedule(
+        verify(scheduler).schedule(
                 tasks.capture(), delays.capture(), org.mockito.ArgumentMatchers.eq(TimeUnit.MILLISECONDS));
-        assertTrue(delays.getAllValues().get(1) > delays.getAllValues().get(0));
+        assertEquals(BotReplyDeliveryService.gapAfter(first), delays.getValue());
 
-        tasks.getAllValues().forEach(Runnable::run);
+        tasks.getValue().run();
+        assertEquals(List.of(first, second), delivered);
+
+        tasks = ArgumentCaptor.forClass(Runnable.class);
+        delays = ArgumentCaptor.forClass(Long.class);
+        verify(scheduler, org.mockito.Mockito.times(2)).schedule(
+                tasks.capture(), delays.capture(), org.mockito.ArgumentMatchers.eq(TimeUnit.MILLISECONDS));
+        assertEquals(BotReplyDeliveryService.gapAfter(second), delays.getAllValues().get(1));
+
+        tasks.getAllValues().get(1).run();
         assertEquals(List.of(first, second, third), delivered);
     }
 

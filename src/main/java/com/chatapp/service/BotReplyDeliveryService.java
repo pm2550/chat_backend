@@ -38,15 +38,21 @@ public class BotReplyDeliveryService {
         }
 
         broadcaster.accept(messages.get(0));
-        long accumulatedDelayMs = 0;
-        for (int index = 1; index < messages.size(); index++) {
-            accumulatedDelayMs += gapAfter(messages.get(index - 1));
-            Message message = messages.get(index);
-            scheduler.schedule(
-                    () -> broadcaster.accept(message),
-                    accumulatedDelayMs,
-                    TimeUnit.MILLISECONDS);
+        scheduleNext(messages, 1, broadcaster);
+    }
+
+    private void scheduleNext(
+            List<Message> messages,
+            int index,
+            Consumer<Message> broadcaster) {
+        if (index >= messages.size()) {
+            return;
         }
+        long delayMs = gapAfter(messages.get(index - 1));
+        scheduler.schedule(() -> {
+            broadcaster.accept(messages.get(index));
+            scheduleNext(messages, index + 1, broadcaster);
+        }, delayMs, TimeUnit.MILLISECONDS);
     }
 
     @PreDestroy
