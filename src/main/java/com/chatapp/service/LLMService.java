@@ -188,8 +188,13 @@ public class LLMService {
         try {
             ObjectNode requestBody = objectMapper.createObjectNode();
             requestBody.put("model", model);
-            requestBody.put("temperature", config.getTemperature() != null ? config.getTemperature() : 0.7);
-            requestBody.put("max_tokens", config.getMaxTokens() != null ? config.getMaxTokens() : 2048);
+            int maxTokens = config.getMaxTokens() != null ? config.getMaxTokens() : 2048;
+            if (usesOpenAiReasoningParameters(config, model)) {
+                requestBody.put("max_completion_tokens", maxTokens);
+            } else {
+                requestBody.put("temperature", config.getTemperature() != null ? config.getTemperature() : 0.7);
+                requestBody.put("max_tokens", maxTokens);
+            }
 
             ArrayNode messagesArray = requestBody.putArray("messages");
             for (BotDto.ChatMessage msg : messages) {
@@ -258,6 +263,15 @@ public class LLMService {
             return;
         }
         msgNode.set("content", objectMapper.valueToTree(msg.getContent()));
+    }
+
+    private boolean usesOpenAiReasoningParameters(BotConfig config, String model) {
+        if (config.getLlmProvider() != BotConfig.LLMProvider.OPENAI || model == null) {
+            return false;
+        }
+        String normalized = model.trim().toLowerCase();
+        return normalized.startsWith("gpt-5")
+                || normalized.matches("^o[134](?:[-.].*)?$");
     }
 
     private void addOllamaImages(ObjectNode msgNode, BotDto.ChatMessage msg) {

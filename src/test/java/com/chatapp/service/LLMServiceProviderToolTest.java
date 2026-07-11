@@ -323,6 +323,85 @@ class LLMServiceProviderToolTest {
         }
     }
 
+    @Test
+    void openAiGpt5UsesCompletionTokenParameterWithoutLegacyTemperature() throws Exception {
+        AtomicReference<JsonNode> capturedRequest = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            capturedRequest.set(objectMapper.readTree(exchange.getRequestBody()));
+            byte[] body = """
+                    {"choices":[{"message":{"role":"assistant","content":"ok"}}],
+                     "usage":{"total_tokens":4}}
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            LLMService service = new LLMService(objectMapper, mock(ProviderCredentialService.class));
+            ReflectionTestUtils.setField(service, "openaiApiKey", "test-key");
+            ReflectionTestUtils.setField(service, "openaiBaseUrl",
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1");
+
+            BotConfig bot = new BotConfig();
+            bot.setLlmProvider(BotConfig.LLMProvider.OPENAI);
+            bot.setModelName("gpt-5.2");
+            bot.setMaxTokens(1234);
+            bot.setTemperature(0.4);
+
+            BotDto.LLMResponse response = service.chat(
+                    bot, List.of(new BotDto.ChatMessage("user", "hi")));
+
+            JsonNode request = capturedRequest.get();
+            assertEquals(1234, request.path("max_completion_tokens").asInt());
+            assertFalse(request.has("max_tokens"));
+            assertFalse(request.has("temperature"));
+            assertEquals("ok", response.getContent());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void openAiLegacyModelKeepsLegacyTokenAndTemperatureParameters() throws Exception {
+        AtomicReference<JsonNode> capturedRequest = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            capturedRequest.set(objectMapper.readTree(exchange.getRequestBody()));
+            byte[] body = """
+                    {"choices":[{"message":{"role":"assistant","content":"ok"}}]}
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            LLMService service = new LLMService(objectMapper, mock(ProviderCredentialService.class));
+            ReflectionTestUtils.setField(service, "openaiApiKey", "test-key");
+            ReflectionTestUtils.setField(service, "openaiBaseUrl",
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1");
+
+            BotConfig bot = new BotConfig();
+            bot.setLlmProvider(BotConfig.LLMProvider.OPENAI);
+            bot.setModelName("gpt-4o");
+            bot.setMaxTokens(987);
+            bot.setTemperature(0.2);
+
+            service.chat(bot, List.of(new BotDto.ChatMessage("user", "hi")));
+
+            JsonNode request = capturedRequest.get();
+            assertEquals(987, request.path("max_tokens").asInt());
+            assertEquals(0.2, request.path("temperature").asDouble());
+            assertFalse(request.has("max_completion_tokens"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
     private class EchoTool implements Tool {
         @Override
         public String name() {
