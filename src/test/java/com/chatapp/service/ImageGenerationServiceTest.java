@@ -184,7 +184,7 @@ class ImageGenerationServiceTest {
         var providerConfig = new BotImageGenerationClient.ProviderConfig(
                 BotConfig.ImageGenerationProvider.NOVELAI,
                 "secret",
-                "https://api.novelai.net/ai/generate-image",
+                "https://image.novelai.net/ai/generate-image",
                 "nai-diffusion-3",
                 null);
         when(botImageGenerationClient.resolve(bot)).thenReturn(providerConfig);

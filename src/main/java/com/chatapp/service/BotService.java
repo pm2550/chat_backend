@@ -1156,7 +1156,7 @@ public class BotService {
             String endpoint = baseUrl;
             if (provider == BotConfig.ImageGenerationProvider.NOVELAI
                     && (endpoint == null || endpoint.isBlank())) {
-                endpoint = "https://api.novelai.net/ai/generate-image";
+                endpoint = "https://image.novelai.net/ai/generate-image";
             }
             ProviderCredential credential = providerCredentialService.createForBot(
                     ownerId,

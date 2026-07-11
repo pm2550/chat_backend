@@ -165,7 +165,7 @@ class BotServiceTest {
         req.setLlmProvider(BotConfig.LLMProvider.OPENAI);
         req.setImageGenerationProvider(BotConfig.ImageGenerationProvider.NOVELAI);
         req.setImageApiKey("novel-secret");
-        req.setImageBaseUrl("https://api.novelai.net/ai/generate-image");
+        req.setImageBaseUrl("https://image.novelai.net/ai/generate-image");
         req.setImageModel("nai-diffusion-3");
         ProviderCredential credential = new ProviderCredential();
         credential.setId(120L);
@@ -178,7 +178,7 @@ class BotServiceTest {
                 eq(BotConfig.LLMProvider.NOVELAI),
                 anyString(),
                 eq("novel-secret"),
-                eq("https://api.novelai.net/ai/generate-image"),
+                eq("https://image.novelai.net/ai/generate-image"),
                 eq("nai-diffusion-3")))
                 .thenReturn(credential);
         when(botConfigRepository.save(any(BotConfig.class))).thenAnswer(invocation -> {

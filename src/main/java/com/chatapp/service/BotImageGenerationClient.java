@@ -29,7 +29,7 @@ public class BotImageGenerationClient {
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private static final long MAX_RESPONSE_BYTES = 32L * 1024L * 1024L;
-    private static final String NOVELAI_ENDPOINT = "https://api.novelai.net/ai/generate-image";
+    private static final String NOVELAI_ENDPOINT = "https://image.novelai.net/ai/generate-image";
 
     private final ObjectMapper objectMapper;
     private final ProviderCredentialService providerCredentialService;
