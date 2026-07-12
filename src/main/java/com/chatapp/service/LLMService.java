@@ -101,12 +101,13 @@ public class LLMService {
     }
 
     public BotDto.LLMResponse chat(BotConfig botConfig, List<BotDto.ChatMessage> messages, List<Tool> tools) {
-        if (containsImageContent(messages)) {
-            if (hermesProvider == null) {
-                throw new IllegalStateException("Hermes vision provider is not configured");
-            }
-            log.info("LLM vision route provider=hermes images={}", countImages(messages));
-            return hermesProvider.chat(botConfig, messages, tools);
+        int imageCount = countImages(messages);
+        if (imageCount > 0) {
+            log.info("LLM multimodal route provider={} model={} images={} tools={}",
+                    botConfig.getLlmProvider(),
+                    resolveModel(botConfig, botConfig.getModelName()),
+                    imageCount,
+                    tools == null ? 0 : tools.size());
         }
         return switch (botConfig.getLlmProvider()) {
             case OPENAI -> callOpenAICompatible(
@@ -164,13 +165,6 @@ public class LLMService {
             case IMAGE_API, NOVELAI -> throw new IllegalArgumentException(
                     "Image-only credentials cannot be used as a text LLM provider");
         };
-    }
-
-    private boolean containsImageContent(List<BotDto.ChatMessage> messages) {
-        if (messages == null) {
-            return false;
-        }
-        return messages.stream().anyMatch(BotDto.ChatMessage::hasImageContent);
     }
 
     private int countImages(List<BotDto.ChatMessage> messages) {

@@ -117,6 +117,12 @@ public class BotConfig {
     @Column(name = "include_memory_section")
     private Boolean includeMemorySection = true;
 
+    @Column(name = "vision_input_enabled", nullable = false)
+    private Boolean visionInputEnabled = true;
+
+    @Column(name = "history_image_inspection_enabled", nullable = false)
+    private Boolean historyImageInspectionEnabled = true;
+
     @Column(name = "system_prompt_template", columnDefinition = "TEXT")
     private String systemPromptTemplate;
 

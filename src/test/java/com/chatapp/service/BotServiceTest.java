@@ -55,6 +55,7 @@ class BotServiceTest {
     @Mock private BotRateLimitService botRateLimitService;
     @Mock private BotWebhookService botWebhookService;
     @Mock private FileStorageService fileStorageService;
+    @Mock private BotVisionAttachmentSelector botVisionAttachmentSelector;
     @Mock private ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
 
     @InjectMocks private BotService service;

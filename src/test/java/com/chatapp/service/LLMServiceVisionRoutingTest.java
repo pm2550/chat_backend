@@ -26,30 +26,44 @@ class LLMServiceVisionRoutingTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void imageContentRoutesToHermesProviderRegardlessOfConfiguredTextProvider() {
+    void openAiImageContentStaysWithConfiguredOpenAiProvider() throws Exception {
         HermesProvider hermesProvider = mock(HermesProvider.class);
-        LLMService service = new LLMService(objectMapper, mock(ProviderCredentialService.class), hermesProvider);
+        AtomicReference<String> captured = new AtomicReference<>("");
+        HttpServer server = server(captured, "OpenAI vision ok", 11);
+        server.start();
+        try {
+            LLMService service = new LLMService(objectMapper, mock(ProviderCredentialService.class), hermesProvider);
+            ReflectionTestUtils.setField(service, "openaiApiKey", "openai-vision-key");
+            ReflectionTestUtils.setField(service, "openaiBaseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1");
+            ReflectionTestUtils.setField(service, "openaiModel", "gpt-vision-test");
 
-        BotConfig bot = new BotConfig();
-        bot.setLlmProvider(BotConfig.LLMProvider.OPENAI);
-        bot.setTemperature(0.2);
-        bot.setMaxTokens(128);
+            BotConfig bot = new BotConfig();
+            bot.setLlmProvider(BotConfig.LLMProvider.OPENAI);
+            bot.setTemperature(0.2);
+            bot.setMaxTokens(128);
 
-        BotDto.ChatMessage user = BotDto.ChatMessage.userWithImages(
-                "describe", List.of(new BotDto.ImageAttachment(
-                        "normal.png", "image/png", "data:image/png;base64,aGVsbG8=")));
-        BotDto.LLMResponse hermesReply = new BotDto.LLMResponse();
-        hermesReply.setContent("Hermes vision ok");
-        hermesReply.setTokensUsed(11);
-        hermesReply.setModel("grok-4.3");
-        when(hermesProvider.chat(eq(bot), anyList(), anyList())).thenReturn(hermesReply);
+            BotDto.ChatMessage user = BotDto.ChatMessage.userWithImages(
+                    "describe", List.of(new BotDto.ImageAttachment(
+                            "normal.png", "image/png", "data:image/png;base64,aGVsbG8=")));
+            BotDto.LLMResponse response = service.chat(bot, List.of(user));
 
-        BotDto.LLMResponse response = service.chat(bot, List.of(user));
-
-        assertEquals("Hermes vision ok", response.getContent());
-        assertEquals(11, response.getTokensUsed());
-        assertEquals("grok-4.3", response.getModel());
-        verify(hermesProvider).chat(eq(bot), eq(List.of(user)), eq(List.of()));
+            assertEquals("OpenAI vision ok", response.getContent());
+            assertEquals(11, response.getTokensUsed());
+            assertEquals("gpt-vision-test", response.getModel());
+            var request = objectMapper.readTree(captured.get());
+            var content = request.path("messages").path(0).path("content");
+            assertEquals(2, content.size());
+            assertEquals("text", content.path(0).path("type").asText());
+            assertEquals("describe", content.path(0).path("text").asText());
+            assertFalse(content.path(0).has("image_url"));
+            assertEquals("image_url", content.path(1).path("type").asText());
+            assertEquals("data:image/png;base64,aGVsbG8=",
+                    content.path(1).path("image_url").path("url").asText());
+            assertFalse(content.path(1).has("text"));
+            verify(hermesProvider, never()).chat(eq(bot), anyList(), anyList());
+        } finally {
+            server.stop(0);
+        }
     }
 
     @Test
@@ -74,6 +88,25 @@ class LLMServiceVisionRoutingTest {
 
         assertEquals("Grok text ok", response.getContent());
         assertEquals("grok-4.3", response.getModel());
+        verify(hermesProvider).chat(eq(bot), eq(List.of(user)), eq(List.of()));
+    }
+
+    @Test
+    void hermesGrokImageContentStaysWithHermesProvider() {
+        HermesProvider hermesProvider = mock(HermesProvider.class);
+        LLMService service = new LLMService(objectMapper, mock(ProviderCredentialService.class), hermesProvider);
+        BotConfig bot = new BotConfig();
+        bot.setLlmProvider(BotConfig.LLMProvider.HERMES);
+        bot.setModelName("grok-4.3");
+        BotDto.ChatMessage user = BotDto.ChatMessage.userWithImages(
+                "read the code", List.of(new BotDto.ImageAttachment(
+                        "code.png", "image/png", "data:image/png;base64,Y29kZQ==")));
+        BotDto.LLMResponse reply = new BotDto.LLMResponse("7314", 9, "grok-4.3");
+        when(hermesProvider.chat(eq(bot), anyList(), anyList())).thenReturn(reply);
+
+        BotDto.LLMResponse response = service.chat(bot, List.of(user));
+
+        assertEquals("7314", response.getContent());
         verify(hermesProvider).chat(eq(bot), eq(List.of(user)), eq(List.of()));
     }
 

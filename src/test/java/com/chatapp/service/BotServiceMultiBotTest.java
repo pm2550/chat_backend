@@ -57,6 +57,7 @@ class BotServiceMultiBotTest {
     @Mock private BotRateLimitService botRateLimitService;
     @Mock private RichContentSanitizer richContentSanitizer;
     @Mock private BotWebhookService botWebhookService;
+    @Mock private BotVisionAttachmentSelector botVisionAttachmentSelector;
     @Mock private ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
     @Mock private AgentExecutionLoop agentExecutionLoop;
 

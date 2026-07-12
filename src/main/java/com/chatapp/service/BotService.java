@@ -95,7 +95,7 @@ public class BotService {
     private final RichContentSanitizer richContentSanitizer;
     private final BotWebhookService botWebhookService;
     private final FileStorageService fileStorageService;
-    private final AgentVisionAttachmentService agentVisionAttachmentService;
+    private final BotVisionAttachmentSelector botVisionAttachmentSelector;
     // Lazy to break the cycle: AgentExecutionLoop -> AgentToolDispatcher ->
     // RawWebSocketHandler -> BotService.
     private final ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
@@ -116,6 +116,9 @@ public class BotService {
         bot.setMaxTokens(request.getMaxTokens() != null ? request.getMaxTokens() : 2048);
         bot.setMaxHistoryMessages(request.getMaxHistoryMessages() != null ? request.getMaxHistoryMessages() : 20);
         bot.setIncludeRoomMetadata(request.getIncludeRoomMetadata() == null || request.getIncludeRoomMetadata());
+        bot.setVisionInputEnabled(request.getVisionInputEnabled() == null || request.getVisionInputEnabled());
+        bot.setHistoryImageInspectionEnabled(request.getHistoryImageInspectionEnabled() == null
+                || request.getHistoryImageInspectionEnabled());
         bot.setReplyMode(request.getReplyMode() != null
                 ? request.getReplyMode()
                 : BotConfig.ReplyMode.SINGLE);
@@ -164,6 +167,10 @@ public class BotService {
         if (request.getMaxTokens() != null) bot.setMaxTokens(request.getMaxTokens());
         if (request.getMaxHistoryMessages() != null) bot.setMaxHistoryMessages(request.getMaxHistoryMessages());
         if (request.getIncludeRoomMetadata() != null) bot.setIncludeRoomMetadata(request.getIncludeRoomMetadata());
+        if (request.getVisionInputEnabled() != null) bot.setVisionInputEnabled(request.getVisionInputEnabled());
+        if (request.getHistoryImageInspectionEnabled() != null) {
+            bot.setHistoryImageInspectionEnabled(request.getHistoryImageInspectionEnabled());
+        }
         if (request.getReplyMode() != null) bot.setReplyMode(request.getReplyMode());
         if (request.getWorkflowMode() != null) bot.setWorkflowMode(request.getWorkflowMode());
         if (request.getImageGenerationProvider() != null
@@ -721,7 +728,8 @@ public class BotService {
         task.setRequestedBy(requester);
         task.setBotConfig(config);
         String cleanPrompt = cleanMentions(messageContent, crb);
-        AgentVisionAttachmentService.ImageContext sourceImage = resolveVisionImage(sourceMessage);
+        AgentVisionAttachmentService.ImageContext sourceImage = selectVisionImage(
+                config, chatRoomId, sourceMessage, messageContent);
         if (sourceImage.annotation() != null && !sourceImage.annotation().isBlank()) {
             cleanPrompt = cleanPrompt + "\n" + sourceImage.annotation();
         }
@@ -788,9 +796,10 @@ public class BotService {
             messages.add(new BotDto.ChatMessage("system", systemPrompt));
         }
 
-        // Clean @mention from message and attach current image bytes, if present.
+        // Clean @mention and attach the relevant current/replied/recent room image.
         String cleanMessage = cleanMentions(userMessage, crb);
-        AgentVisionAttachmentService.ImageContext sourceImage = resolveVisionImage(sourceMessage);
+        AgentVisionAttachmentService.ImageContext sourceImage = selectVisionImage(
+                config, chatRoomId, sourceMessage, userMessage);
         if (sourceImage.annotation() != null && !sourceImage.annotation().isBlank()) {
             cleanMessage = cleanMessage + "\n" + sourceImage.annotation();
         }
@@ -852,14 +861,18 @@ public class BotService {
         return builder.toString();
     }
 
-
-    private AgentVisionAttachmentService.ImageContext resolveVisionImage(Message sourceMessage) {
-        if (agentVisionAttachmentService == null) {
-            return AgentVisionAttachmentService.ImageContext.empty();
-        }
-        AgentVisionAttachmentService.ImageContext context = agentVisionAttachmentService.resolve(sourceMessage, true);
-        return context != null ? context : AgentVisionAttachmentService.ImageContext.empty();
+    private AgentVisionAttachmentService.ImageContext selectVisionImage(
+            BotConfig config,
+            Long chatRoomId,
+            Message sourceMessage,
+            String prompt) {
+        BotVisionAttachmentSelector.Selection selection = botVisionAttachmentSelector.select(
+                config, chatRoomId, sourceMessage, prompt);
+        return selection != null && selection.image() != null
+                ? selection.image()
+                : AgentVisionAttachmentService.ImageContext.empty();
     }
+
 
     private Message saveBotMessage(Long chatRoomId, ChatRoomBot crb, String content) {
         BotConfig config = crb.getBotConfig();
@@ -1015,6 +1028,8 @@ public class BotService {
         dto.setMaxTokens(entity.getMaxTokens());
         dto.setMaxHistoryMessages(entity.getMaxHistoryMessages() != null ? entity.getMaxHistoryMessages() : 20);
         dto.setIncludeRoomMetadata(entity.getIncludeRoomMetadata() == null || entity.getIncludeRoomMetadata());
+        dto.setVisionInputEnabled(!Boolean.FALSE.equals(entity.getVisionInputEnabled()));
+        dto.setHistoryImageInspectionEnabled(!Boolean.FALSE.equals(entity.getHistoryImageInspectionEnabled()));
         dto.setReplyMode(entity.getReplyMode() != null
                 ? entity.getReplyMode()
                 : BotConfig.ReplyMode.SINGLE);

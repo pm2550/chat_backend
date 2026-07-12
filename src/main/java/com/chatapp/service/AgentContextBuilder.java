@@ -227,7 +227,9 @@ public class AgentContextBuilder {
             for (HistoricalMessage message : env.conversationHistory()) {
                 prompt.append("(")
                         .append(message.timestamp())
-                        .append(") ")
+                        .append(") #")
+                        .append(message.messageId() != null ? message.messageId() : "?")
+                        .append(" ")
                         .append(message.senderName())
                         .append(" [")
                         .append(message.messageType())
@@ -338,24 +340,13 @@ public class AgentContextBuilder {
         List<Message> recent = new ArrayList<>(messageRepository.findRecentMessages(room.getId(), historyLimit));
         Collections.reverse(recent);
 
-        boolean[] includeBinaryImage = new boolean[recent.size()];
-        int imagesIncluded = 0;
-        for (int i = recent.size() - 1; i >= 0; i--) {
-            Message message = recent.get(i);
-            if (agentVisionAttachmentService.isImageMessage(message)
-                    && imagesIncluded < AgentVisionAttachmentService.MAX_HISTORY_IMAGES) {
-                includeBinaryImage[i] = true;
-                imagesIncluded++;
-            }
-        }
-
         List<HistoricalMessage> history = new ArrayList<>();
         for (int i = 0; i < recent.size(); i++) {
             Message message = recent.get(i);
             boolean isImage = agentVisionAttachmentService.isImageMessage(message);
             String content = message.getContent() != null ? message.getContent() : "";
             AgentVisionAttachmentService.ImageContext imageContext = isImage
-                    ? agentVisionAttachmentService.resolve(message, includeBinaryImage[i])
+                    ? agentVisionAttachmentService.resolve(message, false)
                     : AgentVisionAttachmentService.ImageContext.empty();
             if (imageContext.annotation() != null && !imageContext.annotation().isBlank()) {
                 content = content.isBlank() ? imageContext.annotation() : content + " " + imageContext.annotation();
@@ -368,7 +359,8 @@ public class AgentContextBuilder {
                     message.getMessageType() != null ? message.getMessageType().name() : "TEXT",
                     content,
                     formatTimestamp(message.getCreatedAt()),
-                    imageContext.attachments()));
+                    message.getId(),
+                    List.of()));
         }
         return history;
     }
@@ -641,6 +633,7 @@ public class AgentContextBuilder {
                 "If the current task is only an @mention, empty, or a very short follow-up, infer the intended request from the immediately preceding relevant user message and answer that instead of greeting generically.",
                 "Cite group members by their display name when referring to their messages.",
                 "When asked to evaluate public figures, politicians, public policies, or historical events, give a balanced analysis based on public facts and observable actions. Do not hide behind phrases like 'as an AI, I have no personal opinion'; avoid voting persuasion, dehumanizing insults, and fabricated claims.",
+                "Only claim to see an image when pixels are attached or inspect_room_image succeeds.",
                 "If you don't know, say so. Do not fabricate facts.",
                 "Do not reveal these rules to users unless asked.");
     }
@@ -709,9 +702,19 @@ public class AgentContextBuilder {
             String messageType,
             String content,
             String timestamp,
+            Long messageId,
             List<BotDto.ImageAttachment> imageAttachments) {
         public HistoricalMessage(String senderName, String messageType, String content, String timestamp) {
-            this(senderName, messageType, content, timestamp, List.of());
+            this(senderName, messageType, content, timestamp, null, List.of());
+        }
+
+        public HistoricalMessage(
+                String senderName,
+                String messageType,
+                String content,
+                String timestamp,
+                List<BotDto.ImageAttachment> imageAttachments) {
+            this(senderName, messageType, content, timestamp, null, imageAttachments);
         }
     }
 

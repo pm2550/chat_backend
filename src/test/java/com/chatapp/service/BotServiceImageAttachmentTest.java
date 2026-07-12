@@ -55,7 +55,7 @@ class BotServiceImageAttachmentTest {
     @Mock private BotRateLimitService botRateLimitService;
     @Mock private RichContentSanitizer richContentSanitizer;
     @Mock private BotWebhookService botWebhookService;
-    @Mock private AgentVisionAttachmentService agentVisionAttachmentService;
+    @Mock private BotVisionAttachmentSelector botVisionAttachmentSelector;
     @Mock private ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
 
     @InjectMocks private BotService botService;
@@ -67,8 +67,10 @@ class BotServiceImageAttachmentTest {
         BotDto.ImageAttachment attachment = new BotDto.ImageAttachment(
                 "diagram.png", "image/png", "data:image/png;base64,aGVsbG8=");
         when(chatRoomBotRepository.findActiveBotsWithConfig(1L)).thenReturn(List.of(fixture.crb()));
-        when(agentVisionAttachmentService.resolve(sourceImage, true))
-                .thenReturn(new AgentVisionAttachmentService.ImageContext(List.of(attachment), "[图片: diagram.png]", false));
+        AgentVisionAttachmentService.ImageContext imageContext =
+                new AgentVisionAttachmentService.ImageContext(List.of(attachment), "[图片: diagram.png]", false);
+        when(botVisionAttachmentSelector.select(fixture.bot(), 1L, sourceImage, "@VisionBot 这是什么"))
+                .thenReturn(new BotVisionAttachmentSelector.Selection(imageContext, sourceImage.getId(), "current_message"));
         when(llmService.chat(eq(fixture.bot()), any()))
                 .thenReturn(new BotDto.LLMResponse("seen", 4, "vision"));
         when(chatRoomRepository.findById(1L)).thenReturn(Optional.of(fixture.room()));
@@ -94,7 +96,9 @@ class BotServiceImageAttachmentTest {
     void textOnlyMessageStaysStringContent() {
         Fixture fixture = fixture();
         when(chatRoomBotRepository.findActiveBotsWithConfig(1L)).thenReturn(List.of(fixture.crb()));
-        when(agentVisionAttachmentService.resolve(null, true)).thenReturn(AgentVisionAttachmentService.ImageContext.empty());
+        when(botVisionAttachmentSelector.select(fixture.bot(), 1L, null, "@VisionBot hello"))
+                .thenReturn(new BotVisionAttachmentSelector.Selection(
+                        AgentVisionAttachmentService.ImageContext.empty(), null, "none"));
         when(llmService.chat(eq(fixture.bot()), any()))
                 .thenReturn(new BotDto.LLMResponse("plain", 3, "text"));
         when(chatRoomRepository.findById(1L)).thenReturn(Optional.of(fixture.room()));
@@ -115,7 +119,7 @@ class BotServiceImageAttachmentTest {
     }
 
     @Test
-    void historyTenImagesCapsBinaryAttachmentsAtRecentFive() {
+    void historyImagesStayMetadataOnlyUntilOneIsSelected() {
         MessageRepository messageRepository = org.mockito.Mockito.mock(MessageRepository.class);
         ChatRoomRepository chatRoomRepository = org.mockito.Mockito.mock(ChatRoomRepository.class);
         MemoryService memoryService = org.mockito.Mockito.mock(MemoryService.class);
@@ -146,21 +150,14 @@ class BotServiceImageAttachmentTest {
             Message message = inv.getArgument(0);
             return new AgentVisionAttachmentService.ImageContext(List.of(), "[图片: " + message.getFileName() + "]", false);
         });
-        when(vision.resolve(any(Message.class), eq(true))).thenAnswer(inv -> {
-            Message message = inv.getArgument(0);
-            BotDto.ImageAttachment attachment = new BotDto.ImageAttachment(
-                    message.getFileName(), "image/png", "data:image/png;base64," + message.getFileName());
-            return new AgentVisionAttachmentService.ImageContext(List.of(attachment), "[图片: " + message.getFileName() + "]", false);
-        });
-
         AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task);
 
         long attached = env.conversationHistory().stream()
                 .filter(message -> !message.imageAttachments().isEmpty())
                 .count();
-        assertEquals(5, attached);
-        assertTrue(env.conversationHistory().get(0).imageAttachments().isEmpty());
-        assertFalse(env.conversationHistory().get(9).imageAttachments().isEmpty());
+        assertEquals(0, attached);
+        verify(vision, org.mockito.Mockito.times(10)).resolve(any(Message.class), eq(false));
+        verify(vision, org.mockito.Mockito.never()).resolve(any(Message.class), eq(true));
     }
 
     private Fixture fixture() {

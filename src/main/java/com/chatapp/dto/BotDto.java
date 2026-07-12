@@ -3,6 +3,7 @@ package com.chatapp.dto;
 import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoomBot;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
@@ -28,6 +29,8 @@ public class BotDto {
     private Integer maxTokens;
     private Integer maxHistoryMessages;
     private Boolean includeRoomMetadata;
+    private Boolean visionInputEnabled;
+    private Boolean historyImageInspectionEnabled;
     private BotConfig.ReplyMode replyMode;
     private BotConfig.WorkflowMode workflowMode;
     private BotConfig.ImageGenerationProvider imageGenerationProvider;
@@ -97,6 +100,8 @@ public class BotDto {
         private Integer maxTokens;
         private Integer maxHistoryMessages;
         private Boolean includeRoomMetadata;
+        private Boolean visionInputEnabled;
+        private Boolean historyImageInspectionEnabled;
         private BotConfig.ReplyMode replyMode;
         private BotConfig.WorkflowMode workflowMode;
         private BotConfig.ImageGenerationProvider imageGenerationProvider;
@@ -126,6 +131,8 @@ public class BotDto {
         private Integer maxTokens;
         private Integer maxHistoryMessages;
         private Boolean includeRoomMetadata;
+        private Boolean visionInputEnabled;
+        private Boolean historyImageInspectionEnabled;
         private BotConfig.ReplyMode replyMode;
         private BotConfig.WorkflowMode workflowMode;
         private BotConfig.ImageGenerationProvider imageGenerationProvider;
@@ -259,6 +266,7 @@ public class BotDto {
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class ContentPart {
         private String type;
         private String text;

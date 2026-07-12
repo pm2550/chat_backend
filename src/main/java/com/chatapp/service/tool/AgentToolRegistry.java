@@ -48,17 +48,29 @@ public class AgentToolRegistry {
         if (whitelist == null || whitelist.isEmpty()) {
             return false;
         }
-        return whitelist.stream().anyMatch(toolsByName::containsKey);
+        return whitelist.stream()
+                .filter(name -> isToolEnabledForBot(name, bot))
+                .anyMatch(toolsByName::containsKey);
     }
 
     public List<Tool> listToolsForBot(BotConfig bot) {
         Set<String> whitelist = enabledTools(bot);
         if (whitelist == null) {
-            return new ArrayList<>(toolsByName.values());
+            return toolsByName.values().stream()
+                    .filter(tool -> isToolEnabledForBot(tool.name(), bot))
+                    .toList();
         }
         return toolsByName.values().stream()
-                .filter(tool -> whitelist.contains(tool.name()))
+                .filter(tool -> whitelist.contains(tool.name()) && isToolEnabledForBot(tool.name(), bot))
                 .toList();
+    }
+
+    private boolean isToolEnabledForBot(String toolName, BotConfig bot) {
+        if (!"inspect_room_image".equals(toolName) || bot == null) {
+            return true;
+        }
+        return !Boolean.FALSE.equals(bot.getVisionInputEnabled())
+                && !Boolean.FALSE.equals(bot.getHistoryImageInspectionEnabled());
     }
 
     private Set<String> enabledTools(BotConfig bot) {

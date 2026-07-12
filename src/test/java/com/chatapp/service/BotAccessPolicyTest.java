@@ -46,7 +46,7 @@ class BotAccessPolicyTest {
     @Mock private BotRateLimitService botRateLimitService;
     @Mock private RichContentSanitizer richContentSanitizer;
     @Mock private BotWebhookService botWebhookService;
-    @Mock private AgentVisionAttachmentService agentVisionAttachmentService;
+    @Mock private BotVisionAttachmentSelector botVisionAttachmentSelector;
     @Mock private ObjectProvider<AgentExecutionLoop> agentExecutionLoopProvider;
 
     @InjectMocks private BotService botService;

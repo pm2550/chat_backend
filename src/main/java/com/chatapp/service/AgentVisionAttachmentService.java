@@ -23,8 +23,6 @@ import java.util.Locale;
 @RequiredArgsConstructor
 @Slf4j
 public class AgentVisionAttachmentService {
-    public static final int MAX_HISTORY_IMAGES = 5;
-
     private final FileStorageService fileStorageService;
 
     public boolean isImageMessage(Message message) {
