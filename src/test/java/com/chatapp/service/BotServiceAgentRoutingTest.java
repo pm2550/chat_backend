@@ -30,7 +30,6 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -147,19 +146,22 @@ class BotServiceAgentRoutingTest {
     }
 
     @Test
-    @DisplayName("rate-limited agent run posts no message and never invokes the loop")
-    void rateLimitedAgentRunSkips() {
+    @DisplayName("rate-limited agent run posts a visible retry message and never invokes the loop")
+    void rateLimitedAgentRunIsVisible() {
         when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
         when(agentToolRegistry.hasExplicitToolWhitelist(bot)).thenReturn(true);
         when(botRateLimitService.tryAcquireAgentRun(100L, 10L)).thenReturn(false);
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
 
         List<Message> result = service.processMessageForBots(100L, "search the news", 1L);
 
         verify(agentExecutionLoopProvider, never()).getObject();
         verify(llmService, never()).chat(any(), any());
-        verify(messageRepository, never()).save(any());
-        verify(chatRoomRepository, never()).findById(anyLong());
-        assertEquals(0, result.size());
+        verify(messageRepository).save(any(Message.class));
+        assertEquals(1, result.size());
+        assertEquals("⚠️ 请求太密集，我需要缓一下。请稍等几秒再试。", result.get(0).getContent());
     }
 
     @Test

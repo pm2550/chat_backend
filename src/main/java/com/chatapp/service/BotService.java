@@ -708,8 +708,8 @@ public class BotService {
     private String respondViaAgentLoop(Long chatRoomId, ChatRoomBot crb, String messageContent, Long senderId, Message sourceMessage) {
         BotConfig config = crb.getBotConfig();
         if (!botRateLimitService.tryAcquireAgentRun(chatRoomId, config.getId())) {
-            log.warn("机器人 {} 在聊天室 {} 的 agent 运行被限流，跳过本次回复", config.getBotName(), chatRoomId);
-            return null;
+            log.warn("机器人 {} 在聊天室 {} 的 agent 运行被限流，返回可见提示", config.getBotName(), chatRoomId);
+            return "⚠️ 请求太密集，我需要缓一下。请稍等几秒再试。";
         }
 
         ChatRoom chatRoom = chatRoomRepository.findById(chatRoomId)

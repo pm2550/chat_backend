@@ -179,7 +179,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (messageType == Message.MessageType.TEXT
                 && (encryptedContent == null || encryptedContent.isBlank())) {
             botReplyDeliveryService.deliver(
-                    botService.processMessageForBots(chatRoomId, content, user.getId()),
+                    botService.processMessageForBots(chatRoomId, content, user.getId(), saved),
                     this::broadcastMessage);
         }
     }
