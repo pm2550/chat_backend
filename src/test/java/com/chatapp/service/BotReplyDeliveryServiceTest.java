@@ -1,6 +1,7 @@
 package com.chatapp.service;
 
 import com.chatapp.entity.Message;
+import com.chatapp.entity.BotConfig;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import java.util.ArrayList;
@@ -49,6 +50,19 @@ class BotReplyDeliveryServiceTest {
     void clampsHumanizedGapForShortAndLongMessages() {
         assertEquals(420, BotReplyDeliveryService.gapAfter(message("好")));
         assertEquals(1200, BotReplyDeliveryService.gapAfter(message("很长".repeat(100))));
+    }
+
+    @Test
+    void usesConfiguredBotReplyInterval() {
+        Message message = message("短句");
+        BotConfig bot = new BotConfig();
+        bot.setReplyIntervalSeconds(3.5);
+        message.setBotConfig(bot);
+
+        assertEquals(3500, BotReplyDeliveryService.gapAfter(message));
+
+        bot.setReplyIntervalSeconds(99.0);
+        assertEquals(10000, BotReplyDeliveryService.gapAfter(message));
     }
 
     private static Message message(String content) {

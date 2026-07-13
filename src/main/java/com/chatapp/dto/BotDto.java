@@ -32,6 +32,7 @@ public class BotDto {
     private Boolean visionInputEnabled;
     private Boolean historyImageInspectionEnabled;
     private BotConfig.ReplyMode replyMode;
+    private Double replyIntervalSeconds;
     private BotConfig.WorkflowMode workflowMode;
     private BotConfig.ImageGenerationProvider imageGenerationProvider;
     private Long imageProviderCredentialId;
@@ -103,6 +104,7 @@ public class BotDto {
         private Boolean visionInputEnabled;
         private Boolean historyImageInspectionEnabled;
         private BotConfig.ReplyMode replyMode;
+        private Double replyIntervalSeconds;
         private BotConfig.WorkflowMode workflowMode;
         private BotConfig.ImageGenerationProvider imageGenerationProvider;
         private Long imageProviderCredentialId;
@@ -134,6 +136,7 @@ public class BotDto {
         private Boolean visionInputEnabled;
         private Boolean historyImageInspectionEnabled;
         private BotConfig.ReplyMode replyMode;
+        private Double replyIntervalSeconds;
         private BotConfig.WorkflowMode workflowMode;
         private BotConfig.ImageGenerationProvider imageGenerationProvider;
         private Long imageProviderCredentialId;

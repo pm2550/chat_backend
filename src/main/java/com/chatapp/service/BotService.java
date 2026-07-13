@@ -122,6 +122,7 @@ public class BotService {
         bot.setReplyMode(request.getReplyMode() != null
                 ? request.getReplyMode()
                 : BotConfig.ReplyMode.SINGLE);
+        bot.setReplyIntervalSeconds(normalizeReplyInterval(request.getReplyIntervalSeconds()));
         bot.setWorkflowMode(request.getWorkflowMode() != null
                 ? request.getWorkflowMode()
                 : BotConfig.WorkflowMode.SINGLE_PASS);
@@ -172,6 +173,9 @@ public class BotService {
             bot.setHistoryImageInspectionEnabled(request.getHistoryImageInspectionEnabled());
         }
         if (request.getReplyMode() != null) bot.setReplyMode(request.getReplyMode());
+        if (request.getReplyIntervalSeconds() != null) {
+            bot.setReplyIntervalSeconds(normalizeReplyInterval(request.getReplyIntervalSeconds()));
+        }
         if (request.getWorkflowMode() != null) bot.setWorkflowMode(request.getWorkflowMode());
         if (request.getImageGenerationProvider() != null
                 || request.getImageProviderCredentialId() != null
@@ -1033,6 +1037,7 @@ public class BotService {
         dto.setReplyMode(entity.getReplyMode() != null
                 ? entity.getReplyMode()
                 : BotConfig.ReplyMode.SINGLE);
+        dto.setReplyIntervalSeconds(normalizeReplyInterval(entity.getReplyIntervalSeconds()));
         dto.setWorkflowMode(entity.getWorkflowMode() != null
                 ? entity.getWorkflowMode()
                 : BotConfig.WorkflowMode.SINGLE_PASS);
@@ -1075,6 +1080,13 @@ public class BotService {
         dto.setInboundTokenScopes(readGatewayScopes(entity.getInboundTokenScopes()));
         dto.setCreatedAt(entity.getCreatedAt());
         return dto;
+    }
+
+    private double normalizeReplyInterval(Double seconds) {
+        if (seconds == null || !Double.isFinite(seconds)) {
+            return 2.0;
+        }
+        return Math.max(0.5, Math.min(10.0, seconds));
     }
 
     private List<BotDto.AllowedUser> readAllowedUsers(Long botId) {

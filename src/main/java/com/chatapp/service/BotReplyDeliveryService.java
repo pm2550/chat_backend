@@ -1,5 +1,6 @@
 package com.chatapp.service;
 
+import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.Message;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
@@ -61,6 +62,12 @@ public class BotReplyDeliveryService {
     }
 
     static long gapAfter(Message message) {
+        BotConfig bot = message != null ? message.getBotConfig() : null;
+        Double configuredSeconds = bot != null ? bot.getReplyIntervalSeconds() : null;
+        if (configuredSeconds != null && Double.isFinite(configuredSeconds)) {
+            double clamped = Math.max(0.5, Math.min(10.0, configuredSeconds));
+            return Math.round(clamped * 1000);
+        }
         String content = message != null ? message.getContent() : null;
         int characters = content == null ? 0 : content.codePointCount(0, content.length());
         return Math.max(MIN_GAP_MS, Math.min(MAX_GAP_MS, characters * MS_PER_CHARACTER));

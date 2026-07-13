@@ -154,6 +154,8 @@ class BotServiceTest {
         assertEquals(0.7, captor.getValue().getTemperature()); // default
         assertEquals(2048, captor.getValue().getMaxTokens()); // default
         assertEquals(BotConfig.WorkflowMode.SINGLE_PASS, captor.getValue().getWorkflowMode());
+        assertEquals(2.0, captor.getValue().getReplyIntervalSeconds());
+        assertEquals(2.0, dto.getReplyIntervalSeconds());
         assertNull(captor.getValue().getApiKeyEncrypted());
         assertEquals(credential, captor.getValue().getProviderCredential());
     }
@@ -218,15 +220,32 @@ class BotServiceTest {
 
         BotDto.UpdateRequest req = new BotDto.UpdateRequest();
         req.setTemperature(0.2);
+        req.setReplyIntervalSeconds(3.5);
         req.setIsActive(false);
         // other fields null
 
         service.updateBot(10L, alice.getId(), req);
         assertEquals(0.2, bot.getTemperature());
         assertEquals(false, bot.getIsActive());
+        assertEquals(3.5, bot.getReplyIntervalSeconds());
         // unchanged
         assertEquals("gpt-4o", bot.getModelName());
         assertEquals("GPT-Helper", bot.getBotName());
+    }
+
+    @Test
+    @DisplayName("updateBot clamps reply interval to supported limits")
+    void update_reply_interval_clamps_to_limits() {
+        when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));
+        when(botConfigRepository.save(any(BotConfig.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BotDto.UpdateRequest req = new BotDto.UpdateRequest();
+        req.setReplyIntervalSeconds(99.0);
+
+        BotDto dto = service.updateBot(10L, alice.getId(), req);
+
+        assertEquals(10.0, bot.getReplyIntervalSeconds());
+        assertEquals(10.0, dto.getReplyIntervalSeconds());
     }
 
     @Test

@@ -88,6 +88,9 @@ public class BotConfig {
     @Column(name = "reply_mode", nullable = false, length = 32)
     private ReplyMode replyMode = ReplyMode.SINGLE;
 
+    @Column(name = "reply_interval_seconds", nullable = false)
+    private Double replyIntervalSeconds = 2.0;
+
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "workflow_mode", nullable = false, length = 32)
