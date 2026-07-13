@@ -22,8 +22,9 @@ public class BotVisionAttachmentSelector {
     private static final int CANDIDATE_LIMIT = 20;
     private static final int AUTO_LOOKBACK_HOURS = 24;
     private static final Pattern VISUAL_REFERENCE = Pattern.compile(
-            "(?iu)(这张|这个|刚才|前面|上面|图里|图片|照片|截图|画面|画作|作品|佳作|人物|构图|光影|色彩|颜色|"
-                    + "好看|可爱|漂亮|性感|女人|少女|男人|男孩|是什么|看图|评价|点评|分析|第[一二三四五\\d]+张)");
+            "(?iu)(这张|那张|这幅|那幅|图里|图片|照片|截图|画面|画作|作品|佳作|看图|"
+                    + "(?:刚才|前面|上面)(?:的)?(?:图|图片|照片|截图|画|画作|作品)|"
+                    + "第[一二三四五六七八九十\\d]+张)");
 
     private final MessageRepository messageRepository;
     private final AgentVisionAttachmentService visionAttachmentService;

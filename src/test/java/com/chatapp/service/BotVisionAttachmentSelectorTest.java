@@ -105,6 +105,31 @@ class BotVisionAttachmentSelectorTest {
     }
 
     @Test
+    void imageGenerationSubjectDoesNotAttachPreviousRoomImage() {
+        Message source = text(50L, 7L, "@画图怪 半裸美少女");
+        when(visionService.isImageMessage(source)).thenReturn(false);
+
+        BotVisionAttachmentSelector.Selection selected = selector.select(
+                bot, 7L, source, source.getContent());
+
+        assertTrue(selected.image().attachments().isEmpty());
+        verify(messageRepository, never()).findFileMessagesInChatRoom(any(), any(), any());
+        verify(visionService, never()).resolve(any(), eq(true));
+    }
+
+    @Test
+    void descriptiveImageWordsAloneDoNotAttachPreviousRoomImage() {
+        Message source = text(50L, 7L, "@画图怪 画一个漂亮性感的女人，注意人物构图和光影色彩");
+        when(visionService.isImageMessage(source)).thenReturn(false);
+
+        BotVisionAttachmentSelector.Selection selected = selector.select(
+                bot, 7L, source, source.getContent());
+
+        assertTrue(selected.image().attachments().isEmpty());
+        verify(messageRepository, never()).findFileMessagesInChatRoom(any(), any(), any());
+    }
+
+    @Test
     void disabledVisionNeverReadsImageBytes() {
         bot.setVisionInputEnabled(false);
         Message source = image(30L, 7L, "private.png");
