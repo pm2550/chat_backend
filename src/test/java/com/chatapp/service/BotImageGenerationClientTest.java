@@ -103,6 +103,40 @@ class BotImageGenerationClientTest {
                 .contains("\"uc\":\"bad hands\"");
     }
 
+    @Test
+    void novelAiV45UsesV4PromptShape() throws Exception {
+        byte[] zip = zip("image_0.png", new byte[]{4, 5, 6});
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/ai/generate-image", exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            exchange.getResponseHeaders().set("Content-Type", "application/zip");
+            exchange.sendResponseHeaders(201, zip.length);
+            exchange.getResponseBody().write(zip);
+            exchange.close();
+        });
+        server.start();
+
+        client().generate(
+                new BotImageGenerationClient.ProviderConfig(
+                        BotConfig.ImageGenerationProvider.NOVELAI,
+                        "nai-secret",
+                        "http://127.0.0.1:" + server.getAddress().getPort() + "/ai/generate-image",
+                        "nai-diffusion-4-5-full",
+                        "lowres, bad anatomy"),
+                "1girl, silver hair, cinematic light",
+                "1024*1024");
+
+        assertThat(requestBody.get())
+                .contains("\"model\":\"nai-diffusion-4-5-full\"")
+                .contains("\"params_version\":3")
+                .contains("\"noise_schedule\":\"karras\"")
+                .contains("\"v4_prompt\"")
+                .contains("\"base_caption\":\"1girl, silver hair, cinematic light\"")
+                .contains("\"v4_negative_prompt\"")
+                .contains("\"characterPrompts\":[]");
+    }
+
     private BotImageGenerationClient client() {
         ProviderCredentialService credentials = mock(ProviderCredentialService.class);
         OutboundUrlPolicy policy = mock(OutboundUrlPolicy.class);

@@ -11,6 +11,7 @@ import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.UserRepository;
 import com.chatapp.service.ImageGenerationService;
+import com.chatapp.service.NovelAiPromptRewriteService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -24,6 +25,7 @@ public class GenerateImageTool implements Tool {
     private final ChatRoomBotRepository chatRoomBotRepository;
     private final ChatRoomRepository chatRoomRepository;
     private final UserRepository userRepository;
+    private final NovelAiPromptRewriteService promptRewriteService;
     private final ObjectMapper objectMapper;
 
     public GenerateImageTool(
@@ -32,12 +34,14 @@ public class GenerateImageTool implements Tool {
             ChatRoomBotRepository chatRoomBotRepository,
             ChatRoomRepository chatRoomRepository,
             UserRepository userRepository,
+            NovelAiPromptRewriteService promptRewriteService,
             ObjectMapper objectMapper) {
         this.imageGenerationService = imageGenerationService;
         this.botConfigRepository = botConfigRepository;
         this.chatRoomBotRepository = chatRoomBotRepository;
         this.chatRoomRepository = chatRoomRepository;
         this.userRepository = userRepository;
+        this.promptRewriteService = promptRewriteService;
         this.objectMapper = objectMapper;
     }
 
@@ -106,9 +110,11 @@ public class GenerateImageTool implements Tool {
         User sender = userRepository.findById(senderId)
                 .orElseThrow(() -> new ToolExecutionException("no_sender", "bot sender user not found"));
 
+        String providerPrompt = promptRewriteService.rewriteIfNeeded(bot, prompt);
+
         ImageGenerationDto.GenerateRequest request = new ImageGenerationDto.GenerateRequest(
                 context.roomId(),
-                prompt,
+                providerPrompt,
                 1,
                 resolveSize(params),
                 params.has("expand") && !params.path("expand").isNull()
@@ -126,7 +132,11 @@ public class GenerateImageTool implements Tool {
         root.put("messageId", response.getMessageId());
         root.put("status", response.getStatus() != null ? response.getStatus().name() : "QUEUED");
         root.put("pointsCharged", response.getPointsCharged() == null ? 0 : response.getPointsCharged());
-        root.put("prompt", prompt);
+        root.put("prompt", providerPrompt);
+        if (!providerPrompt.equals(prompt)) {
+            root.put("sourcePrompt", prompt);
+            root.put("promptRewritten", true);
+        }
         MessageDto message = response.getMessage();
         if (message != null) {
             root.put("botName", message.getBotName() == null ? roomDisplayName(roomBot) : message.getBotName());

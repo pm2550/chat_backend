@@ -12,6 +12,7 @@ import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.UserRepository;
 import com.chatapp.service.ImageGenerationService;
+import com.chatapp.service.NovelAiPromptRewriteService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -33,6 +34,7 @@ class GenerateImageToolTest {
     @Mock private ChatRoomBotRepository chatRoomBotRepository;
     @Mock private ChatRoomRepository chatRoomRepository;
     @Mock private UserRepository userRepository;
+    @Mock private NovelAiPromptRewriteService promptRewriteService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -44,6 +46,7 @@ class GenerateImageToolTest {
                 chatRoomBotRepository,
                 chatRoomRepository,
                 userRepository,
+                promptRewriteService,
                 objectMapper);
 
         User owner = new User();
@@ -66,6 +69,8 @@ class GenerateImageToolTest {
                 .thenReturn(Optional.of(roomBot));
         when(chatRoomRepository.findById(20L)).thenReturn(Optional.of(room));
         when(userRepository.findById(8L)).thenReturn(Optional.of(owner));
+        when(promptRewriteService.rewriteIfNeeded(bot, "画一只蓝色机器人"))
+                .thenReturn("1 robot, blue armor, cinematic lighting");
 
         MessageDto message = new MessageDto();
         message.setId(99L);
@@ -102,8 +107,11 @@ class GenerateImageToolTest {
                 org.mockito.ArgumentMatchers.eq("画图猫"),
                 requestCaptor.capture());
         assertThat(requestCaptor.getValue().getRoomId()).isEqualTo(20L);
-        assertThat(requestCaptor.getValue().getPrompt()).isEqualTo("画一只蓝色机器人");
+        assertThat(requestCaptor.getValue().getPrompt())
+                .isEqualTo("1 robot, blue armor, cinematic lighting");
         assertThat(requestCaptor.getValue().getSize()).isEqualTo("1792*1024");
         assertThat(requestCaptor.getValue().getExpand()).isFalse();
+        assertThat(result.path("sourcePrompt").asText()).isEqualTo("画一只蓝色机器人");
+        assertThat(result.path("promptRewritten").asBoolean()).isTrue();
     }
 }

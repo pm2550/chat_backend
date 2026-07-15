@@ -41,6 +41,7 @@ public class BotDto {
     private Boolean hasImageProviderCredential;
     private String imageModel;
     private String imageNegativePrompt;
+    private BotConfig.ImagePromptMode imagePromptMode;
     private Boolean isActive;
     private Long providerCredentialId;
     private String providerCredentialLabel;
@@ -112,6 +113,7 @@ public class BotDto {
         private String imageBaseUrl;
         private String imageModel;
         private String imageNegativePrompt;
+        private BotConfig.ImagePromptMode imagePromptMode;
         private List<String> enabledTools;
         private BotConfig.AccessPolicy accessPolicy;
         private List<Long> allowedUserIds;
@@ -144,6 +146,7 @@ public class BotDto {
         private String imageBaseUrl;
         private String imageModel;
         private String imageNegativePrompt;
+        private BotConfig.ImagePromptMode imagePromptMode;
         private Boolean isActive;
         private List<String> enabledTools;
         private BotConfig.AccessPolicy accessPolicy;

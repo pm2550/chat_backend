@@ -111,6 +111,11 @@ public class BotConfig {
     @Column(name = "image_negative_prompt", columnDefinition = "TEXT")
     private String imageNegativePrompt;
 
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "image_prompt_mode", nullable = false, length = 32)
+    private ImagePromptMode imagePromptMode = ImagePromptMode.FAITHFUL_CREATIVE;
+
     @Column(name = "max_history_messages")
     private Integer maxHistoryMessages = 20;
 
@@ -209,5 +214,12 @@ public class BotConfig {
         OPENAI_COMPATIBLE,
         /** NovelAI's official /ai/generate-image API. */
         NOVELAI
+    }
+
+    public enum ImagePromptMode {
+        /** Send the tool prompt to the image provider without rewriting it. */
+        VERBATIM,
+        /** Translate Chinese faithfully and enrich only compatible visual details. */
+        FAITHFUL_CREATIVE
     }
 }

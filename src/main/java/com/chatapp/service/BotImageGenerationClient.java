@@ -30,6 +30,7 @@ public class BotImageGenerationClient {
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private static final long MAX_RESPONSE_BYTES = 32L * 1024L * 1024L;
     private static final String NOVELAI_ENDPOINT = "https://image.novelai.net/ai/generate-image";
+    public static final String DEFAULT_NOVELAI_MODEL = "nai-diffusion-4-5-full";
 
     private final ObjectMapper objectMapper;
     private final ProviderCredentialService providerCredentialService;
@@ -100,7 +101,8 @@ public class BotImageGenerationClient {
         int[] dimensions = dimensions(size);
         ObjectNode body = objectMapper.createObjectNode();
         body.put("input", prompt);
-        body.put("model", firstNonBlank(config.model(), "nai-diffusion-3"));
+        String model = firstNonBlank(config.model(), DEFAULT_NOVELAI_MODEL);
+        body.put("model", model);
         body.put("action", "generate");
         ObjectNode parameters = body.putObject("parameters");
         parameters.put("width", dimensions[0]);
@@ -109,14 +111,44 @@ public class BotImageGenerationClient {
         parameters.put("sampler", "k_euler_ancestral");
         parameters.put("steps", 28);
         parameters.put("n_samples", 1);
-        parameters.put("uc", firstNonBlank(
+        String negativePrompt = firstNonBlank(
                 config.negativePrompt(),
-                "lowres, bad anatomy, bad hands, text, watermark, signature"));
+                "lowres, bad anatomy, bad hands, text, watermark, signature");
+        parameters.put("uc", negativePrompt);
         parameters.put("ucPreset", 0);
         parameters.put("qualityToggle", true);
         parameters.put("sm", false);
         parameters.put("sm_dyn", false);
+        if (isNovelAiV4(model)) {
+            putNovelAiV4Parameters(parameters, prompt, negativePrompt);
+        }
         return executeJsonImageRequest(config.endpoint(), config.apiKey(), body, true);
+    }
+
+    private boolean isNovelAiV4(String model) {
+        return model != null && model.toLowerCase(Locale.ROOT).startsWith("nai-diffusion-4");
+    }
+
+    private void putNovelAiV4Parameters(ObjectNode parameters, String prompt, String negativePrompt) {
+        parameters.put("params_version", 3);
+        parameters.put("noise_schedule", "karras");
+        parameters.put("legacy", false);
+        parameters.put("legacy_v3_extend", false);
+        parameters.put("cfg_rescale", 0.0);
+
+        ObjectNode positive = parameters.putObject("v4_prompt");
+        ObjectNode positiveCaption = positive.putObject("caption");
+        positiveCaption.put("base_caption", prompt);
+        positiveCaption.putArray("char_captions");
+        positive.put("use_coords", false);
+        positive.put("use_order", true);
+
+        ObjectNode negative = parameters.putObject("v4_negative_prompt");
+        ObjectNode negativeCaption = negative.putObject("caption");
+        negativeCaption.put("base_caption", negativePrompt);
+        negativeCaption.putArray("char_captions");
+        negative.put("legacy_uc", false);
+        parameters.putArray("characterPrompts");
     }
 
     private GeneratedImage executeJsonImageRequest(

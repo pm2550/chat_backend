@@ -134,7 +134,8 @@ public class BotService {
                 request.getImageApiKey(),
                 request.getImageBaseUrl(),
                 request.getImageModel(),
-                request.getImageNegativePrompt());
+                request.getImageNegativePrompt(),
+                request.getImagePromptMode());
         bot.setAccessPolicy(request.getAccessPolicy() != null
                 ? request.getAccessPolicy()
                 : BotConfig.AccessPolicy.PRIVATE);
@@ -181,7 +182,8 @@ public class BotService {
                 || request.getImageProviderCredentialId() != null
                 || (request.getImageApiKey() != null && !request.getImageApiKey().isBlank())
                 || request.getImageModel() != null
-                || request.getImageNegativePrompt() != null) {
+                || request.getImageNegativePrompt() != null
+                || request.getImagePromptMode() != null) {
             applyImageGenerationSettings(
                     bot,
                     bot.getCreatedBy().getId(),
@@ -190,7 +192,8 @@ public class BotService {
                     request.getImageApiKey(),
                     request.getImageBaseUrl(),
                     request.getImageModel(),
-                    request.getImageNegativePrompt());
+                    request.getImageNegativePrompt(),
+                    request.getImagePromptMode());
         }
         if (request.getIsActive() != null) bot.setIsActive(request.getIsActive());
         if (request.getEnabledTools() != null) applyEnabledTools(bot, request.getEnabledTools());
@@ -1046,6 +1049,9 @@ public class BotService {
                 : BotConfig.ImageGenerationProvider.HERMES);
         dto.setImageModel(entity.getImageModel());
         dto.setImageNegativePrompt(entity.getImageNegativePrompt());
+        dto.setImagePromptMode(entity.getImagePromptMode() != null
+                ? entity.getImagePromptMode()
+                : BotConfig.ImagePromptMode.FAITHFUL_CREATIVE);
         if (includeCredentialDetails && entity.getImageProviderCredential() != null) {
             dto.setImageProviderCredentialId(entity.getImageProviderCredential().getId());
             dto.setImageProviderCredentialLabel(entity.getImageProviderCredential().getLabel());
@@ -1152,7 +1158,8 @@ public class BotService {
             String rawApiKey,
             String baseUrl,
             String model,
-            String negativePrompt) {
+            String negativePrompt,
+            BotConfig.ImagePromptMode promptMode) {
         BotConfig.ImageGenerationProvider provider = requestedProvider != null
                 ? requestedProvider
                 : bot.getImageGenerationProvider() != null
@@ -1164,6 +1171,11 @@ public class BotService {
         }
         if (negativePrompt != null) {
             bot.setImageNegativePrompt(negativePrompt.isBlank() ? null : negativePrompt.trim());
+        }
+        if (promptMode != null) {
+            bot.setImagePromptMode(promptMode);
+        } else if (bot.getImagePromptMode() == null) {
+            bot.setImagePromptMode(BotConfig.ImagePromptMode.FAITHFUL_CREATIVE);
         }
 
         if (provider == BotConfig.ImageGenerationProvider.HERMES) {
