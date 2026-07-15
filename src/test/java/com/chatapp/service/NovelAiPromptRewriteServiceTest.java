@@ -11,6 +11,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.ArgumentCaptor;
+
+import java.util.List;
 
 class NovelAiPromptRewriteServiceTest {
     private LLMService llmService;
@@ -24,11 +27,12 @@ class NovelAiPromptRewriteServiceTest {
         bot = new BotConfig();
         bot.setId(96L);
         bot.setImageGenerationProvider(BotConfig.ImageGenerationProvider.NOVELAI);
-        bot.setImagePromptMode(BotConfig.ImagePromptMode.FAITHFUL_CREATIVE);
+        bot.setImagePromptMode(BotConfig.ImagePromptMode.ANIME_CREATIVE);
     }
 
     @Test
     void rewritesChineseToFaithfulCreativeEnglishPrompt() {
+        bot.setImagePromptMode(BotConfig.ImagePromptMode.FAITHFUL_CREATIVE);
         when(llmService.chat(org.mockito.ArgumentMatchers.eq(bot), anyList()))
                 .thenReturn(new BotDto.LLMResponse(
                         "Prompt: 1girl, silver hair, dynamic composition, cinematic lighting",
@@ -43,6 +47,7 @@ class NovelAiPromptRewriteServiceTest {
 
     @Test
     void leavesEnglishPromptVerbatim() {
+        bot.setImagePromptMode(BotConfig.ImagePromptMode.FAITHFUL_CREATIVE);
         String prompt = "1girl, silver hair, cinematic lighting";
         assertThat(service.rewriteIfNeeded(bot, prompt)).isEqualTo(prompt);
         verify(llmService, never()).chat(org.mockito.ArgumentMatchers.any(), anyList());
@@ -60,5 +65,24 @@ class NovelAiPromptRewriteServiceTest {
         when(llmService.chat(org.mockito.ArgumentMatchers.eq(bot), anyList()))
                 .thenThrow(new IllegalStateException("provider unavailable"));
         assertThat(service.rewriteIfNeeded(bot, "银发少女")).isEqualTo("银发少女");
+    }
+
+    @Test
+    void animeModeRewritesEnglishAndExplicitlyRequestsTwoDimensionalAnime() {
+        when(llmService.chat(org.mockito.ArgumentMatchers.eq(bot), anyList()))
+                .thenReturn(new BotDto.LLMResponse(
+                        "1girl, silver hair, anime illustration, 2D, clean line art, cel shading",
+                        24,
+                        "grok-4.3"));
+
+        String result = service.rewriteIfNeeded(bot, "adult silver-haired woman in a rainy street");
+
+        assertThat(result).contains("anime illustration", "2D", "cel shading");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BotDto.ChatMessage>> messages = ArgumentCaptor.forClass(List.class);
+        verify(llmService).chat(org.mockito.ArgumentMatchers.eq(bot), messages.capture());
+        assertThat(messages.getValue().get(0).textContent())
+                .contains("unmistakably polished 2D anime artwork")
+                .contains("Explicitly requested visual style always wins");
     }
 }

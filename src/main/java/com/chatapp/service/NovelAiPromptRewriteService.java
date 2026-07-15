@@ -15,7 +15,7 @@ import java.util.regex.Pattern;
 public class NovelAiPromptRewriteService {
     private static final Pattern HAN = Pattern.compile("[\\p{IsHan}]");
     private static final int MAX_PROMPT_LENGTH = 1000;
-    private static final String SYSTEM_PROMPT = """
+    private static final String FAITHFUL_SYSTEM_PROMPT = """
             You adapt Chinese image requests into a single high-quality English prompt for NovelAI Diffusion.
             Preserve every explicit subject, count, appearance, action, relationship, pose, clothing or exposure
             level, setting, camera direction, mood, and requested style. Never sanitize, euphemize, omit, reverse,
@@ -23,6 +23,21 @@ public class NovelAiPromptRewriteService {
             You may add compatible composition, lighting, color, camera, texture, and aesthetic details to improve
             visual quality. Prefer concise NovelAI-friendly English tags plus short natural-language composition.
             Return only the final prompt, with no heading, explanation, quotes, or Markdown.
+            """;
+    private static final String ANIME_SYSTEM_PROMPT = """
+            You adapt an image request into a single high-quality English prompt for NovelAI Diffusion.
+            Preserve every explicit subject, count, appearance, action, relationship, pose, clothing or exposure
+            level, setting, camera direction, mood, and requested style. Never sanitize, euphemize, omit, reverse,
+            or contradict those details. Do not add clothing or censorship. Do not infer or add a young age.
+
+            Unless the source explicitly asks for photorealism, a real-person photo, live action, 3D, or another
+            non-anime style, make the result unmistakably polished 2D anime artwork. Use compatible tags such as
+            anime illustration, 2D, clean line art, anime coloring, cel shading, expressive eyes, very aesthetic,
+            masterpiece, and no text. Add tasteful composition, lighting, color harmony, fabric detail, and a
+            strong focal point. Do not add film grain, realistic skin texture, photographic language, or 3D-render
+            language unless the source asks for it. Explicitly requested visual style always wins over this default.
+
+            Return only the final NovelAI-friendly prompt, with no heading, explanation, quotes, or Markdown.
             """;
 
     private final LLMService llmService;
@@ -32,12 +47,16 @@ public class NovelAiPromptRewriteService {
                 || bot == null
                 || bot.getImageGenerationProvider() != BotConfig.ImageGenerationProvider.NOVELAI
                 || bot.getImagePromptMode() == BotConfig.ImagePromptMode.VERBATIM
-                || !HAN.matcher(prompt).find()) {
+                || (bot.getImagePromptMode() != BotConfig.ImagePromptMode.ANIME_CREATIVE
+                    && !HAN.matcher(prompt).find())) {
             return prompt;
         }
         try {
+            String systemPrompt = bot.getImagePromptMode() == BotConfig.ImagePromptMode.ANIME_CREATIVE
+                    ? ANIME_SYSTEM_PROMPT
+                    : FAITHFUL_SYSTEM_PROMPT;
             BotDto.LLMResponse response = llmService.chat(bot, List.of(
-                    new BotDto.ChatMessage("system", SYSTEM_PROMPT),
+                    new BotDto.ChatMessage("system", systemPrompt),
                     new BotDto.ChatMessage("user", prompt.trim())));
             String rewritten = clean(response != null ? response.getContent() : null);
             if (rewritten.isBlank()) {

@@ -1051,7 +1051,7 @@ public class BotService {
         dto.setImageNegativePrompt(entity.getImageNegativePrompt());
         dto.setImagePromptMode(entity.getImagePromptMode() != null
                 ? entity.getImagePromptMode()
-                : BotConfig.ImagePromptMode.FAITHFUL_CREATIVE);
+                : BotConfig.ImagePromptMode.ANIME_CREATIVE);
         if (includeCredentialDetails && entity.getImageProviderCredential() != null) {
             dto.setImageProviderCredentialId(entity.getImageProviderCredential().getId());
             dto.setImageProviderCredentialLabel(entity.getImageProviderCredential().getLabel());
@@ -1175,7 +1175,7 @@ public class BotService {
         if (promptMode != null) {
             bot.setImagePromptMode(promptMode);
         } else if (bot.getImagePromptMode() == null) {
-            bot.setImagePromptMode(BotConfig.ImagePromptMode.FAITHFUL_CREATIVE);
+            bot.setImagePromptMode(BotConfig.ImagePromptMode.ANIME_CREATIVE);
         }
 
         if (provider == BotConfig.ImageGenerationProvider.HERMES) {
