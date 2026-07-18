@@ -10,9 +10,13 @@ import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.UserRepository;
 import com.chatapp.repository.MessageRepository;
 import com.chatapp.service.tool.AgentToolRegistry;
+import com.chatapp.service.tool.Tool;
+import com.chatapp.service.tool.ToolContext;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -49,6 +53,10 @@ public class BotService {
     private static final Pattern MD_TABLE_SEP = Pattern.compile("(?m)^\\s*\\|?[ :|-]*-{2,}[ :|-]*\\|?\\s*$");
     private static final Pattern SENTENCE_BOUNDARY =
             Pattern.compile("(?<=[。！？!?；;])\\s+|(?<=[。！？!?；;])|\\n+");
+    private static final Pattern SEXUAL_MINOR_TERMS = Pattern.compile(
+            "(?i)(child|loli|underage|minor|young-looking|未成年|幼女|萝莉)");
+    private static final Pattern EXPLICIT_SEXUAL_TERMS = Pattern.compile(
+            "(?i)(nsfw|nude|naked|nipples?|areola|porn|genitals?|cameltoe|spread\\s+legs|裸体|赤裸|露点|生殖器)");
     private static final String KIRARA_ANALYSIS_SYSTEM_PROMPT = """
             你是 Kirara/阿雷工作流的 R1 上下文判定器，只做分析，不直接聊天。
             你的任务是根据房间上下文、最近消息和当前触发文本，判断真正应该回应什么。
@@ -126,6 +134,9 @@ public class BotService {
         bot.setWorkflowMode(request.getWorkflowMode() != null
                 ? request.getWorkflowMode()
                 : BotConfig.WorkflowMode.SINGLE_PASS);
+        bot.setImageInvocationMode(request.getImageInvocationMode() != null
+                ? request.getImageInvocationMode()
+                : BotConfig.ImageInvocationMode.AGENT);
         applyImageGenerationSettings(
                 bot,
                 creatorId,
@@ -178,6 +189,9 @@ public class BotService {
             bot.setReplyIntervalSeconds(normalizeReplyInterval(request.getReplyIntervalSeconds()));
         }
         if (request.getWorkflowMode() != null) bot.setWorkflowMode(request.getWorkflowMode());
+        if (request.getImageInvocationMode() != null) {
+            bot.setImageInvocationMode(request.getImageInvocationMode());
+        }
         if (request.getImageGenerationProvider() != null
                 || request.getImageProviderCredentialId() != null
                 || (request.getImageApiKey() != null && !request.getImageApiKey().isBlank())
@@ -417,7 +431,10 @@ public class BotService {
                         continue;
                     }
                     String replyContent;
-                    if (agentToolRegistry.hasExplicitToolWhitelist(config)) {
+                    if (config.getImageInvocationMode() == BotConfig.ImageInvocationMode.DIRECT) {
+                        replyContent = submitDirectImageGeneration(
+                                chatRoomId, crb, safeContent, senderId, sourceMessage);
+                    } else if (agentToolRegistry.hasExplicitToolWhitelist(config)) {
                         // Tool-enabled bots run the full multi-turn agent loop
                         // (room history + tools), not a single LLM call.
                         replyContent = respondViaAgentLoop(chatRoomId, crb, safeContent, senderId, sourceMessage);
@@ -447,6 +464,59 @@ public class BotService {
             }
         }
         return botMessages;
+    }
+
+    private String submitDirectImageGeneration(
+            Long chatRoomId,
+            ChatRoomBot roomBot,
+            String messageContent,
+            Long senderId,
+            Message sourceMessage) {
+        BotConfig bot = roomBot.getBotConfig();
+        String prompt = directImagePrompt(messageContent, roomDisplayName(roomBot), bot.getBotName());
+        if (prompt.isBlank()) {
+            return "请在提及我之后写下要画的正向提示词。";
+        }
+        if (SEXUAL_MINOR_TERMS.matcher(prompt).find() && EXPLICIT_SEXUAL_TERMS.matcher(prompt).find()) {
+            return "⚠️ 无法提交同时涉及未成年人或年龄模糊描述与性内容的画图请求。";
+        }
+
+        Tool generateImage = agentToolRegistry.getTool("generate_image")
+                .orElseThrow(() -> new IllegalStateException("generate_image tool is unavailable"));
+        ObjectNode params = JSON.createObjectNode();
+        params.put("prompt", prompt);
+        params.put("verbatim", true);
+        ToolContext context = new ToolContext(
+                chatRoomId,
+                senderId,
+                null,
+                bot.getId(),
+                sourceMessage != null && Boolean.TRUE.equals(sourceMessage.getIsAnonymous()),
+                sourceMessage != null && sourceMessage.getAnonymousIdentity() != null
+                        ? sourceMessage.getAnonymousIdentity().getAnonymousName()
+                        : null);
+        JsonNode result = generateImage.execute(params, context);
+        if (result != null && result.has("error")) {
+            String error = result.path("error").path("message").asText("图片提交失败");
+            throw new IllegalStateException(error);
+        }
+        log.info("机器人 {} 在聊天室 {} 使用原文直达图片通道提交提示词 (chars={})",
+                bot.getBotName(), chatRoomId, prompt.length());
+        return null;
+    }
+
+    private String directImagePrompt(String content, String roomName, String botName) {
+        String prompt = content == null ? "" : content;
+        prompt = removeFirstMention(prompt, roomName);
+        if (!Objects.equals(roomName, botName)) {
+            prompt = removeFirstMention(prompt, botName);
+        }
+        return prompt.strip();
+    }
+
+    private String removeFirstMention(String content, String label) {
+        if (label == null || label.isBlank()) return content;
+        return content.replaceFirst(Pattern.quote("@" + label.trim()), "");
     }
 
     private boolean keywordTriggerMatches(String rawKeywords, String safeContent) {
@@ -696,6 +766,13 @@ public class BotService {
     private String botFailureMessage(Exception e) {
         String message = e != null && e.getMessage() != null ? e.getMessage() : "";
         String lower = message.toLowerCase();
+        if (lower.contains("safety_check_type_csam")) {
+            return "⚠️ 请求在调用画图工具前被内容安全检查拒绝：提示词同时涉及未成年人或年龄模糊描述与性内容。"
+                    + "请移除 child、loli、teen、young-looking 等词，或明确改为成年角色；这不是 API key 或 NovelAI 故障。";
+        }
+        if (lower.contains("content violates usage guidelines") || lower.contains("content policy")) {
+            return "⚠️ 请求在调用画图工具前被上游模型的内容安全检查拒绝。请调整提示词；这不是 API key 或图片模型故障。";
+        }
         if (lower.contains("401") || lower.contains("unauthorized") || lower.contains("invalid_request_error")
                 || lower.contains("authentication") || lower.contains("api key")) {
             return "⚠️ 这个 bot 的模型 API 认证失败了。请检查它绑定的 Provider 凭据/API key 是否正确。";
@@ -1052,6 +1129,9 @@ public class BotService {
         dto.setImagePromptMode(entity.getImagePromptMode() != null
                 ? entity.getImagePromptMode()
                 : BotConfig.ImagePromptMode.ANIME_CREATIVE);
+        dto.setImageInvocationMode(entity.getImageInvocationMode() != null
+                ? entity.getImageInvocationMode()
+                : BotConfig.ImageInvocationMode.AGENT);
         if (includeCredentialDetails && entity.getImageProviderCredential() != null) {
             dto.setImageProviderCredentialId(entity.getImageProviderCredential().getId());
             dto.setImageProviderCredentialLabel(entity.getImageProviderCredential().getLabel());

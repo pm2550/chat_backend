@@ -113,6 +113,11 @@ public class BotConfig {
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "image_invocation_mode", nullable = false, length = 32)
+    private ImageInvocationMode imageInvocationMode = ImageInvocationMode.AGENT;
+
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "image_prompt_mode", nullable = false, length = 32)
     private ImagePromptMode imagePromptMode = ImagePromptMode.ANIME_CREATIVE;
 
@@ -223,5 +228,12 @@ public class BotConfig {
         FAITHFUL_CREATIVE,
         /** Preserve the request while defaulting unspecified visual style to polished 2D anime. */
         ANIME_CREATIVE
+    }
+
+    public enum ImageInvocationMode {
+        /** Let the text model decide when and how to call the image tool. */
+        AGENT,
+        /** Remove only the room mention and submit the remaining positive prompt verbatim. */
+        DIRECT
     }
 }

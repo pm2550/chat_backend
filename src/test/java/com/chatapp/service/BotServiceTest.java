@@ -16,6 +16,9 @@ import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.UserRepository;
 import com.chatapp.repository.AgentTaskRepository;
 import com.chatapp.service.tool.AgentToolRegistry;
+import com.chatapp.service.tool.Tool;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -154,6 +157,8 @@ class BotServiceTest {
         assertEquals(0.7, captor.getValue().getTemperature()); // default
         assertEquals(2048, captor.getValue().getMaxTokens()); // default
         assertEquals(BotConfig.WorkflowMode.SINGLE_PASS, captor.getValue().getWorkflowMode());
+        assertEquals(BotConfig.ImageInvocationMode.AGENT,
+                captor.getValue().getImageInvocationMode());
         assertEquals(2.0, captor.getValue().getReplyIntervalSeconds());
         assertEquals(2.0, dto.getReplyIntervalSeconds());
         assertNull(captor.getValue().getApiKeyEncrypted());
@@ -620,6 +625,39 @@ class BotServiceTest {
     }
 
     @Test
+    @DisplayName("DIRECT image invocation removes only the bot mention and bypasses prompt rewriting")
+    void process_direct_image_invocation_preserves_positive_prompt() {
+        bot.setBotName("Painter");
+        bot.setImageInvocationMode(BotConfig.ImageInvocationMode.DIRECT);
+        bot.setImageNegativePrompt("bad hands, watermark");
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setChatRoom(room);
+        crb.setBotConfig(bot);
+        crb.setRoomNickname("画图怪");
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.MENTION);
+        Tool imageTool = mock(Tool.class);
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(agentToolRegistry.getTool("generate_image")).thenReturn(Optional.of(imageTool));
+        when(imageTool.execute(any(JsonNode.class), any()))
+                .thenReturn(new ObjectMapper().createObjectNode().put("submitted", true));
+
+        List<Message> replies = service.processMessageForBots(
+                100L,
+                "@画图怪 银发成年女性，雨夜街头，电影灯光",
+                1L);
+
+        assertTrue(replies.isEmpty());
+        ArgumentCaptor<JsonNode> params = ArgumentCaptor.forClass(JsonNode.class);
+        verify(imageTool).execute(params.capture(), any());
+        assertEquals("银发成年女性，雨夜街头，电影灯光",
+                params.getValue().path("prompt").asText());
+        assertTrue(params.getValue().path("verbatim").asBoolean());
+        assertFalse(params.getValue().has("negativePrompt"));
+        assertFalse(params.getValue().toString().contains("bad hands"));
+        verifyNoInteractions(llmService);
+    }
+
+    @Test
     @DisplayName("processMessageForBots ALL mode always fires")
     void process_all_trigger() {
         ChatRoomBot crb = new ChatRoomBot();
@@ -652,6 +690,29 @@ class BotServiceTest {
         assertTrue(replies.get(0).getContent().contains("额度不足或被限流"));
         assertFalse(replies.get(0).getContent().contains("quota exceeded"));
         assertEquals(bot, replies.get(0).getBotConfig());
+    }
+
+    @Test
+    @DisplayName("processMessageForBots explains CSAM safety rejection instead of blaming provider configuration")
+    void process_csam_rejection_saves_specific_safe_error_message() {
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.ALL);
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(llmService.chat(any(), any())).thenThrow(new RuntimeException(
+                "Hermes /chat failed: HTTP 502 Content violates usage guidelines. "
+                        + "Failed check: SAFETY_CHECK_TYPE_CSAM"));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        List<Message> replies = service.processMessageForBots(100L, "anything", 1L);
+
+        assertEquals(1, replies.size());
+        assertTrue(replies.get(0).getContent().contains("内容安全检查拒绝"));
+        assertTrue(replies.get(0).getContent().contains("不是 API key 或 NovelAI 故障"));
+        assertFalse(replies.get(0).getContent().contains("SAFETY_CHECK_TYPE_CSAM"));
+        assertFalse(replies.get(0).getContent().contains("检查它的模型配置"));
     }
 
     @Test

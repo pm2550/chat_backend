@@ -25,6 +25,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -113,5 +114,62 @@ class GenerateImageToolTest {
         assertThat(requestCaptor.getValue().getExpand()).isFalse();
         assertThat(result.path("sourcePrompt").asText()).isEqualTo("画一只蓝色机器人");
         assertThat(result.path("promptRewritten").asBoolean()).isTrue();
+    }
+
+    @Test
+    void verbatimFlagSkipsPromptRewriteAndKeepsSourcePrompt() throws Exception {
+        GenerateImageTool tool = new GenerateImageTool(
+                imageGenerationService,
+                botConfigRepository,
+                chatRoomBotRepository,
+                chatRoomRepository,
+                userRepository,
+                promptRewriteService,
+                objectMapper);
+        User owner = new User();
+        owner.setId(8L);
+        BotConfig bot = new BotConfig();
+        bot.setId(5L);
+        bot.setBotName("Painter");
+        bot.setCreatedBy(owner);
+        bot.setImageNegativePrompt("bad hands, watermark");
+        ChatRoom room = new ChatRoom();
+        room.setId(20L);
+        room.setCreatedBy(owner);
+        ChatRoomBot roomBot = new ChatRoomBot();
+        roomBot.setBotConfig(bot);
+        roomBot.setChatRoom(room);
+        roomBot.setRoomNickname("画图怪");
+        when(botConfigRepository.findById(5L)).thenReturn(Optional.of(bot));
+        when(chatRoomBotRepository.findByChatRoomIdAndBotConfigId(20L, 5L))
+                .thenReturn(Optional.of(roomBot));
+        when(chatRoomRepository.findById(20L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(8L)).thenReturn(Optional.of(owner));
+        when(imageGenerationService.submitAsBot(
+                org.mockito.ArgumentMatchers.eq(42L),
+                org.mockito.ArgumentMatchers.eq(owner),
+                org.mockito.ArgumentMatchers.eq(bot),
+                org.mockito.ArgumentMatchers.eq("画图怪"),
+                org.mockito.ArgumentMatchers.any(ImageGenerationDto.GenerateRequest.class)))
+                .thenReturn(new ImageGenerationDto.GenerateResponse(
+                        99L, 10, Message.ImageGenerationStatus.QUEUED, new MessageDto()));
+
+        JsonNode result = tool.execute(
+                objectMapper.readTree("""
+                        {"prompt":"银发成年女性，雨夜街头","verbatim":true}
+                        """),
+                new ToolContext(20L, 42L, 77L, 5L));
+
+        ArgumentCaptor<ImageGenerationDto.GenerateRequest> requestCaptor =
+                ArgumentCaptor.forClass(ImageGenerationDto.GenerateRequest.class);
+        verify(imageGenerationService).submitAsBot(
+                org.mockito.ArgumentMatchers.eq(42L),
+                org.mockito.ArgumentMatchers.eq(owner),
+                org.mockito.ArgumentMatchers.eq(bot),
+                org.mockito.ArgumentMatchers.eq("画图怪"),
+                requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getPrompt()).isEqualTo("银发成年女性，雨夜街头");
+        assertThat(result.path("promptRewritten").asBoolean()).isFalse();
+        verifyNoInteractions(promptRewriteService);
     }
 }

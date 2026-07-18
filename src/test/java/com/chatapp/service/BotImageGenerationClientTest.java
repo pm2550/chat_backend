@@ -134,6 +134,8 @@ class BotImageGenerationClientTest {
                 .contains("\"v4_prompt\"")
                 .contains("\"base_caption\":\"1girl, silver hair, cinematic light\"")
                 .contains("\"v4_negative_prompt\"")
+                .contains("\"base_caption\":\"lowres, bad anatomy\"")
+                .doesNotContain("1girl, silver hair, cinematic light, lowres, bad anatomy")
                 .contains("\"characterPrompts\":[]");
     }
 

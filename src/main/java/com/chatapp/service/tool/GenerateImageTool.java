@@ -54,6 +54,8 @@ public class GenerateImageTool implements Tool {
     public String description() {
         return "Generate an AI image in the current PM chat room. Use this only when the user asks you to draw, "
                 + "create an illustration, make an image, or otherwise produce visual artwork. "
+                + "Pass only the desired positive visual content in prompt. The bot's configured negative prompt "
+                + "is applied separately; do not promote a standalone negative-tag list into desired content. "
                 + "The tool charges the initiating user's AI image points and posts an image-generation message "
                 + "as this bot in the room.";
     }
@@ -65,7 +67,8 @@ public class GenerateImageTool implements Tool {
         ObjectNode properties = schema.putObject("properties");
         properties.putObject("prompt")
                 .put("type", "string")
-                .put("description", "The visual prompt to draw. Preserve the user's subject and important details.");
+                .put("description", "The positive visual content to draw. Preserve the user's subject and important details. "
+                        + "Do not copy a negative-only tag list into this field; the bot's configured negative prompt is separate.");
         properties.putObject("size")
                 .put("type", "string")
                 .put("description", "Optional output size, for example 1024*1024, 1024*1536, or 1536*1024.");
@@ -75,6 +78,9 @@ public class GenerateImageTool implements Tool {
         properties.putObject("expand")
                 .put("type", "boolean")
                 .put("description", "For the platform Hermes provider only: whether Grok should expand the prompt before drawing. Default true.");
+        properties.putObject("verbatim")
+                .put("type", "boolean")
+                .put("description", "Internal direct-channel flag. When true, skip all prompt rewriting and submit prompt unchanged.");
         schema.putArray("required").add("prompt");
         return schema;
     }
@@ -110,7 +116,9 @@ public class GenerateImageTool implements Tool {
         User sender = userRepository.findById(senderId)
                 .orElseThrow(() -> new ToolExecutionException("no_sender", "bot sender user not found"));
 
-        String providerPrompt = promptRewriteService.rewriteIfNeeded(bot, prompt);
+        String providerPrompt = params.path("verbatim").asBoolean(false)
+                ? prompt
+                : promptRewriteService.rewriteIfNeeded(bot, prompt);
 
         ImageGenerationDto.GenerateRequest request = new ImageGenerationDto.GenerateRequest(
                 context.roomId(),
