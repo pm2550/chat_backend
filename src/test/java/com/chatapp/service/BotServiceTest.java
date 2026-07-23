@@ -336,6 +336,24 @@ class BotServiceTest {
     }
 
     @Test
+    @DisplayName("addBotToChatRoom inherits the bot default mention-or-regex trigger")
+    void addBotToChatRoom_inheritsBotTriggerDefaults() {
+        bot.setDefaultTriggerMode(ChatRoomBot.TriggerMode.MENTION_OR_REGEX);
+        bot.setDefaultTriggerKeywords("^/chat(?:\\s|$)");
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));
+        when(chatRoomBotRepository.findByChatRoomIdAndBotConfigId(100L, 10L))
+                .thenReturn(Optional.empty());
+
+        service.addBotToChatRoom(100L, 10L, null);
+
+        ArgumentCaptor<ChatRoomBot> captor = ArgumentCaptor.forClass(ChatRoomBot.class);
+        verify(chatRoomBotRepository).save(captor.capture());
+        assertEquals(ChatRoomBot.TriggerMode.MENTION_OR_REGEX, captor.getValue().getTriggerMode());
+        assertEquals("^/chat(?:\\s|$)", captor.getValue().getTriggerKeywords());
+    }
+
+    @Test
     @DisplayName("addBotToChatRoom rejects duplicate add")
     void add_duplicate_rejected() {
         when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
@@ -443,6 +461,16 @@ class BotServiceTest {
         assertEquals("第二句！", replies.get(1).getContent());
         assertEquals("第三句？", replies.get(2).getContent());
         verify(messageRepository, times(3)).save(any(Message.class));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BotDto.ChatMessage>> promptCaptor =
+                ArgumentCaptor.forClass((Class) List.class);
+        verify(llmService).chat(eq(bot), promptCaptor.capture());
+        assertTrue(promptCaptor.getValue().stream()
+                .filter(message -> "system".equals(message.getRole()))
+                .map(BotDto.ChatMessage::textContent)
+                .anyMatch(prompt -> prompt.contains("[CHAT DELIVERY MODE: NATURAL SEQUENTIAL BUBBLES]")
+                        && prompt.contains("<break>")
+                        && prompt.contains("任务已完成")));
     }
 
     @Test
@@ -606,6 +634,40 @@ class BotServiceTest {
         service.processMessageForBots(100L, "画图：猫猫", 1L);
 
         verify(llmService).chat(any(), any());
+    }
+
+    @Test
+    @DisplayName("processMessageForBots mention-or-regex mode supports QQbot Alei rules")
+    void process_mention_or_regex_trigger() {
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.MENTION_OR_REGEX);
+        crb.setTriggerKeywords("^/chat(?:\\s|$)");
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(llmService.chat(any(), any())).thenReturn(new BotDto.LLMResponse("ack", 1, "m"));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+
+        service.processMessageForBots(100L, "/chat 你好", 1L);
+        service.processMessageForBots(100L, "@GPT-Helper 你好", 1L);
+
+        verify(llmService, times(2)).chat(any(), any());
+    }
+
+    @Test
+    @DisplayName("updateBot rejects an invalid default trigger regex")
+    void updateBot_rejectsInvalidDefaultTriggerRegex() {
+        when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));
+        BotDto.UpdateRequest request = new BotDto.UpdateRequest();
+        request.setDefaultTriggerMode(ChatRoomBot.TriggerMode.MENTION_OR_REGEX);
+        request.setDefaultTriggerKeywords("[");
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.updateBot(10L, 1L, request));
+
+        assertTrue(error.getMessage().contains("正则表达式无效"));
+        verify(botConfigRepository, never()).save(any());
     }
 
     @Test

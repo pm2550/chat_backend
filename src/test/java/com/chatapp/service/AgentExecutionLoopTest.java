@@ -97,6 +97,45 @@ class AgentExecutionLoopTest {
     }
 
     @Test
+    void emptyFinalAnswerIsRetriedInsteadOfReportingTaskCompleted() {
+        when(llmService.chat(any(BotConfig.class), anyList(), anyList()))
+                .thenReturn(new BotDto.LLMResponse("", 0, "m"))
+                .thenReturn(new BotDto.LLMResponse("直接回答用户", 6, "m"));
+
+        AgentExecutionLoop.AgentLoopResult result = loop.runLoop(task, envelope);
+
+        assertEquals("直接回答用户", result.finalContent());
+        assertEquals(2, result.iterations());
+        verify(llmService, times(2)).chat(any(BotConfig.class), anyList(), anyList());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BotDto.ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
+        verify(llmService, times(2)).chat(eq(bot), captor.capture(), anyList());
+        List<BotDto.ChatMessage> retryMessages = captor.getAllValues().get(1);
+        assertTrue(retryMessages.stream().anyMatch(message ->
+                "system".equals(message.getRole())
+                        && message.textContent().contains("Do not report task status")));
+        assertFalse(result.finalContent().contains("任务已完成"));
+    }
+
+    @Test
+    void chunkedModeInjectsDeliveryProtocolWithoutEditingStoredPrompt() {
+        bot.setReplyMode(BotConfig.ReplyMode.CHUNKED);
+        when(llmService.chat(any(BotConfig.class), anyList(), anyList()))
+                .thenReturn(new BotDto.LLMResponse("第一句<break>第二句", 8, "m"));
+
+        loop.runLoop(task, envelope);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BotDto.ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
+        verify(llmService).chat(eq(bot), captor.capture(), anyList());
+        String system = captor.getValue().get(0).textContent();
+        assertTrue(system.contains("[CHAT DELIVERY MODE: NATURAL SEQUENTIAL BUBBLES]"));
+        assertTrue(system.contains("<break>"));
+        assertEquals("system prompt", contextBuilder.assembleSystemPrompt(envelope));
+    }
+
+    @Test
     void toolCallExecutesAndSecondLlmAnswerIsFinal() {
         when(llmService.chat(any(BotConfig.class), anyList(), anyList()))
                 .thenReturn(new BotDto.LLMResponse("", 5, "m",

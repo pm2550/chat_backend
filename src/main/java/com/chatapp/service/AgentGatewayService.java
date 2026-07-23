@@ -384,7 +384,7 @@ public class AgentGatewayService {
 
     String extractResult(String responseBody) throws IOException {
         if (responseBody == null || responseBody.isBlank()) {
-            return "任务已完成";
+            throw new IOException("Agent gateway returned an empty response");
         }
 
         JsonNode json;

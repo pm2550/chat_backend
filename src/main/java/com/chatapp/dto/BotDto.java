@@ -33,6 +33,8 @@ public class BotDto {
     private Boolean historyImageInspectionEnabled;
     private BotConfig.ReplyMode replyMode;
     private Double replyIntervalSeconds;
+    private ChatRoomBot.TriggerMode defaultTriggerMode;
+    private String defaultTriggerKeywords;
     private BotConfig.WorkflowMode workflowMode;
     private BotConfig.ImageGenerationProvider imageGenerationProvider;
     private Long imageProviderCredentialId;
@@ -107,6 +109,8 @@ public class BotDto {
         private Boolean historyImageInspectionEnabled;
         private BotConfig.ReplyMode replyMode;
         private Double replyIntervalSeconds;
+        private ChatRoomBot.TriggerMode defaultTriggerMode;
+        private String defaultTriggerKeywords;
         private BotConfig.WorkflowMode workflowMode;
         private BotConfig.ImageGenerationProvider imageGenerationProvider;
         private Long imageProviderCredentialId;
@@ -141,6 +145,8 @@ public class BotDto {
         private Boolean historyImageInspectionEnabled;
         private BotConfig.ReplyMode replyMode;
         private Double replyIntervalSeconds;
+        private ChatRoomBot.TriggerMode defaultTriggerMode;
+        private String defaultTriggerKeywords;
         private BotConfig.WorkflowMode workflowMode;
         private BotConfig.ImageGenerationProvider imageGenerationProvider;
         private Long imageProviderCredentialId;

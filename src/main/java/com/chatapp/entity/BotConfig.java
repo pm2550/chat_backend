@@ -93,6 +93,14 @@ public class BotConfig {
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "default_trigger_mode", nullable = false, length = 32)
+    private ChatRoomBot.TriggerMode defaultTriggerMode = ChatRoomBot.TriggerMode.MENTION;
+
+    @Column(name = "default_trigger_keywords", length = 500)
+    private String defaultTriggerKeywords;
+
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "workflow_mode", nullable = false, length = 32)
     private WorkflowMode workflowMode = WorkflowMode.SINGLE_PASS;
 

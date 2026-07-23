@@ -193,8 +193,9 @@ public class AgentWorkflowService {
                 result.terminationReason(),
                 result.iterations(),
                 result.toolCallsMade().size());
-        return result.finalContent() != null && !result.finalContent().isBlank()
-                ? result.finalContent()
-                : "任务已完成";
+        if (result.finalContent() == null || result.finalContent().isBlank()) {
+            throw new IllegalStateException("Agent returned an empty final response");
+        }
+        return result.finalContent();
     }
 }

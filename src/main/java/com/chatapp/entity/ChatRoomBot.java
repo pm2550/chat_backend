@@ -63,6 +63,8 @@ public class ChatRoomBot {
         MENTION,    // @机器人 触发
         KEYWORD,    // 关键词触发
         REGEX,      // 正则触发
+        MENTION_OR_KEYWORD, // @机器人或关键词触发
+        MENTION_OR_REGEX,   // @机器人或正则触发
         ALL         // 所有消息都触发
     }
 

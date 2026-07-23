@@ -35,7 +35,9 @@ public class AgentExecutionLoop {
         BotConfig bot = task.getBotConfig();
         List<Tool> availableTools = toolRegistry.listToolsForBot(bot);
         List<BotDto.ChatMessage> messages = new ArrayList<>();
-        messages.add(new BotDto.ChatMessage("system", agentContextBuilder.assembleSystemPrompt(envelope)));
+        messages.add(new BotDto.ChatMessage(
+                "system",
+                BotReplyPromptPolicy.augment(bot, agentContextBuilder.assembleSystemPrompt(envelope))));
         messages.add(BotDto.ChatMessage.userWithImages(task.getPrompt(), task.getImageAttachments()));
 
         ToolContext toolContext = new ToolContext(
@@ -73,8 +75,20 @@ public class AgentExecutionLoop {
                     iteration, task.getId(), requestedTools.size(), cumulativeTokens);
 
             if (requestedTools.isEmpty()) {
+                if (lastAssistantContent.isBlank()) {
+                    if (iteration < budget.maxIterations()) {
+                        messages.add(new BotDto.ChatMessage(
+                                "system",
+                                "Your previous response was empty. Reply to the user's actual message now. "
+                                        + "Do not report task status and do not say 任务已完成."));
+                        log.warn("Agent loop got an empty final response; retrying taskId={} iteration={}",
+                                task.getId(), iteration);
+                        continue;
+                    }
+                    throw new IllegalStateException("LLM returned an empty final answer");
+                }
                 return new AgentLoopResult(
-                        lastAssistantContent.isBlank() ? "任务已完成" : lastAssistantContent,
+                        lastAssistantContent,
                         iteration,
                         List.copyOf(toolCalls),
                         TerminationReason.FINAL_ANSWER,

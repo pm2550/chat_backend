@@ -4,7 +4,10 @@ import com.chatapp.config.AgentGatewayProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AgentGatewayServiceTest {
 
@@ -21,7 +24,9 @@ class AgentGatewayServiceTest {
                 "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"openclaw reply\"}}]}"))
                 .isEqualTo("openclaw reply");
         assertThat(service.extractResult("plain result")).isEqualTo("plain result");
-        assertThat(service.extractResult("")).isEqualTo("任务已完成");
+        assertThatThrownBy(() -> service.extractResult(""))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("empty response");
     }
 
     @Test

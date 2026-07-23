@@ -131,6 +131,12 @@ public class BotService {
                 ? request.getReplyMode()
                 : BotConfig.ReplyMode.SINGLE);
         bot.setReplyIntervalSeconds(normalizeReplyInterval(request.getReplyIntervalSeconds()));
+        ChatRoomBot.TriggerMode defaultTriggerMode = request.getDefaultTriggerMode() != null
+                ? request.getDefaultTriggerMode()
+                : ChatRoomBot.TriggerMode.MENTION;
+        validateTriggerConfig(defaultTriggerMode, request.getDefaultTriggerKeywords());
+        bot.setDefaultTriggerMode(defaultTriggerMode);
+        bot.setDefaultTriggerKeywords(normalizeTriggerValue(request.getDefaultTriggerKeywords()));
         bot.setWorkflowMode(request.getWorkflowMode() != null
                 ? request.getWorkflowMode()
                 : BotConfig.WorkflowMode.SINGLE_PASS);
@@ -187,6 +193,17 @@ public class BotService {
         if (request.getReplyMode() != null) bot.setReplyMode(request.getReplyMode());
         if (request.getReplyIntervalSeconds() != null) {
             bot.setReplyIntervalSeconds(normalizeReplyInterval(request.getReplyIntervalSeconds()));
+        }
+        if (request.getDefaultTriggerMode() != null || request.getDefaultTriggerKeywords() != null) {
+            ChatRoomBot.TriggerMode triggerMode = request.getDefaultTriggerMode() != null
+                    ? request.getDefaultTriggerMode()
+                    : bot.getDefaultTriggerMode();
+            String triggerValue = request.getDefaultTriggerKeywords() != null
+                    ? request.getDefaultTriggerKeywords()
+                    : bot.getDefaultTriggerKeywords();
+            validateTriggerConfig(triggerMode, triggerValue);
+            bot.setDefaultTriggerMode(triggerMode);
+            bot.setDefaultTriggerKeywords(normalizeTriggerValue(triggerValue));
         }
         if (request.getWorkflowMode() != null) bot.setWorkflowMode(request.getWorkflowMode());
         if (request.getImageInvocationMode() != null) {
@@ -330,9 +347,17 @@ public class BotService {
         ChatRoomBot crb = new ChatRoomBot();
         crb.setChatRoom(chatRoom);
         crb.setBotConfig(bot);
-        crb.setTriggerMode(request != null && request.getTriggerMode() != null ?
-                request.getTriggerMode() : ChatRoomBot.TriggerMode.MENTION);
-        crb.setTriggerKeywords(request != null ? request.getTriggerKeywords() : null);
+        ChatRoomBot.TriggerMode triggerMode = request != null && request.getTriggerMode() != null
+                ? request.getTriggerMode()
+                : bot.getDefaultTriggerMode() != null
+                    ? bot.getDefaultTriggerMode()
+                    : ChatRoomBot.TriggerMode.MENTION;
+        String triggerValue = request != null && request.getTriggerKeywords() != null
+                ? request.getTriggerKeywords()
+                : bot.getDefaultTriggerKeywords();
+        validateTriggerConfig(triggerMode, triggerValue);
+        crb.setTriggerMode(triggerMode);
+        crb.setTriggerKeywords(normalizeTriggerValue(triggerValue));
         crb.setRoomNickname(request != null ? request.getRoomNickname() : null);
         crb.setRoomPromptSuffix(request != null ? request.getRoomPromptSuffix() : null);
         crb.setEnabledInRoom(request == null || request.getEnabledInRoom() == null
@@ -355,8 +380,17 @@ public class BotService {
         ChatRoomBot crb = chatRoomBotRepository.findByChatRoomIdAndBotConfigId(chatRoomId, botId)
                 .orElseThrow(() -> new RuntimeException("机器人未加入该聊天室"));
 
-        if (request.getTriggerMode() != null) crb.setTriggerMode(request.getTriggerMode());
-        if (request.getTriggerKeywords() != null) crb.setTriggerKeywords(request.getTriggerKeywords());
+        if (request.getTriggerMode() != null || request.getTriggerKeywords() != null) {
+            ChatRoomBot.TriggerMode triggerMode = request.getTriggerMode() != null
+                    ? request.getTriggerMode()
+                    : crb.getTriggerMode();
+            String triggerValue = request.getTriggerKeywords() != null
+                    ? request.getTriggerKeywords()
+                    : crb.getTriggerKeywords();
+            validateTriggerConfig(triggerMode, triggerValue);
+            crb.setTriggerMode(triggerMode);
+            crb.setTriggerKeywords(normalizeTriggerValue(triggerValue));
+        }
         if (request.getRoomNickname() != null) crb.setRoomNickname(request.getRoomNickname());
         if (request.getRoomPromptSuffix() != null) crb.setRoomPromptSuffix(request.getRoomPromptSuffix());
         if (request.getEnabledInRoom() != null) crb.setEnabledInRoom(request.getEnabledInRoom());
@@ -418,6 +452,10 @@ public class BotService {
                         || safeContent.contains("@" + crb.getBotConfig().getBotName());
                 case KEYWORD -> keywordTriggerMatches(crb.getTriggerKeywords(), safeContent);
                 case REGEX -> regexTriggerMatches(crb, safeContent);
+                case MENTION_OR_KEYWORD -> mentionTriggerMatches(crb, safeContent)
+                        || keywordTriggerMatches(crb.getTriggerKeywords(), safeContent);
+                case MENTION_OR_REGEX -> mentionTriggerMatches(crb, safeContent)
+                        || regexTriggerMatches(crb, safeContent);
             };
 
             if (shouldRespond) {
@@ -533,6 +571,11 @@ public class BotService {
         return false;
     }
 
+    private boolean mentionTriggerMatches(ChatRoomBot crb, String safeContent) {
+        return safeContent.contains("@" + roomDisplayName(crb))
+                || safeContent.contains("@" + crb.getBotConfig().getBotName());
+    }
+
     private boolean regexTriggerMatches(ChatRoomBot crb, String safeContent) {
         String pattern = crb.getTriggerKeywords();
         if (pattern == null || pattern.isBlank()) {
@@ -549,6 +592,30 @@ public class BotService {
                     e.getMessage());
             return false;
         }
+    }
+
+    private void validateTriggerConfig(ChatRoomBot.TriggerMode mode, String value) {
+        ChatRoomBot.TriggerMode effectiveMode = mode != null ? mode : ChatRoomBot.TriggerMode.MENTION;
+        boolean needsValue = effectiveMode == ChatRoomBot.TriggerMode.KEYWORD
+                || effectiveMode == ChatRoomBot.TriggerMode.REGEX
+                || effectiveMode == ChatRoomBot.TriggerMode.MENTION_OR_KEYWORD
+                || effectiveMode == ChatRoomBot.TriggerMode.MENTION_OR_REGEX;
+        if (needsValue && (value == null || value.isBlank())) {
+            throw new IllegalArgumentException("关键词或正则触发需要填写匹配内容");
+        }
+        if ((effectiveMode == ChatRoomBot.TriggerMode.REGEX
+                || effectiveMode == ChatRoomBot.TriggerMode.MENTION_OR_REGEX)
+                && value != null && !value.isBlank()) {
+            try {
+                Pattern.compile(value, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+            } catch (Exception e) {
+                throw new IllegalArgumentException("正则表达式无效: " + e.getMessage());
+            }
+        }
+    }
+
+    private String normalizeTriggerValue(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private boolean isKiraraTwoPass(BotConfig config) {
@@ -832,9 +899,7 @@ public class BotService {
             AgentContextBuilder.AgentContextEnvelope envelope = agentContextBuilder.buildContext(task);
             AgentExecutionLoop.AgentLoopResult result =
                     agentExecutionLoopProvider.getObject().runLoop(task, envelope);
-            String finalContent = result.finalContent() != null && !result.finalContent().isBlank()
-                    ? result.finalContent()
-                    : "任务已完成";
+            String finalContent = requireBotReplyContent(result.finalContent(), "agent-loop-final");
             task.setResult(finalContent);
             task.setStatus(AgentTask.Status.SUCCEEDED);
             task.setCompletedAt(LocalDateTime.now());
@@ -942,7 +1007,7 @@ public class BotService {
                     .append(crb.getRoomPromptSuffix().trim())
                     .append("\n");
         }
-        return builder.toString();
+        return BotReplyPromptPolicy.augment(config, builder.toString());
     }
 
     private AgentVisionAttachmentService.ImageContext selectVisionImage(
@@ -1118,6 +1183,10 @@ public class BotService {
                 ? entity.getReplyMode()
                 : BotConfig.ReplyMode.SINGLE);
         dto.setReplyIntervalSeconds(normalizeReplyInterval(entity.getReplyIntervalSeconds()));
+        dto.setDefaultTriggerMode(entity.getDefaultTriggerMode() != null
+                ? entity.getDefaultTriggerMode()
+                : ChatRoomBot.TriggerMode.MENTION);
+        dto.setDefaultTriggerKeywords(entity.getDefaultTriggerKeywords());
         dto.setWorkflowMode(entity.getWorkflowMode() != null
                 ? entity.getWorkflowMode()
                 : BotConfig.WorkflowMode.SINGLE_PASS);
