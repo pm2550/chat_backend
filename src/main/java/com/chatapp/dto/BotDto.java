@@ -27,6 +27,7 @@ public class BotDto {
     private String systemPrompt;
     private Double temperature;
     private Integer maxTokens;
+    private BotConfig.ReasoningEffort reasoningEffort;
     private Integer maxHistoryMessages;
     private Boolean includeRoomMetadata;
     private Boolean visionInputEnabled;
@@ -103,6 +104,7 @@ public class BotDto {
         private String systemPrompt;
         private Double temperature;
         private Integer maxTokens;
+        private BotConfig.ReasoningEffort reasoningEffort;
         private Integer maxHistoryMessages;
         private Boolean includeRoomMetadata;
         private Boolean visionInputEnabled;
@@ -139,6 +141,7 @@ public class BotDto {
         private String systemPrompt;
         private Double temperature;
         private Integer maxTokens;
+        private BotConfig.ReasoningEffort reasoningEffort;
         private Integer maxHistoryMessages;
         private Boolean includeRoomMetadata;
         private Boolean visionInputEnabled;

@@ -31,6 +31,7 @@ import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
@@ -122,6 +123,9 @@ public class BotService {
         bot.setSystemPrompt(request.getSystemPrompt());
         bot.setTemperature(request.getTemperature() != null ? request.getTemperature() : 0.7);
         bot.setMaxTokens(request.getMaxTokens() != null ? request.getMaxTokens() : 2048);
+        bot.setReasoningEffort(request.getReasoningEffort() != null
+                ? request.getReasoningEffort()
+                : BotConfig.ReasoningEffort.AUTO);
         bot.setMaxHistoryMessages(request.getMaxHistoryMessages() != null ? request.getMaxHistoryMessages() : 20);
         bot.setIncludeRoomMetadata(request.getIncludeRoomMetadata() == null || request.getIncludeRoomMetadata());
         bot.setVisionInputEnabled(request.getVisionInputEnabled() == null || request.getVisionInputEnabled());
@@ -136,7 +140,9 @@ public class BotService {
                 : ChatRoomBot.TriggerMode.MENTION;
         validateTriggerConfig(defaultTriggerMode, request.getDefaultTriggerKeywords());
         bot.setDefaultTriggerMode(defaultTriggerMode);
-        bot.setDefaultTriggerKeywords(normalizeTriggerValue(request.getDefaultTriggerKeywords()));
+        bot.setDefaultTriggerKeywords(normalizeTriggerValue(
+                defaultTriggerMode,
+                request.getDefaultTriggerKeywords()));
         bot.setWorkflowMode(request.getWorkflowMode() != null
                 ? request.getWorkflowMode()
                 : BotConfig.WorkflowMode.SINGLE_PASS);
@@ -158,6 +164,7 @@ public class BotService {
                 : BotConfig.AccessPolicy.PRIVATE);
         applyEnabledTools(bot, request.getEnabledTools());
         bot.setCreatedBy(creator);
+        validateModelGenerationConfig(bot);
 
         bot = botConfigRepository.save(bot);
         replaceAllowedUsers(bot, request.getAllowedUserIds(), request.getAllowedUsernames());
@@ -184,6 +191,7 @@ public class BotService {
         if (request.getSystemPrompt() != null) bot.setSystemPrompt(request.getSystemPrompt());
         if (request.getTemperature() != null) bot.setTemperature(request.getTemperature());
         if (request.getMaxTokens() != null) bot.setMaxTokens(request.getMaxTokens());
+        if (request.getReasoningEffort() != null) bot.setReasoningEffort(request.getReasoningEffort());
         if (request.getMaxHistoryMessages() != null) bot.setMaxHistoryMessages(request.getMaxHistoryMessages());
         if (request.getIncludeRoomMetadata() != null) bot.setIncludeRoomMetadata(request.getIncludeRoomMetadata());
         if (request.getVisionInputEnabled() != null) bot.setVisionInputEnabled(request.getVisionInputEnabled());
@@ -203,7 +211,7 @@ public class BotService {
                     : bot.getDefaultTriggerKeywords();
             validateTriggerConfig(triggerMode, triggerValue);
             bot.setDefaultTriggerMode(triggerMode);
-            bot.setDefaultTriggerKeywords(normalizeTriggerValue(triggerValue));
+            bot.setDefaultTriggerKeywords(normalizeTriggerValue(triggerMode, triggerValue));
         }
         if (request.getWorkflowMode() != null) bot.setWorkflowMode(request.getWorkflowMode());
         if (request.getImageInvocationMode() != null) {
@@ -229,6 +237,7 @@ public class BotService {
         if (request.getIsActive() != null) bot.setIsActive(request.getIsActive());
         if (request.getEnabledTools() != null) applyEnabledTools(bot, request.getEnabledTools());
         if (request.getAccessPolicy() != null) bot.setAccessPolicy(request.getAccessPolicy());
+        validateModelGenerationConfig(bot);
 
         bot = botConfigRepository.save(bot);
         if (request.getAllowedUserIds() != null || request.getAllowedUsernames() != null) {
@@ -357,7 +366,7 @@ public class BotService {
                 : bot.getDefaultTriggerKeywords();
         validateTriggerConfig(triggerMode, triggerValue);
         crb.setTriggerMode(triggerMode);
-        crb.setTriggerKeywords(normalizeTriggerValue(triggerValue));
+        crb.setTriggerKeywords(normalizeTriggerValue(triggerMode, triggerValue));
         crb.setRoomNickname(request != null ? request.getRoomNickname() : null);
         crb.setRoomPromptSuffix(request != null ? request.getRoomPromptSuffix() : null);
         crb.setEnabledInRoom(request == null || request.getEnabledInRoom() == null
@@ -389,7 +398,7 @@ public class BotService {
                     : crb.getTriggerKeywords();
             validateTriggerConfig(triggerMode, triggerValue);
             crb.setTriggerMode(triggerMode);
-            crb.setTriggerKeywords(normalizeTriggerValue(triggerValue));
+            crb.setTriggerKeywords(normalizeTriggerValue(triggerMode, triggerValue));
         }
         if (request.getRoomNickname() != null) crb.setRoomNickname(request.getRoomNickname());
         if (request.getRoomPromptSuffix() != null) crb.setRoomPromptSuffix(request.getRoomPromptSuffix());
@@ -561,10 +570,12 @@ public class BotService {
         if (rawKeywords == null || rawKeywords.isBlank()) {
             return false;
         }
-        String[] keywords = rawKeywords.split(",");
+        String normalizedContent = safeContent.toLowerCase(Locale.ROOT);
+        String[] keywords = rawKeywords.split("[,，\\n\\r]+");
         for (String kw : keywords) {
             String keyword = kw.trim();
-            if (!keyword.isBlank() && safeContent.contains(keyword)) {
+            if (!keyword.isBlank()
+                    && normalizedContent.contains(keyword.toLowerCase(Locale.ROOT))) {
                 return true;
             }
         }
@@ -614,8 +625,56 @@ public class BotService {
         }
     }
 
-    private String normalizeTriggerValue(String value) {
-        return value == null || value.isBlank() ? null : value.trim();
+    private String normalizeTriggerValue(ChatRoomBot.TriggerMode mode, String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        if (mode != ChatRoomBot.TriggerMode.KEYWORD
+                && mode != ChatRoomBot.TriggerMode.MENTION_OR_KEYWORD) {
+            return value.trim();
+        }
+        LinkedHashSet<String> keywords = Arrays.stream(value.split("[,，\\n\\r]+"))
+                .map(String::trim)
+                .filter(keyword -> !keyword.isBlank())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return keywords.isEmpty() ? null : String.join(",", keywords);
+    }
+
+    private void validateModelGenerationConfig(BotConfig bot) {
+        int maxTokens = bot.getMaxTokens() != null ? bot.getMaxTokens() : 2048;
+        if (maxTokens < 1 || maxTokens > 32768) {
+            throw new IllegalArgumentException("Max Tokens 必须在 1 到 32768 之间");
+        }
+        if (bot.getLlmProvider() != BotConfig.LLMProvider.OLLAMA
+                || bot.getModelName() == null
+                || !bot.getModelName().trim().toLowerCase(Locale.ROOT).startsWith("kimi-k2")) {
+            return;
+        }
+        BotConfig.ReasoningEffort effort = bot.getReasoningEffort() != null
+                ? bot.getReasoningEffort()
+                : BotConfig.ReasoningEffort.AUTO;
+        int minimum = switch (effort) {
+            case NONE -> 256;
+            case LOW -> 2048;
+            case AUTO, MEDIUM -> 4096;
+            case HIGH -> 8192;
+        };
+        if (maxTokens < minimum) {
+            throw new IllegalArgumentException(
+                    "Kimi " + reasoningEffortLabel(effort)
+                            + "模式至少需要 " + minimum
+                            + " Max Tokens；请提高上限或选择“关闭思考”");
+        }
+    }
+
+    private String reasoningEffortLabel(BotConfig.ReasoningEffort effort) {
+        return switch (effort) {
+            case AUTO -> "自动思考";
+            case NONE -> "关闭思考";
+            case LOW -> "低思考";
+            case MEDIUM -> "中思考";
+            case HIGH -> "高思考";
+        };
     }
 
     private boolean isKiraraTwoPass(BotConfig config) {
@@ -833,6 +892,26 @@ public class BotService {
     private String botFailureMessage(Exception e) {
         String message = e != null && e.getMessage() != null ? e.getMessage() : "";
         String lower = message.toLowerCase();
+        if (e instanceof AgentExecutionLoop.EmptyAgentResponseException
+                || lower.contains("empty final answer")) {
+            return "⚠️ 模型这次没有返回正文，可能是思考过程用完了 Max Tokens。"
+                    + "请在 Bot 设置中关闭/降低思考，或提高 Max Tokens 后重试。";
+        }
+        if (e instanceof AgentExecutionLoop.AgentLoopBudgetExceededException budgetError) {
+            return switch (budgetError.reason()) {
+                case TOKEN_BUDGET ->
+                        "⚠️ 本次对话达到 Agent Token 预算上限。请缩短上下文、提高 Agent Token 预算，或降低模型思考强度后重试。";
+                case ITERATION_BUDGET ->
+                        "⚠️ 本次对话达到 Agent 最大执行轮数。请简化任务，或提高 Agent 最大轮数后重试。";
+                case WALLCLOCK_BUDGET ->
+                        "⚠️ 本次对话达到 Agent 最长执行时间。请稍后重试，或提高 Agent 超时时间。";
+                case FINAL_ANSWER ->
+                        "⚠️ Agent 返回了异常的终止状态，请重试。";
+            };
+        }
+        if (lower.contains("agent loop budget exhausted")) {
+            return "⚠️ 本次对话达到 Agent 执行预算上限，请调整 Agent 预算后重试。";
+        }
         if (lower.contains("safety_check_type_csam")) {
             return "⚠️ 请求在调用画图工具前被内容安全检查拒绝：提示词同时涉及未成年人或年龄模糊描述与性内容。"
                     + "请移除 child、loli、teen、young-looking 等词，或明确改为成年角色；这不是 API key 或 NovelAI 故障。";
@@ -1175,6 +1254,9 @@ public class BotService {
         dto.setSystemPrompt(entity.getSystemPrompt());
         dto.setTemperature(entity.getTemperature());
         dto.setMaxTokens(entity.getMaxTokens());
+        dto.setReasoningEffort(entity.getReasoningEffort() != null
+                ? entity.getReasoningEffort()
+                : BotConfig.ReasoningEffort.AUTO);
         dto.setMaxHistoryMessages(entity.getMaxHistoryMessages() != null ? entity.getMaxHistoryMessages() : 20);
         dto.setIncludeRoomMetadata(entity.getIncludeRoomMetadata() == null || entity.getIncludeRoomMetadata());
         dto.setVisionInputEnabled(!Boolean.FALSE.equals(entity.getVisionInputEnabled()));

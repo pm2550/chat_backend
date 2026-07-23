@@ -191,6 +191,10 @@ public class LLMService {
                 requestBody.put("temperature", config.getTemperature() != null ? config.getTemperature() : 0.7);
                 requestBody.put("max_tokens", maxTokens);
             }
+            String reasoningEffort = ollamaKimiReasoningEffort(config, model);
+            if (reasoningEffort != null) {
+                requestBody.put("reasoning_effort", reasoningEffort);
+            }
 
             ArrayNode messagesArray = requestBody.putArray("messages");
             for (BotDto.ChatMessage msg : messages) {
@@ -268,6 +272,20 @@ public class LLMService {
         String normalized = model.trim().toLowerCase();
         return normalized.startsWith("gpt-5")
                 || normalized.matches("^o[134](?:[-.].*)?$");
+    }
+
+    private String ollamaKimiReasoningEffort(BotConfig config, String model) {
+        if (config.getLlmProvider() != BotConfig.LLMProvider.OLLAMA
+                || model == null
+                || !model.trim().toLowerCase().startsWith("kimi-k2")) {
+            return null;
+        }
+        BotConfig.ReasoningEffort effort = config.getReasoningEffort() != null
+                ? config.getReasoningEffort()
+                : BotConfig.ReasoningEffort.AUTO;
+        return effort == BotConfig.ReasoningEffort.AUTO
+                ? null
+                : effort.name().toLowerCase();
     }
 
     private void addOllamaImages(ObjectNode msgNode, BotDto.ChatMessage msg) {

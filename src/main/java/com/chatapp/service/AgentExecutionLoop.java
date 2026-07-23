@@ -25,6 +25,8 @@ import java.util.List;
 @RequiredArgsConstructor
 @Slf4j
 public class AgentExecutionLoop {
+    private static final int MAX_EMPTY_FINAL_RETRIES = 1;
+
     private final LLMService llmService;
     private final AgentToolRegistry toolRegistry;
     private final AgentToolDispatcher toolDispatcher;
@@ -52,11 +54,12 @@ public class AgentExecutionLoop {
         Instant startedAt = Instant.now();
         int cumulativeTokens = estimateMessages(messages);
         String lastAssistantContent = "";
+        int emptyFinalRetries = 0;
 
         for (int iteration = 1; iteration <= budget.maxIterations(); iteration++) {
             BudgetHit beforeCallHit = budget.check(iteration, startedAt, cumulativeTokens);
             if (beforeCallHit != null) {
-                return exhausted(lastAssistantContent, iteration - 1, toolCalls, cumulativeTokens, beforeCallHit, startedAt);
+                throw budgetExceeded(iteration - 1, cumulativeTokens, beforeCallHit, startedAt);
             }
 
             log.info("Agent loop iteration={} taskId={} tools={} cumulativeTokens={}",
@@ -76,7 +79,9 @@ public class AgentExecutionLoop {
 
             if (requestedTools.isEmpty()) {
                 if (lastAssistantContent.isBlank()) {
-                    if (iteration < budget.maxIterations()) {
+                    if (emptyFinalRetries < MAX_EMPTY_FINAL_RETRIES
+                            && iteration < budget.maxIterations()) {
+                        emptyFinalRetries++;
                         messages.add(new BotDto.ChatMessage(
                                 "system",
                                 "Your previous response was empty. Reply to the user's actual message now. "
@@ -85,7 +90,13 @@ public class AgentExecutionLoop {
                                 task.getId(), iteration);
                         continue;
                     }
-                    throw new IllegalStateException("LLM returned an empty final answer");
+                    throw new EmptyAgentResponseException(
+                            "LLM returned an empty final answer after "
+                                    + emptyFinalRetries + " retry");
+                }
+                BudgetHit afterResponseHit = budget.check(iteration, startedAt, cumulativeTokens);
+                if (afterResponseHit != null) {
+                    throw budgetExceeded(iteration, cumulativeTokens, afterResponseHit, startedAt);
                 }
                 return new AgentLoopResult(
                         lastAssistantContent,
@@ -125,11 +136,15 @@ public class AgentExecutionLoop {
 
             BudgetHit afterToolsHit = budget.check(iteration + 1, startedAt, cumulativeTokens);
             if (afterToolsHit != null) {
-                return exhausted(lastAssistantContent, iteration, toolCalls, cumulativeTokens, afterToolsHit, startedAt);
+                throw budgetExceeded(iteration, cumulativeTokens, afterToolsHit, startedAt);
             }
         }
 
-        return exhausted(lastAssistantContent, budget.maxIterations(), toolCalls, cumulativeTokens, BudgetHit.ITERATIONS, startedAt);
+        throw budgetExceeded(
+                budget.maxIterations(),
+                cumulativeTokens,
+                BudgetHit.ITERATIONS,
+                startedAt);
     }
 
     private String executeTool(BotDto.ToolCall requestedTool,
@@ -233,25 +248,20 @@ public class AgentExecutionLoop {
         return resultJson;
     }
 
-    private AgentLoopResult exhausted(String content,
-                                      int iterations,
-                                      List<ToolCallRecord> toolCalls,
-                                      int cumulativeTokens,
-                                      BudgetHit budgetHit,
-                                      Instant startedAt) {
-        String base = content != null && !content.isBlank() ? content : "任务已停止";
-        String finalContent = base + "\n\n(stopped: budget exhausted - " + budgetHit.name().toLowerCase() + ")";
+    private AgentLoopBudgetExceededException budgetExceeded(
+            int iterations,
+            int cumulativeTokens,
+            BudgetHit budgetHit,
+            Instant startedAt) {
         log.warn("Agent loop stopped by budget cap: reason={} iterations={} cumulativeTokens={}",
                 budgetHit, iterations, cumulativeTokens);
-        return new AgentLoopResult(
-                finalContent,
-                iterations,
-                List.copyOf(toolCalls),
+        return new AgentLoopBudgetExceededException(
                 switch (budgetHit) {
                     case ITERATIONS -> TerminationReason.ITERATION_BUDGET;
                     case WALLCLOCK -> TerminationReason.WALLCLOCK_BUDGET;
                     case TOKENS -> TerminationReason.TOKEN_BUDGET;
                 },
+                iterations,
                 new BudgetSnapshot(cumulativeTokens, elapsedMs(startedAt)));
     }
 
@@ -323,5 +333,39 @@ public class AgentExecutionLoop {
         ITERATION_BUDGET,
         WALLCLOCK_BUDGET,
         TOKEN_BUDGET
+    }
+
+    public static final class AgentLoopBudgetExceededException extends RuntimeException {
+        private final TerminationReason reason;
+        private final int iterations;
+        private final BudgetSnapshot budgetUsage;
+
+        private AgentLoopBudgetExceededException(
+                TerminationReason reason,
+                int iterations,
+                BudgetSnapshot budgetUsage) {
+            super("Agent loop budget exhausted: " + reason);
+            this.reason = reason;
+            this.iterations = iterations;
+            this.budgetUsage = budgetUsage;
+        }
+
+        public TerminationReason reason() {
+            return reason;
+        }
+
+        public int iterations() {
+            return iterations;
+        }
+
+        public BudgetSnapshot budgetUsage() {
+            return budgetUsage;
+        }
+    }
+
+    public static final class EmptyAgentResponseException extends RuntimeException {
+        private EmptyAgentResponseException(String message) {
+            super(message);
+        }
     }
 }

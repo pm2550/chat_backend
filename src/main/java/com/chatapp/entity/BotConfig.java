@@ -85,6 +85,11 @@ public class BotConfig {
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "reasoning_effort", nullable = false, length = 16)
+    private ReasoningEffort reasoningEffort = ReasoningEffort.AUTO;
+
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "reply_mode", nullable = false, length = 32)
     private ReplyMode replyMode = ReplyMode.SINGLE;
 
@@ -211,6 +216,16 @@ public class BotConfig {
         SINGLE,
         /** Human-like behavior: split a plain text answer into sentence bubbles. */
         CHUNKED
+    }
+
+    public enum ReasoningEffort {
+        /** Keep the provider/model default. */
+        AUTO,
+        /** Disable hidden reasoning so the output budget is reserved for chat text. */
+        NONE,
+        LOW,
+        MEDIUM,
+        HIGH
     }
 
     public enum WorkflowMode {

@@ -20,6 +20,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -119,6 +120,21 @@ class AgentExecutionLoopTest {
     }
 
     @Test
+    void secondEmptyFinalAnswerFailsWithoutLeakingTaskStatus() {
+        when(llmService.chat(any(BotConfig.class), anyList(), anyList()))
+                .thenReturn(new BotDto.LLMResponse("", 0, "m"));
+
+        AgentExecutionLoop.EmptyAgentResponseException error = assertThrows(
+                AgentExecutionLoop.EmptyAgentResponseException.class,
+                () -> loop.runLoop(task, envelope));
+
+        assertTrue(error.getMessage().contains("empty final answer"));
+        assertFalse(error.getMessage().contains("任务已停止"));
+        assertFalse(error.getMessage().contains("stopped: budget"));
+        verify(llmService, times(2)).chat(any(BotConfig.class), anyList(), anyList());
+    }
+
+    @Test
     void chunkedModeInjectsDeliveryProtocolWithoutEditingStoredPrompt() {
         bot.setReplyMode(BotConfig.ReplyMode.CHUNKED);
         when(llmService.chat(any(BotConfig.class), anyList(), anyList()))
@@ -157,10 +173,13 @@ class AgentExecutionLoopTest {
                 .thenReturn(new BotDto.LLMResponse("", 5, "m",
                         List.of(new BotDto.ToolCall("call-1", "echo", "{\"value\":\"again\"}"))));
 
-        AgentExecutionLoop.AgentLoopResult result = loop.runLoop(task, envelope);
+        AgentExecutionLoop.AgentLoopBudgetExceededException error = assertThrows(
+                AgentExecutionLoop.AgentLoopBudgetExceededException.class,
+                () -> loop.runLoop(task, envelope));
 
-        assertTrue(result.finalContent().contains("stopped: budget exhausted"));
-        assertEquals(AgentExecutionLoop.TerminationReason.ITERATION_BUDGET, result.terminationReason());
+        assertEquals(AgentExecutionLoop.TerminationReason.ITERATION_BUDGET, error.reason());
+        assertFalse(error.getMessage().contains("任务已停止"));
+        assertFalse(error.getMessage().contains("stopped: budget"));
         verify(llmService, times(2)).chat(any(BotConfig.class), anyList(), anyList());
     }
 
@@ -170,10 +189,13 @@ class AgentExecutionLoopTest {
         when(llmService.chat(any(BotConfig.class), anyList(), anyList()))
                 .thenReturn(new BotDto.LLMResponse("this is too long for the budget", 100, "m"));
 
-        AgentExecutionLoop.AgentLoopResult result = loop.runLoop(task, envelope);
+        AgentExecutionLoop.AgentLoopBudgetExceededException error = assertThrows(
+                AgentExecutionLoop.AgentLoopBudgetExceededException.class,
+                () -> loop.runLoop(task, envelope));
 
-        assertEquals(AgentExecutionLoop.TerminationReason.TOKEN_BUDGET, result.terminationReason());
-        assertTrue(result.finalContent().contains("stopped: budget exhausted"));
+        assertEquals(AgentExecutionLoop.TerminationReason.TOKEN_BUDGET, error.reason());
+        assertFalse(error.getMessage().contains("任务已停止"));
+        assertFalse(error.getMessage().contains("stopped: budget"));
     }
 
     @Test

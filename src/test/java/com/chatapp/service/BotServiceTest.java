@@ -156,6 +156,8 @@ class BotServiceTest {
         verify(botConfigRepository).save(captor.capture());
         assertEquals(0.7, captor.getValue().getTemperature()); // default
         assertEquals(2048, captor.getValue().getMaxTokens()); // default
+        assertEquals(BotConfig.ReasoningEffort.AUTO,
+                captor.getValue().getReasoningEffort());
         assertEquals(BotConfig.WorkflowMode.SINGLE_PASS, captor.getValue().getWorkflowMode());
         assertEquals(BotConfig.ImageInvocationMode.AGENT,
                 captor.getValue().getImageInvocationMode());
@@ -163,6 +165,48 @@ class BotServiceTest {
         assertEquals(2.0, dto.getReplyIntervalSeconds());
         assertNull(captor.getValue().getApiKeyEncrypted());
         assertEquals(credential, captor.getValue().getProviderCredential());
+    }
+
+    @Test
+    @DisplayName("createBot rejects Kimi thinking when maxTokens is too small")
+    void create_rejects_kimi_reasoning_with_small_budget() {
+        BotDto.CreateRequest req = new BotDto.CreateRequest();
+        req.setBotName("Kimi Bot");
+        req.setLlmProvider(BotConfig.LLMProvider.OLLAMA);
+        req.setModelName("kimi-k2.6");
+        req.setMaxTokens(1200);
+        req.setReasoningEffort(BotConfig.ReasoningEffort.AUTO);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.createBot(1L, req));
+
+        assertTrue(error.getMessage().contains("至少需要 4096"));
+        assertTrue(error.getMessage().contains("关闭思考"));
+        verify(botConfigRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("createBot accepts Kimi with reasoning disabled at 1200 tokens")
+    void create_accepts_kimi_without_reasoning_at_small_budget() {
+        BotDto.CreateRequest req = new BotDto.CreateRequest();
+        req.setBotName("Kimi Chat");
+        req.setLlmProvider(BotConfig.LLMProvider.OLLAMA);
+        req.setModelName("kimi-k2.6");
+        req.setMaxTokens(1200);
+        req.setReasoningEffort(BotConfig.ReasoningEffort.NONE);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+        when(botConfigRepository.save(any(BotConfig.class))).thenAnswer(invocation -> {
+            BotConfig saved = invocation.getArgument(0);
+            saved.setId(12L);
+            return saved;
+        });
+
+        BotDto dto = service.createBot(1L, req);
+
+        assertEquals(BotConfig.ReasoningEffort.NONE, dto.getReasoningEffort());
+        assertEquals(1200, dto.getMaxTokens());
     }
 
     @Test
@@ -652,6 +696,25 @@ class BotServiceTest {
         service.processMessageForBots(100L, "@GPT-Helper 你好", 1L);
 
         verify(llmService, times(2)).chat(any(), any());
+    }
+
+    @Test
+    @DisplayName("processMessageForBots natural keyword mode accepts multiple human-readable terms")
+    void process_mention_or_natural_keywords_trigger() {
+        ChatRoomBot crb = new ChatRoomBot();
+        crb.setBotConfig(bot);
+        crb.setTriggerMode(ChatRoomBot.TriggerMode.MENTION_OR_KEYWORD);
+        crb.setTriggerKeywords("/chat,找一下，如何评价\n还记得");
+        when(chatRoomBotRepository.findActiveBotsWithConfig(100L)).thenReturn(List.of(crb));
+        when(llmService.chat(any(), any())).thenReturn(new BotDto.LLMResponse("ack", 1, "m"));
+        when(chatRoomRepository.findById(100L)).thenReturn(Optional.of(room));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
+
+        service.processMessageForBots(100L, "你如何评价这件事", 1L);
+        service.processMessageForBots(100L, "还记得昨天吗", 1L);
+        service.processMessageForBots(100L, "@GPT-Helper 在吗", 1L);
+
+        verify(llmService, times(3)).chat(any(), any());
     }
 
     @Test

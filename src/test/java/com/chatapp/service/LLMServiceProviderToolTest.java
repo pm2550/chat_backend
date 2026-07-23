@@ -128,6 +128,7 @@ class LLMServiceProviderToolTest {
 
             BotConfig bot = new BotConfig();
             bot.setLlmProvider(BotConfig.LLMProvider.OLLAMA);
+            bot.setReasoningEffort(BotConfig.ReasoningEffort.NONE);
             BotDto.LLMResponse response = service.chat(bot,
                     List.of(new BotDto.ChatMessage("user", "use a tool")),
                     List.of(new EchoTool()));
@@ -136,6 +137,7 @@ class LLMServiceProviderToolTest {
             assertEquals("Bearer cloud-key", authHeader.get());
             assertTrue(capturedRequest.toString().contains("\"tools\""));
             assertTrue(capturedRequest.toString().contains("\"tool_choice\":\"auto\""));
+            assertTrue(capturedRequest.toString().contains("\"reasoning_effort\":\"none\""));
             assertEquals(1, response.getToolCalls().size());
             assertEquals("echo", response.getToolCalls().get(0).getName());
             assertEquals("{\"value\":\"cloud\"}", response.getToolCalls().get(0).getArgumentsJson());
