@@ -54,10 +54,6 @@ public class BotService {
     private static final Pattern MD_TABLE_SEP = Pattern.compile("(?m)^\\s*\\|?[ :|-]*-{2,}[ :|-]*\\|?\\s*$");
     private static final Pattern SENTENCE_BOUNDARY =
             Pattern.compile("(?<=[。！？!?；;])\\s+|(?<=[。！？!?；;])|\\n+");
-    private static final Pattern SEXUAL_MINOR_TERMS = Pattern.compile(
-            "(?i)(child|loli|underage|minor|young-looking|未成年|幼女|萝莉)");
-    private static final Pattern EXPLICIT_SEXUAL_TERMS = Pattern.compile(
-            "(?i)(nsfw|nude|naked|nipples?|areola|porn|genitals?|cameltoe|spread\\s+legs|裸体|赤裸|露点|生殖器)");
     private static final String KIRARA_ANALYSIS_SYSTEM_PROMPT = """
             你是 Kirara/阿雷工作流的 R1 上下文判定器，只做分析，不直接聊天。
             你的任务是根据房间上下文、最近消息和当前触发文本，判断真正应该回应什么。
@@ -523,9 +519,6 @@ public class BotService {
         String prompt = directImagePrompt(messageContent, roomDisplayName(roomBot), bot.getBotName());
         if (prompt.isBlank()) {
             return "请在提及我之后写下要画的正向提示词。";
-        }
-        if (SEXUAL_MINOR_TERMS.matcher(prompt).find() && EXPLICIT_SEXUAL_TERMS.matcher(prompt).find()) {
-            return "⚠️ 无法提交同时涉及未成年人或年龄模糊描述与性内容的画图请求。";
         }
 
         Tool generateImage = agentToolRegistry.getTool("generate_image")
