@@ -905,10 +905,6 @@ public class BotService {
         if (lower.contains("agent loop budget exhausted")) {
             return "⚠️ 本次对话达到 Agent 执行预算上限，请调整 Agent 预算后重试。";
         }
-        if (lower.contains("safety_check_type_csam")) {
-            return "⚠️ 请求在调用画图工具前被内容安全检查拒绝：提示词同时涉及未成年人或年龄模糊描述与性内容。"
-                    + "请移除 child、loli、teen、young-looking 等词，或明确改为成年角色；这不是 API key 或 NovelAI 故障。";
-        }
         if (lower.contains("content violates usage guidelines") || lower.contains("content policy")) {
             return "⚠️ 请求在调用画图工具前被上游模型的内容安全检查拒绝。请调整提示词；这不是 API key 或图片模型故障。";
         }
