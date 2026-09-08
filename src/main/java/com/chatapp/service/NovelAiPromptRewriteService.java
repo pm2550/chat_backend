@@ -60,17 +60,23 @@ public class NovelAiPromptRewriteService {
                     new BotDto.ChatMessage("user", prompt.trim())));
             String rewritten = clean(response != null ? response.getContent() : null);
             if (rewritten.isBlank()) {
-                log.warn("NovelAI prompt rewrite returned empty output for bot={}; using source prompt", bot.getId());
-                return prompt;
+                return onRewriteFailure(bot, prompt, "returned empty output", null);
             }
             log.info("NovelAI prompt rewritten bot={} sourceChars={} outputChars={}",
                     bot.getId(), prompt.length(), rewritten.length());
             return rewritten;
         } catch (RuntimeException error) {
-            log.warn("NovelAI prompt rewrite failed for bot={}; using source prompt: {}",
-                    bot.getId(), error.getMessage());
-            return prompt;
+            return onRewriteFailure(bot, prompt, error.getMessage(), error);
         }
+    }
+
+    private String onRewriteFailure(BotConfig bot, String prompt, String reason, RuntimeException cause) {
+        if (bot.getImageRewriteFailurePolicy() == BotConfig.ImageRewriteFailurePolicy.FAIL) {
+            throw new IllegalStateException("图片提示词润色不可用: " + reason, cause);
+        }
+        log.warn("NovelAI prompt rewrite failed for bot={}; continuing with source prompt: {}",
+                bot.getId(), reason);
+        return prompt;
     }
 
     private String clean(String raw) {

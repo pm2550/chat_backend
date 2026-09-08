@@ -11,6 +11,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.mockito.ArgumentCaptor;
 
 import java.util.List;
@@ -65,6 +66,17 @@ class NovelAiPromptRewriteServiceTest {
         when(llmService.chat(org.mockito.ArgumentMatchers.eq(bot), anyList()))
                 .thenThrow(new IllegalStateException("provider unavailable"));
         assertThat(service.rewriteIfNeeded(bot, "银发少女")).isEqualTo("银发少女");
+    }
+
+    @Test
+    void canStopWhenOwnerChoosesToSurfaceRewriteFailure() {
+        bot.setImageRewriteFailurePolicy(BotConfig.ImageRewriteFailurePolicy.FAIL);
+        when(llmService.chat(org.mockito.ArgumentMatchers.eq(bot), anyList()))
+                .thenThrow(new IllegalStateException("provider unavailable"));
+
+        assertThatThrownBy(() -> service.rewriteIfNeeded(bot, "银发少女"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("图片提示词润色不可用");
     }
 
     @Test

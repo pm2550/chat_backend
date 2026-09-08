@@ -134,6 +134,11 @@ public class BotConfig {
     @Column(name = "image_prompt_mode", nullable = false, length = 32)
     private ImagePromptMode imagePromptMode = ImagePromptMode.ANIME_CREATIVE;
 
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "image_rewrite_failure_policy", nullable = false, length = 32)
+    private ImageRewriteFailurePolicy imageRewriteFailurePolicy = ImageRewriteFailurePolicy.USE_SOURCE_PROMPT;
+
     @Column(name = "max_history_messages")
     private Integer maxHistoryMessages = 20;
 
@@ -256,7 +261,14 @@ public class BotConfig {
     public enum ImageInvocationMode {
         /** Let the text model decide when and how to call the image tool. */
         AGENT,
-        /** Remove only the room mention and submit the remaining positive prompt verbatim. */
+        /** Remove the room mention and submit the request straight to the image tool. */
         DIRECT
+    }
+
+    public enum ImageRewriteFailurePolicy {
+        /** Keep the user's original positive prompt and continue with the image provider. */
+        USE_SOURCE_PROMPT,
+        /** Stop the request and surface the prompt-rewrite provider failure. */
+        FAIL
     }
 }

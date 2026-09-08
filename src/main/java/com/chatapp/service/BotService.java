@@ -145,6 +145,9 @@ public class BotService {
         bot.setImageInvocationMode(request.getImageInvocationMode() != null
                 ? request.getImageInvocationMode()
                 : BotConfig.ImageInvocationMode.AGENT);
+        bot.setImageRewriteFailurePolicy(request.getImageRewriteFailurePolicy() != null
+                ? request.getImageRewriteFailurePolicy()
+                : BotConfig.ImageRewriteFailurePolicy.USE_SOURCE_PROMPT);
         applyImageGenerationSettings(
                 bot,
                 creatorId,
@@ -212,6 +215,9 @@ public class BotService {
         if (request.getWorkflowMode() != null) bot.setWorkflowMode(request.getWorkflowMode());
         if (request.getImageInvocationMode() != null) {
             bot.setImageInvocationMode(request.getImageInvocationMode());
+        }
+        if (request.getImageRewriteFailurePolicy() != null) {
+            bot.setImageRewriteFailurePolicy(request.getImageRewriteFailurePolicy());
         }
         if (request.getImageGenerationProvider() != null
                 || request.getImageProviderCredentialId() != null
@@ -525,7 +531,7 @@ public class BotService {
                 .orElseThrow(() -> new IllegalStateException("generate_image tool is unavailable"));
         ObjectNode params = JSON.createObjectNode();
         params.put("prompt", prompt);
-        params.put("verbatim", true);
+        params.put("verbatim", bot.getImagePromptMode() == BotConfig.ImagePromptMode.VERBATIM);
         ToolContext context = new ToolContext(
                 chatRoomId,
                 senderId,
@@ -540,8 +546,9 @@ public class BotService {
             String error = result.path("error").path("message").asText("图片提交失败");
             throw new IllegalStateException(error);
         }
-        log.info("机器人 {} 在聊天室 {} 使用原文直达图片通道提交提示词 (chars={})",
-                bot.getBotName(), chatRoomId, prompt.length());
+        log.info("机器人 {} 在聊天室 {} 使用直达图片通道提交提示词 (promptMode={}, rewriteFailurePolicy={}, chars={})",
+                bot.getBotName(), chatRoomId, bot.getImagePromptMode(),
+                bot.getImageRewriteFailurePolicy(), prompt.length());
         return null;
     }
 
@@ -1272,6 +1279,9 @@ public class BotService {
         dto.setImageInvocationMode(entity.getImageInvocationMode() != null
                 ? entity.getImageInvocationMode()
                 : BotConfig.ImageInvocationMode.AGENT);
+        dto.setImageRewriteFailurePolicy(entity.getImageRewriteFailurePolicy() != null
+                ? entity.getImageRewriteFailurePolicy()
+                : BotConfig.ImageRewriteFailurePolicy.USE_SOURCE_PROMPT);
         if (includeCredentialDetails && entity.getImageProviderCredential() != null) {
             dto.setImageProviderCredentialId(entity.getImageProviderCredential().getId());
             dto.setImageProviderCredentialLabel(entity.getImageProviderCredential().getLabel());

@@ -161,6 +161,8 @@ class BotServiceTest {
         assertEquals(BotConfig.WorkflowMode.SINGLE_PASS, captor.getValue().getWorkflowMode());
         assertEquals(BotConfig.ImageInvocationMode.AGENT,
                 captor.getValue().getImageInvocationMode());
+        assertEquals(BotConfig.ImageRewriteFailurePolicy.USE_SOURCE_PROMPT,
+                captor.getValue().getImageRewriteFailurePolicy());
         assertEquals(2.0, captor.getValue().getReplyIntervalSeconds());
         assertEquals(2.0, dto.getReplyIntervalSeconds());
         assertNull(captor.getValue().getApiKeyEncrypted());
@@ -750,7 +752,7 @@ class BotServiceTest {
     }
 
     @Test
-    @DisplayName("DIRECT image invocation removes only the bot mention and bypasses prompt rewriting")
+    @DisplayName("DIRECT image invocation removes only the bot mention and honors the configured prompt mode")
     void process_direct_image_invocation_preserves_positive_prompt() {
         bot.setBotName("Painter");
         bot.setImageInvocationMode(BotConfig.ImageInvocationMode.DIRECT);
@@ -776,7 +778,7 @@ class BotServiceTest {
         verify(imageTool).execute(params.capture(), any());
         assertEquals("银发成年女性，雨夜街头，电影灯光",
                 params.getValue().path("prompt").asText());
-        assertTrue(params.getValue().path("verbatim").asBoolean());
+        assertFalse(params.getValue().path("verbatim").asBoolean());
         assertFalse(params.getValue().has("negativePrompt"));
         assertFalse(params.getValue().toString().contains("bad hands"));
         verifyNoInteractions(llmService);
@@ -835,7 +837,7 @@ class BotServiceTest {
 
         assertEquals(1, replies.size());
         assertTrue(replies.get(0).getContent().contains("内容安全检查拒绝"));
-        assertTrue(replies.get(0).getContent().contains("不是 API key 或 NovelAI 故障"));
+        assertTrue(replies.get(0).getContent().contains("不是 API key 或图片模型故障"));
         assertFalse(replies.get(0).getContent().contains("SAFETY_CHECK_TYPE_CSAM"));
         assertFalse(replies.get(0).getContent().contains("检查它的模型配置"));
     }
