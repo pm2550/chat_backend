@@ -9,6 +9,7 @@ import com.chatapp.service.BotReplyDeliveryService;
 import com.chatapp.service.FileStorageService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.MessageReactionService;
+import com.chatapp.service.RemoteImageFetchService;
 import com.chatapp.service.UserService;
 import com.chatapp.websocket.RawWebSocketHandler;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +46,7 @@ public class MessageController {
     private final BotReplyDeliveryService botReplyDeliveryService;
     private final AuditLogService auditLogService;
     private final MessageReactionService messageReactionService;
+    private final RemoteImageFetchService remoteImageFetchService;
 
     /**
      * 发送文本消息
@@ -154,6 +157,86 @@ public class MessageController {
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             log.error("发送文件消息失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 按图片地址发送图片消息。
+     *
+     * 浏览器粘贴网页图片时剪贴板里往往只有 &lt;img src="https://第三方站/..."&gt;，
+     * 前端直接 fetch 会被 CORS 挡掉，交给服务端代抓。
+     */
+    @PostMapping("/file-from-url")
+    public ResponseEntity<?> sendFileFromUrl(
+            @RequestBody SendFileFromUrlRequest request,
+            Authentication auth) {
+        try {
+            User currentUser = userService.findUserByUsername(auth.getName());
+            messageService.validateCanSendMessage(currentUser.getId(), request.getChatRoomId());
+
+            RemoteImageFetchService.FetchedImage image = remoteImageFetchService.fetch(request.getUrl());
+            String fileUrl = fileStorageService.uploadChatImageBytes(
+                    image.fileName(),
+                    image.contentType(),
+                    image.bytes());
+
+            Message message = messageService.sendFileMessage(
+                    currentUser.getId(),
+                    request.getChatRoomId(),
+                    image.fileName(),
+                    fileUrl,
+                    image.contentType(),
+                    (long) image.bytes().length,
+                    Message.MessageType.IMAGE,
+                    null,
+                    null);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "图片消息发送成功");
+            response.put("data", MessageDto.fromEntity(message));
+
+            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            auditLogService.record(
+                    currentUser,
+                    "FILE_SEND",
+                    "MESSAGE",
+                    message.getId(),
+                    request.getChatRoomId(),
+                    image.fileName());
+            processBotsAndBroadcast(message, currentUser.getId());
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("按地址发送图片失败: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 只把远程图片取回来给前端预览，不发消息。
+     *
+     * 粘贴网页图片时要在发送栏里先显示缩略图，而浏览器读不到跨域图片的字节。
+     */
+    @PostMapping("/remote-image")
+    public ResponseEntity<?> fetchRemoteImage(
+            @RequestBody FetchRemoteImageRequest request,
+            Authentication auth) {
+        try {
+            userService.findUserByUsername(auth.getName());
+            RemoteImageFetchService.FetchedImage image = remoteImageFetchService.fetch(request.getUrl());
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("fileName", image.fileName());
+            payload.put("contentType", image.contentType());
+            payload.put("size", image.bytes().length);
+            payload.put("base64", Base64.getEncoder().encodeToString(image.bytes()));
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "图片获取成功");
+            response.put("data", payload);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.warn("远程图片抓取失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
@@ -638,6 +721,23 @@ public class MessageController {
         public void setIsAnonymous(Boolean isAnonymous) { this.isAnonymous = isAnonymous; }
         public Long getStickerId() { return stickerId; }
         public void setStickerId(Long stickerId) { this.stickerId = stickerId; }
+    }
+
+    public static class SendFileFromUrlRequest {
+        private Long chatRoomId;
+        private String url;
+
+        public Long getChatRoomId() { return chatRoomId; }
+        public void setChatRoomId(Long chatRoomId) { this.chatRoomId = chatRoomId; }
+        public String getUrl() { return url; }
+        public void setUrl(String url) { this.url = url; }
+    }
+
+    public static class FetchRemoteImageRequest {
+        private String url;
+
+        public String getUrl() { return url; }
+        public void setUrl(String url) { this.url = url; }
     }
 
     public static class ReplyMessageRequest {

@@ -131,7 +131,21 @@ public class FileStorageService {
     }
 
     public String uploadStickerFile(String originalFilename, String contentType, byte[] bytes) throws IOException {
-        String safeName = cleanFileName(originalFilename, "sticker.png");
+        return uploadChatImageBytes(originalFilename, contentType, bytes, "sticker.png");
+    }
+
+    /**
+     * 保存服务端代抓回来的聊天图片（粘贴网页图片时走这条路）。
+     */
+    public String uploadChatImageBytes(String originalFilename, String contentType, byte[] bytes)
+            throws IOException {
+        return uploadChatImageBytes(originalFilename, contentType, bytes, "image.png");
+    }
+
+    private String uploadChatImageBytes(
+            String originalFilename, String contentType, byte[] bytes, String fallbackName)
+            throws IOException {
+        String safeName = cleanFileName(originalFilename, fallbackName);
         validateImageFile(safeName, contentType, bytes == null ? 0 : bytes.length);
         String fileExtension = getFileExtension(safeName);
         String fileName = UUID.randomUUID().toString() + "." + (fileExtension.isBlank() ? "png" : fileExtension);
