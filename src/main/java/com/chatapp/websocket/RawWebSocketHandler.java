@@ -57,6 +57,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public class RawWebSocketHandler extends TextWebSocketHandler {
 
     public static final String ATTR_USER = "user";
+    private static final String ATTR_LAST_INBOUND_AT = "pmchat.lastInboundAt";
+    /**
+     * 客户端每 30 秒 ping 一次；超过 75 秒（连丢两次）没收到任何消息就当连接已断。
+     * 手机切后台后页面被系统冻结，连接常常不会正常关闭，而 nginx 读超时是 1 小时——
+     * 不主动清理的话，服务器会一直以为用户在线，这期间一条离线推送都不会发。
+     */
+    static final long STALE_SESSION_MS = 75_000;
 
     private final ObjectMapper objectMapper;
     private final MessageService messageService;
@@ -78,6 +85,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             closeQuiet(session, CloseStatus.POLICY_VIOLATION.withReason("unauthenticated"));
             return;
         }
+        markInbound(session);
         userSessions.computeIfAbsent(user.getId(),
                 id -> ConcurrentHashMap.newKeySet()).add(session);
         log.info("WebSocket connected: userId={}, sessionId={}", user.getId(), session.getId());
@@ -90,16 +98,48 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (user == null) {
             return;
         }
-        Set<WebSocketSession> sessions = userSessions.get(user.getId());
-        if (sessions != null) {
-            sessions.remove(session);
-            if (sessions.isEmpty()) {
-                userSessions.remove(user.getId());
-                broadcastStatus(user.getId(), "OFFLINE");
-            }
-        }
+        removeSession(user.getId(), session);
         log.info("WebSocket closed: userId={}, sessionId={}, status={}",
                 user.getId(), session.getId(), status);
+    }
+
+    private void removeSession(Long userId, WebSocketSession session) {
+        Set<WebSocketSession> sessions = userSessions.get(userId);
+        if (sessions == null || !sessions.remove(session)) {
+            return;
+        }
+        if (sessions.isEmpty()) {
+            userSessions.remove(userId, sessions);
+            broadcastStatus(userId, "OFFLINE");
+        }
+    }
+
+    private void markInbound(WebSocketSession session) {
+        session.getAttributes().put(ATTR_LAST_INBOUND_AT, System.currentTimeMillis());
+    }
+
+    static boolean isStale(WebSocketSession session, long nowMs) {
+        Object last = session.getAttributes().get(ATTR_LAST_INBOUND_AT);
+        return last instanceof Long lastMs && nowMs - lastMs > STALE_SESSION_MS;
+    }
+
+    /**
+     * 把心跳超时的连接当作已断开：先从在线表里摘掉（之后的新消息会走离线推送），
+     * 再尽力关闭底层连接——半开的 TCP 可能根本收不到关闭帧，所以不能只等 afterConnectionClosed。
+     */
+    @Scheduled(fixedDelay = 15_000)
+    public void closeStaleSessions() {
+        long now = System.currentTimeMillis();
+        userSessions.forEach((userId, sessions) -> {
+            for (WebSocketSession session : sessions) {
+                if (!isStale(session, now)) {
+                    continue;
+                }
+                log.info("WebSocket heartbeat timeout: userId={}, sessionId={}", userId, session.getId());
+                removeSession(userId, session);
+                closeQuiet(session, CloseStatus.SESSION_NOT_RELIABLE.withReason("heartbeat timeout"));
+            }
+        });
     }
 
     @Override
@@ -109,6 +149,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             closeQuiet(session, CloseStatus.POLICY_VIOLATION);
             return;
         }
+        markInbound(session);
         try {
             JsonNode root = objectMapper.readTree(textMessage.getPayload());
             String type = root.path("type").asText("");
@@ -819,7 +860,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     private void closeQuiet(WebSocketSession session, CloseStatus status) {
         try {
             session.close(status);
-        } catch (IOException ignored) {
+        } catch (IOException | RuntimeException ignored) {
         }
     }
 
