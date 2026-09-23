@@ -16,10 +16,13 @@ import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.Message;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import nl.martijndwars.webpush.Encoding;
 import nl.martijndwars.webpush.Notification;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import nl.martijndwars.webpush.PushService;
 import org.apache.http.HttpResponse;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,6 +30,8 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.security.Security;
+import java.util.concurrent.TimeUnit;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -37,6 +42,16 @@ import java.util.Map;
 @RequiredArgsConstructor
 @Slf4j
 public class PushNotificationService {
+
+    // webpush-java 用 BouncyCastle ("BC") 解析订阅公钥并加密推送内容。
+    // 不注册的话每一次发送都会报 "no such provider: BC"，网页推送一条也发不出去。
+    static {
+        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
+            Security.addProvider(new BouncyCastleProvider());
+        }
+    }
+
+    private static final long WEB_PUSH_TIMEOUT_SECONDS = 15;
 
     private final DeviceTokenRepository deviceTokenRepository;
     private final WebPushSubscriptionRepository webPushSubscriptionRepository;
@@ -120,6 +135,10 @@ public class PushNotificationService {
         });
     }
 
+    /**
+     * 在独立线程池里发送，调用方（发消息、来电）立即返回。
+     */
+    @Async("pushExecutor")
     @Transactional
     public void sendPushNotification(Long userId, String title, String body, String data) {
         List<DeviceToken> tokens = deviceTokenRepository.findByUserIdAndIsActiveTrue(userId);
@@ -208,7 +227,10 @@ public class PushNotificationService {
                         webPushProperties.getPrivateKey(),
                         webPushProperties.getSubject()
                 );
-                HttpResponse response = pushService.send(notification);
+                // RFC 8291 aes128gcm：iPhone（苹果推送服务）只收这种格式，Chrome/Firefox 也都支持。
+                HttpResponse response = pushService
+                        .sendAsync(notification, Encoding.AES128GCM)
+                        .get(WEB_PUSH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 int status = response.getStatusLine().getStatusCode();
                 if (status == 404 || status == 410) {
                     deactivateInvalidSubscription(subscription, status);
