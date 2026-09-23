@@ -3,6 +3,12 @@ WORKDIR /app
 
 RUN groupadd -r chatapp && useradd -r -g chatapp chatapp
 
+# 语音消息统一转成 MP3：Chrome/Android 录的是 webm/opus，iPhone 录的是 mp4/aac，
+# 互相不一定放得了；MP3 所有浏览器和手机都能直接播放。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY target/chat-app-backend-*.jar app.jar
 
 RUN mkdir -p /app/uploads/avatars /app/uploads/messages /app/uploads/stickers && \

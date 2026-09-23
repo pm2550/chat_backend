@@ -135,6 +135,20 @@ public class FileStorageService {
     }
 
     /**
+     * 保存服务端处理过的聊天附件（比如转码后的语音），校验规则与普通聊天文件一致。
+     */
+    public String uploadChatFileBytes(String originalFilename, String contentType, byte[] bytes)
+            throws IOException {
+        String safeName = cleanFileName(originalFilename, "file.bin");
+        validateChatFile(safeName, bytes == null ? 0 : bytes.length);
+        String fileExtension = getFileExtension(safeName);
+        String fileName = UUID.randomUUID() + "." + fileExtension;
+        Path targetLocation = Paths.get(fileStorageConfig.getFullChatFileDir()).resolve(fileName);
+        storeEncryptedBytes(targetLocation, bytes == null ? new byte[0] : bytes);
+        return "/api/files/chat/" + fileName;
+    }
+
+    /**
      * 保存服务端代抓回来的聊天图片（粘贴网页图片时走这条路）。
      */
     public String uploadChatImageBytes(String originalFilename, String contentType, byte[] bytes)

@@ -10,6 +10,7 @@ import com.chatapp.service.FileStorageService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.MessageReactionService;
 import com.chatapp.service.RemoteImageFetchService;
+import com.chatapp.service.VoiceTranscoder;
 import com.chatapp.service.UserService;
 import com.chatapp.websocket.RawWebSocketHandler;
 import lombok.RequiredArgsConstructor;
@@ -47,6 +48,7 @@ public class MessageController {
     private final AuditLogService auditLogService;
     private final MessageReactionService messageReactionService;
     private final RemoteImageFetchService remoteImageFetchService;
+    private final VoiceTranscoder voiceTranscoder;
 
     /**
      * 发送文本消息
@@ -117,7 +119,6 @@ public class MessageController {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
             messageService.validateCanSendMessage(currentUser.getId(), chatRoomId);
-            String fileUrl = fileStorageService.uploadChatFile(file);
             String fileName = file.getOriginalFilename();
             if (fileName == null || fileName.isBlank()) {
                 fileName = "file";
@@ -127,14 +128,30 @@ public class MessageController {
             Message.MessageType messageType = requestedMessageType != null
                     ? normalizeAttachmentMessageType(requestedMessageType)
                     : inferAttachmentMessageType(fileName, contentType);
-            
+
+            String fileUrl;
+            long fileSize = file.getSize();
+            // 端到端加密的附件是密文，不能也不该转码；其余语音统一转成 MP3，谁都能放。
+            java.util.Optional<byte[]> mp3 = messageType == Message.MessageType.VOICE
+                    && (encryptedContent == null || encryptedContent.isBlank())
+                    ? voiceTranscoder.toMp3(file.getBytes())
+                    : java.util.Optional.empty();
+            if (mp3.isPresent()) {
+                fileName = voiceFileName(fileName);
+                contentType = "audio/mpeg";
+                fileSize = mp3.get().length;
+                fileUrl = fileStorageService.uploadChatFileBytes(fileName, contentType, mp3.get());
+            } else {
+                fileUrl = fileStorageService.uploadChatFile(file);
+            }
+
             Message message = messageService.sendFileMessage(
                 currentUser.getId(),
                 chatRoomId,
                 fileName,
                 fileUrl,
                 contentType,
-                file.getSize(),
+                fileSize,
                 messageType,
                 encryptedContent,
                 encryptionVersion
@@ -817,6 +834,12 @@ public class MessageController {
             return Message.MessageType.VIDEO;
         }
         return Message.MessageType.FILE;
+    }
+
+    private String voiceFileName(String original) {
+        int dot = original.lastIndexOf('.');
+        String base = dot > 0 ? original.substring(0, dot) : original;
+        return (base.isBlank() ? "voice" : base) + ".mp3";
     }
 
     private Message.MessageType normalizeAttachmentMessageType(Message.MessageType requested) {
