@@ -43,4 +43,14 @@ class RawWebSocketHandlerStaleSessionTest {
     void sessionWithoutTimestampIsNeverSweptBlindly() {
         assertFalse(RawWebSocketHandler.isStale(sessionLastSeenAt(null), 1_000_000L));
     }
+
+    @Test
+    void onlyHandshakeMarkedSessionsAreBackground() {
+        WebSocketSession foreground = sessionLastSeenAt(1L);
+        WebSocketSession background = sessionLastSeenAt(1L);
+        background.getAttributes().put(RawWebSocketHandler.ATTR_BACKGROUND, Boolean.TRUE);
+
+        assertFalse(RawWebSocketHandler.isBackground(foreground));
+        assertTrue(RawWebSocketHandler.isBackground(background));
+    }
 }

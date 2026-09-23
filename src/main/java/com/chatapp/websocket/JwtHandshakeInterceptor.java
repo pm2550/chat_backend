@@ -58,7 +58,26 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
             return false;
         }
         attributes.put(RawWebSocketHandler.ATTR_USER, user);
+        // Android 后台常驻服务用 ?mode=background 连上来：不算在线、不收聊天流量，
+        // 只接收服务器判定需要推送的通知。
+        if ("background".equals(queryParam(request, "mode"))) {
+            attributes.put(RawWebSocketHandler.ATTR_BACKGROUND, Boolean.TRUE);
+        }
         return true;
+    }
+
+    private String queryParam(ServerHttpRequest request, String name) {
+        String query = request.getURI().getRawQuery();
+        if (query == null) return null;
+        for (String pair : query.split("&")) {
+            int eq = pair.indexOf('=');
+            String key = eq < 0 ? pair : pair.substring(0, eq);
+            if (name.equals(key)) {
+                return eq < 0 ? "" : java.net.URLDecoder.decode(
+                        pair.substring(eq + 1), java.nio.charset.StandardCharsets.UTF_8);
+            }
+        }
+        return null;
     }
 
     @Override

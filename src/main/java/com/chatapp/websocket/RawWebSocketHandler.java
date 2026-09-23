@@ -57,6 +57,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class RawWebSocketHandler extends TextWebSocketHandler {
 
     public static final String ATTR_USER = "user";
+    public static final String ATTR_BACKGROUND = "pmchat.background";
     private static final String ATTR_LAST_INBOUND_AT = "pmchat.lastInboundAt";
     /**
      * 客户端每 30 秒 ping 一次；超过 75 秒（连丢两次）没收到任何消息就当连接已断。
@@ -78,6 +79,13 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     // userId -> sessions (a user may have multiple devices connected)
     private final Map<Long, Set<WebSocketSession>> userSessions = new ConcurrentHashMap<>();
 
+    /**
+     * Android 后台常驻服务的连接（?mode=background）。它们不算"在线"、不收聊天流量，
+     * 只在服务器判定该给这个用户推送时，收到一条现成的通知（标题/正文已按免打扰、
+     * @提醒规则算好）。这样 Android 不需要 Google 推送也能在后台收到消息。
+     */
+    private final Map<Long, Set<WebSocketSession>> backgroundSessions = new ConcurrentHashMap<>();
+
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         User user = (User) session.getAttributes().get(ATTR_USER);
@@ -86,6 +94,12 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         markInbound(session);
+        if (isBackground(session)) {
+            backgroundSessions.computeIfAbsent(user.getId(),
+                    id -> ConcurrentHashMap.newKeySet()).add(session);
+            log.info("WebSocket background connected: userId={}, sessionId={}", user.getId(), session.getId());
+            return;
+        }
         userSessions.computeIfAbsent(user.getId(),
                 id -> ConcurrentHashMap.newKeySet()).add(session);
         log.info("WebSocket connected: userId={}, sessionId={}", user.getId(), session.getId());
@@ -104,6 +118,13 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void removeSession(Long userId, WebSocketSession session) {
+        if (isBackground(session)) {
+            Set<WebSocketSession> background = backgroundSessions.get(userId);
+            if (background != null && background.remove(session) && background.isEmpty()) {
+                backgroundSessions.remove(userId, background);
+            }
+            return;
+        }
         Set<WebSocketSession> sessions = userSessions.get(userId);
         if (sessions == null || !sessions.remove(session)) {
             return;
@@ -112,6 +133,32 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             userSessions.remove(userId, sessions);
             broadcastStatus(userId, "OFFLINE");
         }
+    }
+
+    static boolean isBackground(WebSocketSession session) {
+        return Boolean.TRUE.equals(session.getAttributes().get(ATTR_BACKGROUND));
+    }
+
+    /**
+     * 用户不在线时的通知出口：系统推送（Web Push / FCM）+ 后台常驻连接。
+     * 两条都发——同一个人可能既有 iPhone 网页版又有 Android App。
+     */
+    private void deliverOfflineNotification(Long userId, String title, String body, String data) {
+        pushNotificationService.sendPushNotification(userId, title, body, data);
+        Set<WebSocketSession> background = backgroundSessions.get(userId);
+        if (background == null || background.isEmpty()) {
+            return;
+        }
+        ObjectNode envelope = objectMapper.createObjectNode();
+        envelope.put("type", "notification");
+        envelope.put("title", title);
+        envelope.put("body", body);
+        try {
+            envelope.set("data", objectMapper.readTree(data == null ? "{}" : data));
+        } catch (Exception e) {
+            envelope.putObject("data");
+        }
+        background.forEach(session -> sendJson(session, envelope));
     }
 
     private void markInbound(WebSocketSession session) {
@@ -130,7 +177,12 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     @Scheduled(fixedDelay = 15_000)
     public void closeStaleSessions() {
         long now = System.currentTimeMillis();
-        userSessions.forEach((userId, sessions) -> {
+        sweepStale(userSessions, now);
+        sweepStale(backgroundSessions, now);
+    }
+
+    private void sweepStale(Map<Long, Set<WebSocketSession>> registry, long now) {
+        registry.forEach((userId, sessions) -> {
             for (WebSocketSession session : sessions) {
                 if (!isStale(session, now)) {
                     continue;
@@ -153,6 +205,11 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         try {
             JsonNode root = objectMapper.readTree(textMessage.getPayload());
             String type = root.path("type").asText("");
+            if (isBackground(session)) {
+                // 后台连接只保活，不参与聊天、输入状态和通话信令。
+                if ("ping".equals(type)) sendJson(session, Map.of("type", "pong"));
+                return;
+            }
             switch (type) {
                 case "ping" -> sendJson(session, Map.of("type", "pong"));
                 case "message" -> handleIncomingMessage(user, root);
@@ -371,7 +428,9 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         accepted.put("action", "join_accepted");
         accepted.put("chatRoomId", chatRoomId);
         accepted.put("callId", callId);
-        accepted.put("fromUserId", user.getId());
+        // 不带 fromUserId：这条是服务器发给加入者本人的，而客户端会把"发件人是自己"的
+        // 信令当回声丢掉。以前带着自己的 id，被叫方永远收不到"主叫已在房间"，
+        // 该由被叫发 offer 时（被叫 id 更小）双方就互相等，通话卡在"连接中"。
         accepted.put("fromName", fallback(user.getDisplayName(), user.getUsername()));
         accepted.put("current", result.participants().size());
         accepted.put("max", CallRoomRegistry.MAX_PARTICIPANTS);
@@ -679,7 +738,10 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
                 && !message.getSender().getDisplayName().isBlank()
                 ? message.getSender().getDisplayName()
                 : message.getSender().getUsername();
-        String title = message.getChatRoom().getName() != null
+        // 私聊的房间名是自动拼的"甲 & 乙"，通知标题直接用发送者更清楚。
+        boolean privateChat = message.getChatRoom().getRoomType() == ChatRoom.RoomType.PRIVATE;
+        String title = !privateChat
+                && message.getChatRoom().getName() != null
                 && !message.getChatRoom().getName().isBlank()
                 ? message.getChatRoom().getName()
                 : senderName;
@@ -706,7 +768,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             if (muted && !mentioned) {
                 return;
             }
-            pushNotificationService.sendPushNotification(userId, title, body, data);
+            deliverOfflineNotification(userId, title, body, data);
         });
     }
 
@@ -719,7 +781,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         String title = "PM chat 来电";
         String body = fromName + " 来电";
         String data = offlineCallNotificationData(fromUser, chatRoomId, callId, mediaType);
-        pushNotificationService.sendPushNotification(toUserId, title, body, data);
+        deliverOfflineNotification(toUserId, title, body, data);
     }
 
     private String offlineCallNotificationData(User fromUser, Long chatRoomId,
