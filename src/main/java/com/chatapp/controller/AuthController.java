@@ -116,9 +116,13 @@ public class AuthController {
 
             String username = jwtUtils.getUserNameFromJwtToken(jwt);
             String newAccessToken = jwtUtils.generateAccessToken(username);
+            // 每次续期都换一张新的 refresh token（滑动窗口）：只要在有效期内打开过，
+            // 就不会因为距离上次输密码满了 N 天而被强制重新登录。
+            // 旧 token 不拉黑——客户端可能并发发起多次续期，拉黑会误杀后到的那次。
+            String newRefreshToken = jwtUtils.generateRefreshToken(username);
             UserDto user = userService.findByUsername(username);
 
-            UserDto.JwtResponse jwtResponse = new UserDto.JwtResponse(newAccessToken, jwt, user);
+            UserDto.JwtResponse jwtResponse = new UserDto.JwtResponse(newAccessToken, newRefreshToken, user);
             return ResponseEntity.ok(ApiResponse.success("令牌刷新成功", jwtResponse));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(ApiResponse.badRequest("令牌刷新失败"));

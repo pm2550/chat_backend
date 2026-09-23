@@ -81,6 +81,38 @@ class AuthControllerTest {
     }
 
     @Test
+    void refreshIssuesANewRefreshTokenSoTheSessionSlides() throws Exception {
+        when(jwtUtils.validateJwtToken("old-refresh")).thenReturn(true);
+        when(jwtUtils.getTokenId("old-refresh")).thenReturn("jti-1");
+        when(tokenBlacklistService.isBlacklisted("jti-1")).thenReturn(false);
+        when(jwtUtils.getTokenType("old-refresh")).thenReturn("refresh");
+        when(jwtUtils.getUserNameFromJwtToken("old-refresh")).thenReturn("testuser");
+        when(jwtUtils.generateAccessToken("testuser")).thenReturn("new-access");
+        when(jwtUtils.generateRefreshToken("testuser")).thenReturn("new-refresh");
+        when(userService.findByUsername("testuser")).thenReturn(testUser);
+
+        mockMvc.perform(post("/api/auth/refresh")
+                        .header("Authorization", "Bearer old-refresh"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.accessToken").value("new-access"))
+                .andExpect(jsonPath("$.data.refreshToken").value("new-refresh"));
+
+        // 旧 refresh token 不能被拉黑：客户端并发续期时后到的请求还要用它。
+        verify(tokenBlacklistService, never()).blacklistToken(anyString(), anyLong());
+    }
+
+    @Test
+    void refreshRejectsAnExpiredRefreshToken() throws Exception {
+        when(jwtUtils.validateJwtToken("expired-refresh")).thenReturn(false);
+
+        mockMvc.perform(post("/api/auth/refresh")
+                        .header("Authorization", "Bearer expired-refresh"))
+                .andExpect(status().isBadRequest());
+
+        verify(jwtUtils, never()).generateRefreshToken(anyString());
+    }
+
+    @Test
     void testLogin_InvalidCredentials() throws Exception {
         UserDto.LoginRequest loginRequest = new UserDto.LoginRequest("testuser", "wrongpassword");
 
