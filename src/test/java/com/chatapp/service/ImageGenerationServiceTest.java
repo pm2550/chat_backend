@@ -246,6 +246,22 @@ class ImageGenerationServiceTest {
         }
     }
 
+    @Test
+    void submitResurfacesHiddenRoomForRequesterAndOtherMembers() {
+        arrangeRoomAndUser();
+        when(pointsService.debit(1L, "image_generation", "image_generation:77"))
+                .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
+        when(generationClient.submit("", "隐藏会话里画图", 1, "1024*1024", true))
+                .thenThrow(new IllegalStateException("quota exhausted"));
+
+        service.submit(
+                1L,
+                new ImageGenerationDto.GenerateRequest(10L, "隐藏会话里画图", 1, "1024*1024", true));
+
+        verify(chatRoomRepository).clearHiddenForMember(10L, 1L);
+        verify(chatRoomRepository).incrementUnreadForRoomMembersExcept(10L, 1L);
+    }
+
     private void arrangeRoomAndUser() {
         User user = new User();
         user.setId(1L);

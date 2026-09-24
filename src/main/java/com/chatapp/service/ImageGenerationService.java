@@ -123,6 +123,8 @@ public class ImageGenerationService {
 
         String refId = refId(message.getId());
         var debit = pointsService.debit(chargedUserId, FEATURE_KEY, refId);
+        // 和普通发消息一致：发起人自己隐藏过的会话也要回到消息列表
+        chatRoomRepository.clearHiddenForMember(chatRoom.getId(), chargedUserId);
         chatRoomRepository.incrementUnreadForRoomMembersExcept(chatRoom.getId(), chargedUserId);
         rawWebSocketHandler.broadcastMessage(message);
 
