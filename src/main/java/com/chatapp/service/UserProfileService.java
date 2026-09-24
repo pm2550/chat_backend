@@ -7,6 +7,7 @@ import com.chatapp.repository.UserSettingsRepository;
 import com.chatapp.repository.UserRepository;
 import com.chatapp.util.ChatCustomizationPresets;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -30,6 +31,9 @@ public class UserProfileService {
 
     @Autowired
     private UserSettingsRepository userSettingsRepository;
+
+    @Autowired(required = false)
+    private ApplicationEventPublisher eventPublisher;
 
     /**
      * 更新用户资料
@@ -172,7 +176,12 @@ public class UserProfileService {
             settings.setMessageNotificationsEnabled(request.getMessageNotificationsEnabled());
         }
         if (request.getShowOnlineStatus() != null) {
+            boolean wasVisible = !Boolean.FALSE.equals(settings.getShowOnlineStatus());
             settings.setShowOnlineStatus(request.getShowOnlineStatus());
+            if (wasVisible != request.getShowOnlineStatus() && eventPublisher != null) {
+                eventPublisher.publishEvent(new UserPrivacyService.PresenceVisibilityChanged(
+                        userId, request.getShowOnlineStatus()));
+            }
         }
         if (request.getAllowFriendRequests() != null) {
             settings.setAllowFriendRequests(request.getAllowFriendRequests());

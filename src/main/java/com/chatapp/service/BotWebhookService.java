@@ -25,8 +25,13 @@ import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -91,6 +96,18 @@ public class BotWebhookService {
 
     // ---- CRUD (owner-gated) ----
 
+    /**
+     * 目前只会推送聊天消息事件。"message.created" 是前端早期写入的别名，按同一事件处理；
+     * "*" 表示所有事件。
+     */
+    static final String EVENT_MESSAGE = "message";
+    private static final Set<String> MESSAGE_EVENT_ALIASES = Set.of(EVENT_MESSAGE, "message.created", "*");
+
+    /**
+     * 保存 webhook。每个 bot 在同一作用域（全部房间 / 某个房间）只保留一个订阅：
+     * 再次保存是更新这一条（换 URL 后旧地址不会继续收到推送），而不是再插一条。
+     * secret 留空表示沿用原来的 secret。
+     */
     @Transactional
     public WebhookView register(Long botId, Long ownerId, String callbackUrl, String secret,
                                 String eventTypes, Long chatRoomId) {
@@ -103,15 +120,63 @@ public class BotWebhookService {
         // SSRF guard: a user-supplied callback may not target internal hosts (except the curated allowlist).
         outboundUrlPolicy.assertAllowed(callbackUrl.trim(), OutboundUrlPolicy.Caller.USER_SUPPLIED);
 
-        BotWebhookSubscription sub = new BotWebhookSubscription();
-        sub.setBotConfig(bot);
+        String normalizedEvents = normalizeEventTypes(eventTypes);
+
+        List<BotWebhookSubscription> sameScope = subscriptionRepository.findByBotConfigId(botId).stream()
+                .filter(existing -> Objects.equals(existing.getChatRoomId(), chatRoomId))
+                .sorted(Comparator.comparing(BotWebhookSubscription::getId).reversed())
+                .toList();
+        BotWebhookSubscription sub;
+        if (sameScope.isEmpty()) {
+            sub = new BotWebhookSubscription();
+            sub.setBotConfig(bot);
+            sub.setChatRoomId(chatRoomId);
+            sub.setCreatedBy(ownerId);
+        } else {
+            // 以前每次保存都新插一条；顺手把同作用域的旧重复订阅清掉，只保留最新一条来更新。
+            sub = sameScope.get(0);
+            subscriptionRepository.deleteAll(sameScope.subList(1, sameScope.size()));
+        }
         sub.setCallbackUrl(callbackUrl.trim());
-        sub.setSecretEncrypted(secret != null && !secret.isBlank() ? cryptoService.encrypt(secret) : null);
-        sub.setEventTypes(eventTypes != null && !eventTypes.isBlank() ? eventTypes.trim() : "message");
-        sub.setChatRoomId(chatRoomId);
-        sub.setCreatedBy(ownerId);
+        if (secret != null && !secret.isBlank()) {
+            sub.setSecretEncrypted(cryptoService.encrypt(secret));
+        }
+        sub.setEventTypes(normalizedEvents);
         sub.setIsActive(true);
+        sub.setConsecutiveFailures(0);
         return toView(subscriptionRepository.save(sub));
+    }
+
+    private String normalizeEventTypes(String eventTypes) {
+        if (eventTypes == null || eventTypes.isBlank()) {
+            return EVENT_MESSAGE;
+        }
+        List<String> tokens = eventTypeTokens(eventTypes);
+        for (String token : tokens) {
+            if (!MESSAGE_EVENT_ALIASES.contains(token)) {
+                throw new IllegalArgumentException("不支持的 webhook 事件类型: " + token + "（目前只支持 message）");
+            }
+        }
+        return tokens.isEmpty() ? EVENT_MESSAGE : String.join(",", tokens);
+    }
+
+    private static List<String> eventTypeTokens(String eventTypes) {
+        if (eventTypes == null) {
+            return List.of();
+        }
+        return Arrays.stream(eventTypes.split("[,\\s]+"))
+                .map(token -> token.trim().toLowerCase(Locale.ROOT))
+                .filter(token -> !token.isEmpty())
+                .distinct()
+                .toList();
+    }
+
+    static boolean subscribesToMessages(BotWebhookSubscription sub) {
+        String eventTypes = sub.getEventTypes();
+        if (eventTypes == null || eventTypes.isBlank()) {
+            return true; // 列默认值就是 message
+        }
+        return eventTypeTokens(eventTypes).stream().anyMatch(MESSAGE_EVENT_ALIASES::contains);
     }
 
     @Transactional(readOnly = true)
@@ -141,6 +206,9 @@ public class BotWebhookService {
         boolean dispatched = false;
         for (BotWebhookSubscription sub : subs) {
             if (sub.getChatRoomId() != null && !sub.getChatRoomId().equals(roomId)) {
+                continue;
+            }
+            if (!subscribesToMessages(sub)) {
                 continue;
             }
             ObjectNode payload = objectMapper.createObjectNode();

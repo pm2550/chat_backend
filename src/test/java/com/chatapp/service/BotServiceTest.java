@@ -285,6 +285,39 @@ class BotServiceTest {
     }
 
     @Test
+    @DisplayName("updateBot keeps fields the editor does not send (阿雷 KIRARA_TWO_PASS regression)")
+    void update_without_workflow_mode_keeps_it() throws Exception {
+        bot.setWorkflowMode(BotConfig.WorkflowMode.KIRARA_TWO_PASS);
+        bot.setImageInvocationMode(BotConfig.ImageInvocationMode.AGENT);
+        when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));
+        when(botConfigRepository.save(any(BotConfig.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // 编辑器现在只发它展示的字段；没发的字段必须原样保留。
+        BotDto.UpdateRequest req = new ObjectMapper().readValue(
+                "{\"botName\":\"阿雷\",\"temperature\":0.5}", BotDto.UpdateRequest.class);
+        BotDto dto = service.updateBot(10L, alice.getId(), req);
+
+        assertEquals(BotConfig.WorkflowMode.KIRARA_TWO_PASS, bot.getWorkflowMode());
+        assertEquals(BotConfig.WorkflowMode.KIRARA_TWO_PASS, dto.getWorkflowMode());
+        assertEquals("阿雷", bot.getBotName());
+    }
+
+    @Test
+    @DisplayName("updateBot treats empty model / system prompt as clear, null as unchanged")
+    void update_blank_text_clears_field() {
+        when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));
+        when(botConfigRepository.save(any(BotConfig.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BotDto.UpdateRequest req = new BotDto.UpdateRequest();
+        req.setModelName("  ");
+        req.setSystemPrompt("");
+        service.updateBot(10L, alice.getId(), req);
+
+        assertNull(bot.getModelName());
+        assertNull(bot.getSystemPrompt());
+    }
+
+    @Test
     @DisplayName("updateBot clamps reply interval to supported limits")
     void update_reply_interval_clamps_to_limits() {
         when(botConfigRepository.findById(10L)).thenReturn(Optional.of(bot));

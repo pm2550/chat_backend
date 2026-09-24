@@ -13,6 +13,7 @@ import com.chatapp.service.MessageReactionService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.PushNotificationService;
 import com.chatapp.service.RoomTypingAggregator;
+import com.chatapp.service.UserPrivacyService;
 import com.chatapp.service.tool.PendingClientCallRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -20,6 +21,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -79,6 +81,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     private final CallRoomRegistry callRoomRegistry;
     private final PendingClientCallRegistry pendingClientCallRegistry;
     private final MessageReactionService messageReactionService;
+    private final UserPrivacyService userPrivacyService;
 
     /** 客户端自带的消息临时 id 最长多少字符，超出的不回显。 */
     private static final int MAX_CLIENT_MESSAGE_ID_LENGTH = 64;
@@ -556,6 +559,10 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     }
 
     public void broadcastReadReceipt(Long chatRoomId, Long userId, Long lastReadMessageId) {
+        // 关了"已读回执"的人读消息不通知别人；他自己也收不到别人的已读（互惠）。
+        if (userPrivacyService.readReceiptsDisabled(userId)) {
+            return;
+        }
         ObjectNode envelope = objectMapper.createObjectNode();
         envelope.put("type", "read_receipt");
         envelope.put("chatRoomId", chatRoomId);
@@ -563,7 +570,13 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (lastReadMessageId != null) {
             envelope.put("lastReadMessageId", lastReadMessageId);
         }
-        broadcastToRoomExcept(chatRoomId, userId, envelope);
+        List<Long> members = roomMembers(chatRoomId);
+        Set<Long> optedOut = userPrivacyService.usersWithReadReceiptsDisabled(members);
+        members.forEach(memberId -> {
+            if (!memberId.equals(userId) && !optedOut.contains(memberId)) {
+                sendToUser(memberId, envelope);
+            }
+        });
     }
 
     public void broadcastReactionChanged(Long chatRoomId,
@@ -759,6 +772,22 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void broadcastStatus(Long userId, String status) {
+        // 关了"显示在线状态"的人上下线都不广播，别人一直看到他离线。
+        if (userPrivacyService.hidesOnlineStatus(userId)) {
+            return;
+        }
+        sendStatus(userId, status);
+    }
+
+    /** 在线时切换"显示在线状态"，立刻让别人看到他上线/离线，而不是等下次重连。 */
+    @TransactionalEventListener(fallbackExecution = true)
+    public void onPresenceVisibilityChanged(UserPrivacyService.PresenceVisibilityChanged event) {
+        if (userSessions.containsKey(event.userId())) {
+            sendStatus(event.userId(), event.visible() ? "ONLINE" : "OFFLINE");
+        }
+    }
+
+    private void sendStatus(Long userId, String status) {
         ObjectNode envelope = objectMapper.createObjectNode();
         envelope.put("type", "status");
         envelope.put("userId", userId);
@@ -806,7 +835,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         });
     }
 
-    private Iterable<Long> roomMembers(Long chatRoomId) {
+    private List<Long> roomMembers(Long chatRoomId) {
         List<Long> ids = chatRoomRepository.findMemberUserIdsByRoomId(chatRoomId);
         return ids != null ? ids : List.of();
     }
@@ -835,8 +864,11 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         String body = notificationBody(message);
         String data = notificationData(message);
 
-        roomMembers(chatRoomId).forEach(userId -> {
-            if (userId.equals(senderId) || userSessions.containsKey(userId)) {
+        List<Long> members = roomMembers(chatRoomId);
+        // 关了"消息通知"的人不收任何消息推送，@提醒也不例外（来电走 pushOfflineCallInvitation，不受影响）。
+        Set<Long> notificationsOff = userPrivacyService.usersWithMessageNotificationsDisabled(members);
+        members.forEach(userId -> {
+            if (userId.equals(senderId) || userSessions.containsKey(userId) || notificationsOff.contains(userId)) {
                 return;
             }
             boolean mentioned = message.getMentionedUserIds() != null
