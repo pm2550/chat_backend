@@ -20,6 +20,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -60,6 +61,9 @@ class ChatRoomServiceTest {
 
     @Mock
     private UserPrivacyService userPrivacyService;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private ChatRoomService chatRoomService;
@@ -249,6 +253,9 @@ class ChatRoomServiceTest {
         assertDoesNotThrow(() -> chatRoomService.leaveChatRoom(10L, 2L));
 
         verify(chatRoomRepository).removeMember(10L, 2L);
+        // 自己的其他设备要把这个会话从列表里拿掉。
+        verify(eventPublisher).publishEvent(new RoomRealtimeEvents.MembersRemoved(
+                10L, List.of(2L), RoomRealtimeEvents.Reason.LEFT));
     }
 
     @Test
@@ -470,6 +477,8 @@ class ChatRoomServiceTest {
         assertEquals("New Name", result.getName());
         assertEquals("New Desc", result.getDescription());
         verify(chatRoomRepository).save(any(ChatRoom.class));
+        // 改名要实时推给所有成员。
+        verify(eventPublisher).publishEvent(new RoomRealtimeEvents.RoomUpdated(10L));
     }
 
     @Test
@@ -493,6 +502,8 @@ class ChatRoomServiceTest {
         assertDoesNotThrow(() -> chatRoomService.kickMember(10L, 1L, 2L));
 
         verify(chatRoomRepository).removeMember(10L, 2L);
+        verify(eventPublisher).publishEvent(new RoomRealtimeEvents.MembersRemoved(
+                10L, List.of(2L), RoomRealtimeEvents.Reason.KICKED));
     }
 
     @Test
@@ -513,10 +524,14 @@ class ChatRoomServiceTest {
     void testDeleteChatRoom_ByCreator() {
         when(chatRoomRepository.findById(10L)).thenReturn(Optional.of(groupRoom));
         when(chatRoomRepository.isOwner(10L, 1L)).thenReturn(true);
+        when(chatRoomRepository.findMemberUserIdsByRoomId(10L)).thenReturn(List.of(1L, 2L));
 
         assertDoesNotThrow(() -> chatRoomService.deleteChatRoom(10L, 1L));
 
         verify(chatRoomRepository).delete(groupRoom);
+        // 成员名单必须在删除前取，删除后就查不到要通知谁了。
+        verify(eventPublisher).publishEvent(new RoomRealtimeEvents.MembersRemoved(
+                10L, List.of(1L, 2L), RoomRealtimeEvents.Reason.DELETED));
     }
 
     @Test

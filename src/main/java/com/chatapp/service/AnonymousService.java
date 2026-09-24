@@ -11,6 +11,7 @@ import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +29,7 @@ public class AnonymousService {
     private final AnonymousThemeRepository anonymousThemeRepository;
     private final ChatRoomRepository chatRoomRepository;
     private final UserRepository userRepository;
+    private final ApplicationEventPublisher eventPublisher;
     private final Random random = new Random();
 
     private static final String[] ADJECTIVES = {
@@ -137,6 +139,7 @@ public class AnonymousService {
 
         chatRoom.setAnonymousEnabled(enable);
         chatRoomRepository.save(chatRoom);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.RoomUpdated(chatRoomId));
         log.info("聊天室 {} 匿名功能已{}", chatRoomId, enable ? "开启" : "关闭");
     }
 
@@ -159,6 +162,7 @@ public class AnonymousService {
         chatRoom.setAnonymousTheme(theme.getThemeKey());
         chatRoom.setAnonymousThemeConfig(theme);
         chatRoomRepository.save(chatRoom);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.RoomUpdated(chatRoomId));
         return toThemeInfo(theme);
     }
 

@@ -398,8 +398,14 @@ public class MessageController {
     public ResponseEntity<?> markMessageAsRead(@PathVariable Long messageId, Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
-            messageService.markMessageAsRead(messageId, currentUser.getId());
-            
+            Message newlyRead = messageService.markMessageAsRead(messageId, currentUser.getId());
+            if (newlyRead != null) {
+                rawWebSocketHandler.broadcastMessageRead(
+                        newlyRead.getChatRoom().getId(),
+                        currentUser.getId(),
+                        messageId);
+            }
+
             return ResponseEntity.ok(Map.of("message", "消息已标记为已读"));
         } catch (Exception e) {
             log.error("标记消息已读失败: {}", e.getMessage());
@@ -555,7 +561,8 @@ public class MessageController {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
             Message message = messageService.starMessage(messageId, currentUser.getId());
-            rawWebSocketHandler.broadcastMessageAction(
+            rawWebSocketHandler.sendMessageActionToUser(
+                    currentUser.getId(),
                     message.getChatRoom().getId(),
                     "star_added",
                     Map.of("messageId", messageId, "userId", currentUser.getId()));
@@ -574,7 +581,8 @@ public class MessageController {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
             Message message = messageService.unstarMessage(messageId, currentUser.getId());
-            rawWebSocketHandler.broadcastMessageAction(
+            rawWebSocketHandler.sendMessageActionToUser(
+                    currentUser.getId(),
                     message.getChatRoom().getId(),
                     "star_removed",
                     Map.of("messageId", messageId, "userId", currentUser.getId()));

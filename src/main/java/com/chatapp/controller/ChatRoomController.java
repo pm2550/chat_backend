@@ -310,7 +310,10 @@ public class ChatRoomController {
                     currentUser.getId(),
                     request.getMuted(),
                     request.getPinned());
-            return ResponseEntity.ok(toNotificationSettings(settings, roomId, currentUser.getId()));
+            Map<String, Object> state = toNotificationSettings(settings, roomId, currentUser.getId());
+            // 置顶/免打扰同步到自己的其他设备。
+            webSocketHandler.sendRoomDisplayStateChanged(currentUser.getId(), roomId, state);
+            return ResponseEntity.ok(state);
         } catch (Exception e) {
             log.error("更新通知偏好失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -586,7 +589,6 @@ public class ChatRoomController {
                     roomId,
                     currentUser.getId(),
                     upload);
-            webSocketHandler.broadcastChatRoomUpdated(chatRoom);
             Map<String, Object> response = new HashMap<>();
             response.put("message", "群头像已上传");
             response.put("chatRoom", chatRoom);

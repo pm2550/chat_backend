@@ -7,6 +7,7 @@ import com.chatapp.entity.UserSettings;
 import com.chatapp.service.UserPrivacyService;
 import com.chatapp.service.UserProfileService;
 import com.chatapp.service.UserService;
+import com.chatapp.websocket.RawWebSocketHandler;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -32,6 +33,7 @@ public class UserProfileController {
     private final UserProfileService userProfileService;
     private final UserService userService;
     private final UserPrivacyService userPrivacyService;
+    private final RawWebSocketHandler rawWebSocketHandler;
 
     /**
      * 获取当前用户资料
@@ -144,6 +146,7 @@ public class UserProfileController {
             Long userId = currentUser.getId();
             User.OnlineStatus onlineStatus = User.OnlineStatus.valueOf(status.toUpperCase());
             User updatedUser = userProfileService.updateOnlineStatus(userId, onlineStatus);
+            rawWebSocketHandler.broadcastPresenceChanged(userId, updatedUser.getOnlineStatus());
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);

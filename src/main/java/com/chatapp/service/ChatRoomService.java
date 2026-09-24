@@ -18,6 +18,7 @@ import com.chatapp.repository.UserRepository;
 import com.chatapp.util.ChatCustomizationPresets;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.PageImpl;
@@ -54,6 +55,7 @@ public class ChatRoomService {
     private final ChatRoomBotRepository chatRoomBotRepository;
     private final FriendshipRepository friendshipRepository;
     private final UserPrivacyService userPrivacyService;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * 创建私聊房间
@@ -94,6 +96,8 @@ public class ChatRoomService {
         // 添加成员
         addMemberToRoom(chatRoom.getId(), userId, ChatRoomMember.MemberRole.MEMBER);
         addMemberToRoom(chatRoom.getId(), friendId, ChatRoomMember.MemberRole.MEMBER);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.MembersAdded(
+                chatRoom.getId(), List.of(userId, friendId)));
 
         log.info("创建私聊房间: {} (用户: {} & {})", chatRoom.getId(), userId, friendId);
         return chatRoom;
@@ -121,15 +125,18 @@ public class ChatRoomService {
 
         // 添加创建者为群主（OWNER，高于管理员）
         addMemberToRoom(chatRoom.getId(), creatorId, ChatRoomMember.MemberRole.OWNER);
+        List<Long> addedUserIds = new ArrayList<>(List.of(creatorId));
 
         // 添加其他成员
         if (memberIds != null) {
             for (Long memberId : memberIds) {
                 if (!memberId.equals(creatorId)) {
                     addMemberToRoom(chatRoom.getId(), memberId, ChatRoomMember.MemberRole.MEMBER);
+                    addedUserIds.add(memberId);
                 }
             }
         }
+        eventPublisher.publishEvent(new RoomRealtimeEvents.MembersAdded(chatRoom.getId(), addedUserIds));
 
         log.info("创建群聊房间: {} (创建者: {}, 成员数: {})", 
                 chatRoom.getId(), creatorId, memberIds != null ? memberIds.size() : 1);
@@ -186,6 +193,7 @@ public class ChatRoomService {
 
         // 添加成员
         addMemberToRoom(roomId, userId, ChatRoomMember.MemberRole.MEMBER);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.MembersAdded(roomId, List.of(userId)));
 
         log.info("用户 {} 加入聊天室 {}", userId, roomId);
     }
@@ -213,6 +221,8 @@ public class ChatRoomService {
 
         // 移除成员
         chatRoomRepository.removeMember(roomId, userId);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.MembersRemoved(
+                roomId, List.of(userId), RoomRealtimeEvents.Reason.LEFT));
 
         log.info("用户 {} 退出聊天室 {}", userId, roomId);
     }
@@ -499,6 +509,7 @@ public class ChatRoomService {
         }
 
         addMemberToRoom(roomId, targetUserId, ChatRoomMember.MemberRole.MEMBER);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.MembersAdded(roomId, List.of(targetUserId)));
 
         log.info("用户 {} 邀请用户 {} 加入聊天室 {}", operatorId, targetUserId, roomId);
     }
@@ -583,6 +594,7 @@ public class ChatRoomService {
         }
 
         chatRoom = chatRoomRepository.save(chatRoom);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.RoomUpdated(roomId));
 
         log.info("更新聊天室 {} 信息 (操作者: {})", roomId, userId);
         return chatRoom;
@@ -595,6 +607,7 @@ public class ChatRoomService {
         chatRoom.setCustomBackgroundPreset(normalizedPreset);
         chatRoom.setCustomBackgroundUrl(null);
         chatRoom = chatRoomRepository.save(chatRoom);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.RoomUpdated(roomId));
         if (previousUrl != null && !previousUrl.isBlank()) {
             fileStorageService.deleteFile(previousUrl);
         }
@@ -608,6 +621,7 @@ public class ChatRoomService {
         String backgroundUrl = fileStorageService.uploadChatBackground(file);
         chatRoom.setCustomBackgroundUrl(backgroundUrl);
         chatRoom = chatRoomRepository.save(chatRoom);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.RoomUpdated(roomId));
         if (previousUrl != null && !previousUrl.isBlank()) {
             fileStorageService.deleteFile(previousUrl);
         }
@@ -629,6 +643,7 @@ public class ChatRoomService {
         String avatarUrl = fileStorageService.uploadAvatar(file);
         chatRoom.setAvatarUrl(avatarUrl);
         chatRoom = chatRoomRepository.save(chatRoom);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.RoomUpdated(roomId));
         if (previousUrl != null && !previousUrl.isBlank()) {
             fileStorageService.deleteFile(previousUrl);
         }
@@ -642,6 +657,7 @@ public class ChatRoomService {
         chatRoom.setCustomBackgroundPreset(null);
         chatRoom.setCustomBackgroundUrl(null);
         chatRoom = chatRoomRepository.save(chatRoom);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.RoomUpdated(roomId));
         if (previousUrl != null && !previousUrl.isBlank()) {
             fileStorageService.deleteFile(previousUrl);
         }
@@ -729,6 +745,8 @@ public class ChatRoomService {
 
         // 移除成员
         chatRoomRepository.removeMember(roomId, targetUserId);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.MembersRemoved(
+                roomId, List.of(targetUserId), RoomRealtimeEvents.Reason.KICKED));
 
         log.info("用户 {} 踢出了用户 {} (聊天室: {})", operatorId, targetUserId, roomId);
     }
@@ -822,7 +840,13 @@ public class ChatRoomService {
             throw new IllegalArgumentException("只有群主可以删除聊天室");
         }
 
+        // 删除前记下成员，删完就查不到了。
+        List<Long> memberIds = chatRoomRepository.findMemberUserIdsByRoomId(roomId);
         chatRoomRepository.delete(chatRoom);
+        if (memberIds != null && !memberIds.isEmpty()) {
+            eventPublisher.publishEvent(new RoomRealtimeEvents.MembersRemoved(
+                    roomId, List.copyOf(memberIds), RoomRealtimeEvents.Reason.DELETED));
+        }
 
         log.info("用户 {} 删除了聊天室 {}", userId, roomId);
     }

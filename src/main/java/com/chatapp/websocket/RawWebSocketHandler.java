@@ -128,7 +128,8 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         userSessions.computeIfAbsent(user.getId(),
                 id -> ConcurrentHashMap.newKeySet()).add(session);
         log.info("WebSocket connected: userId={}, sessionId={}", user.getId(), session.getId());
-        broadcastStatus(user.getId(), "ONLINE");
+        // 连上线时对外显示用户自己选的状态（离开/忙碌/隐身），不是一律"在线"。
+        broadcastStatus(user.getId(), user.chosenPresence().name());
     }
 
     @Override
@@ -348,11 +349,8 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             out.put("chatRoomId", snapshot.getRoomId());
             out.set("userIds", objectMapper.valueToTree(snapshot.getUserIds()));
             out.set("userNames", objectMapper.valueToTree(snapshot.getUserNames()));
+            // 只发聚合事件：客户端同时处理 typing_aggregated 和 typing，再补发一份旧格式只会重复处理。
             broadcastToRoom(snapshot.getRoomId(), out);
-
-            ObjectNode legacy = out.deepCopy();
-            legacy.put("type", "typing");
-            broadcastToRoom(snapshot.getRoomId(), legacy);
         }
     }
 
@@ -559,16 +557,35 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     }
 
     public void broadcastReadReceipt(Long chatRoomId, Long userId, Long lastReadMessageId) {
-        // 关了"已读回执"的人读消息不通知别人；他自己也收不到别人的已读（互惠）。
-        if (userPrivacyService.readReceiptsDisabled(userId)) {
-            return;
-        }
         ObjectNode envelope = objectMapper.createObjectNode();
         envelope.put("type", "read_receipt");
         envelope.put("chatRoomId", chatRoomId);
         envelope.put("userId", userId);
         if (lastReadMessageId != null) {
             envelope.put("lastReadMessageId", lastReadMessageId);
+        }
+        sendReadStateToOwnSessions(chatRoomId, userId, envelope);
+        sendReadReceiptToOthers(chatRoomId, userId, envelope);
+    }
+
+    /** 单条消息被读（滚动到可见区域时标记）：其他成员据此给这一条加已读数。 */
+    public void broadcastMessageRead(Long chatRoomId, Long userId, Long messageId) {
+        ObjectNode envelope = objectMapper.createObjectNode();
+        envelope.put("type", "read_receipt");
+        envelope.put("chatRoomId", chatRoomId);
+        envelope.put("userId", userId);
+        envelope.put("messageId", messageId);
+        sendReadStateToOwnSessions(chatRoomId, userId, envelope);
+        sendReadReceiptToOthers(chatRoomId, userId, envelope);
+    }
+
+    /**
+     * 关了"已读回执"的人读消息不通知别人；他自己也收不到别人的已读（互惠）。
+     * 只管发给别人的那份，本人其他设备的未读同步不受这个开关影响。
+     */
+    private void sendReadReceiptToOthers(Long chatRoomId, Long userId, ObjectNode envelope) {
+        if (userPrivacyService.readReceiptsDisabled(userId)) {
+            return;
         }
         List<Long> members = roomMembers(chatRoomId);
         Set<Long> optedOut = userPrivacyService.usersWithReadReceiptsDisabled(members);
@@ -577,6 +594,16 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
                 sendToUser(memberId, envelope);
             }
         });
+    }
+
+    /**
+     * 自己的其他设备也要知道"这个会话已经读过了"，否则手机上读完，电脑上的未读数还挂着。
+     * 未读数只发给本人，不广播给群里其他人。
+     */
+    private void sendReadStateToOwnSessions(Long chatRoomId, Long userId, ObjectNode envelope) {
+        ObjectNode own = envelope.deepCopy();
+        own.put("unreadCount", chatRoomRepository.findUnreadCount(chatRoomId, userId).orElse(0));
+        sendToUser(userId, own);
     }
 
     public void broadcastReactionChanged(Long chatRoomId,
@@ -605,12 +632,21 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     }
 
     public void broadcastMessageAction(Long chatRoomId, String action, Object payload) {
+        broadcastToRoom(chatRoomId, messageActionEnvelope(chatRoomId, action, payload));
+    }
+
+    /** 收藏是个人的：只同步到本人的各个设备，不能让群里其他人知道谁收藏了什么。 */
+    public void sendMessageActionToUser(Long userId, Long chatRoomId, String action, Object payload) {
+        sendToUser(userId, messageActionEnvelope(chatRoomId, action, payload));
+    }
+
+    private ObjectNode messageActionEnvelope(Long chatRoomId, String action, Object payload) {
         ObjectNode envelope = objectMapper.createObjectNode();
         envelope.put("type", "message_action");
         envelope.put("chatRoomId", chatRoomId);
         envelope.put("action", action);
         envelope.set("data", objectMapper.valueToTree(payload));
-        broadcastToRoom(chatRoomId, envelope);
+        return envelope;
     }
 
     public void broadcastAppUpdate(AppVersion version) {
@@ -718,6 +754,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (chatRoom.getCustomBackgroundUrl() != null) {
             room.put("customBackgroundUrl", chatRoom.getCustomBackgroundUrl());
         }
+        room.put("memberCount", chatRoomRepository.countChatRoomMembers(chatRoom.getId()));
 
         ObjectNode envelope = objectMapper.createObjectNode();
         envelope.put("type", "room_updated");
@@ -732,6 +769,29 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         envelope.put("chatRoomId", chatRoomId);
         envelope.set("state", objectMapper.valueToTree(state));
         return sendToUser(userId, envelope);
+    }
+
+    /**
+     * 通知用户自己的所有设备：你加入了 / 离开了某个会话（被踢、主动退出、群被解散）。
+     * 被移出的人已经不在成员表里，房间广播收不到，只能单独发。
+     */
+    public void sendRoomMembershipChanged(Long userId, Long chatRoomId, boolean added, String reason) {
+        ObjectNode envelope = objectMapper.createObjectNode();
+        envelope.put("type", added ? "room_membership_added" : "room_membership_removed");
+        envelope.put("chatRoomId", chatRoomId);
+        if (reason != null) {
+            envelope.put("reason", reason);
+        }
+        sendToUser(userId, envelope);
+    }
+
+    /** 用户在资料页手动改了状态：在线时立刻告诉其他人。不在线的人对外本来就是离线。 */
+    public void broadcastPresenceChanged(Long userId, User.OnlineStatus status) {
+        Set<WebSocketSession> sessions = userSessions.get(userId);
+        if (status == null || sessions == null || sessions.isEmpty()) {
+            return;
+        }
+        broadcastStatus(userId, status.name());
     }
 
     private void broadcastMessage(Message saved,
