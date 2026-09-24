@@ -523,8 +523,10 @@ public class MessageService {
         if (!chatRoomRepository.isMember(roomId, userId)) {
             throw new IllegalArgumentException("您不是该聊天室的成员");
         }
+        // 控制器在事务外把消息转成 DTO（open-in-view 关闭），懒加载字段要在这里初始化，
+        // 否则置顶/取消置顶/获取置顶列表都会因 LazyInitializationException 失败。
         return pinnedMessageRepository.findByChatRoomIdOrderByCreatedAtDesc(roomId).stream()
-                .map(ChatRoomPinnedMessage::getMessage)
+                .map(pin -> initializeForDto(pin.getMessage()))
                 .toList();
     }
 
@@ -562,7 +564,7 @@ public class MessageService {
     }
 
     /**
-     * 收藏列表里的消息是经由 MessageStar 关联加载的，@提及集合和被回复消息不会随实体图一起取回；
+     * 收藏/置顶列表里的消息是经由关联实体加载的，@提及集合和被回复消息不会随实体图一起取回；
      * open-in-view 关闭后控制器转 DTO 时会抛 LazyInitializationException，所以在事务内先初始化。
      */
     private Message initializeForDto(Message message) {
