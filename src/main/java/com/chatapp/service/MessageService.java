@@ -448,20 +448,22 @@ public class MessageService {
             return null;
         }
 
-        if (sharesReadReceipts(userId)
-                && readReceiptRepository != null
-                && readReceiptRepository.findByMessageIdAndUserId(messageId, userId).isEmpty()) {
+        boolean sharesReceipts = sharesReadReceipts(userId);
+        if (readReceiptRepository != null) {
+            // 回执行也是"这条我读过了"的唯一记录：已经读过就别再减一次未读数，
+            // 否则会把别的未读消息也"吞"掉。关了已读回执的人同样要记，只是不对外公开
+            // （已读名单会过滤掉他们，消息的已读状态/已读数也不变）。
+            if (readReceiptRepository.findByMessageIdAndUserId(messageId, userId).isPresent()) {
+                return null;
+            }
             var receipt = new com.chatapp.entity.MessageReadReceipt();
             receipt.setMessage(message);
             receipt.setUser(userRepository.findById(userId)
                     .orElseThrow(() -> new IllegalArgumentException("用户不存在")));
             readReceiptRepository.save(receipt);
+        }
+        if (sharesReceipts) {
             messageRepository.markAsRead(messageId, userId);
-        } else if (sharesReadReceipts(userId) && readReceiptRepository == null) {
-            messageRepository.markAsRead(messageId, userId);
-        } else {
-            // 已经读过：再减一次未读数就把别的未读消息也"吞"掉了。
-            return null;
         }
         chatRoomRepository.markMessageReadForMember(message.getChatRoom().getId(), userId, messageId);
         

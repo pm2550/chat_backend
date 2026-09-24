@@ -13,6 +13,7 @@ import com.chatapp.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
+import org.springframework.context.ApplicationEventPublisher;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
@@ -39,6 +40,7 @@ class ChatRoomServicePrivacyTest {
     @Mock private ChatRoomBotRepository chatRoomBotRepository;
     @Mock private FriendshipRepository friendshipRepository;
     @Mock private UserPrivacyService userPrivacyService;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks private ChatRoomService chatRoomService;
 

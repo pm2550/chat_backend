@@ -67,9 +67,11 @@ turn:
   shared-secret: test-turn-secret
   credential-ttl-seconds: 1800
 
+# Shared test context: effectively unlimited so the suite doesn't fail once it
+# registers more than N users within a minute. RateLimitTest has its own limits.
 rate-limit:
-  requests-per-minute: 1000
-  auth-requests-per-minute: 100
+  requests-per-minute: 100000
+  auth-requests-per-minute: 100000
 
 llm:
   openai:

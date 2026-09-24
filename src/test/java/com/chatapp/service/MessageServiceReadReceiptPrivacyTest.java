@@ -25,6 +25,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
@@ -63,12 +64,19 @@ class MessageServiceReadReceiptPrivacyTest {
         when(messageRepository.findById(42L)).thenReturn(Optional.of(message));
         when(chatRoomRepository.isMember(5L, 2L)).thenReturn(true);
         when(userPrivacyService.readReceiptsDisabled(2L)).thenReturn(true);
+        when(readReceiptRepository.findByMessageIdAndUserId(42L, 2L))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(new MessageReadReceipt()));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L)));
 
         messageService.markMessageAsRead(42L, 2L);
+        // 同一条再读一次：不能再减一次自己的未读数。
+        Message second = messageService.markMessageAsRead(42L, 2L);
 
-        verify(readReceiptRepository, never()).save(any(MessageReadReceipt.class));
+        // 私有的回执行照记（用来判断读过没有），但消息对外的已读状态/已读数不变。
         verify(messageRepository, never()).markAsRead(anyLong(), anyLong());
         verify(chatRoomRepository).markMessageReadForMember(5L, 2L, 42L);
+        assertThat(second).isNull();
     }
 
     @Test
