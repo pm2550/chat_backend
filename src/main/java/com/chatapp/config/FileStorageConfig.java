@@ -47,6 +47,11 @@ public class FileStorageConfig {
     private String backgroundDir = "backgrounds";
 
     /**
+     * 贴纸包图片存储目录。贴纸按贴纸包可见性授权，和聊天附件的消息 ACL 分开。
+     */
+    private String stickerDir = "stickers";
+
+    /**
      * Workspace file storage provider. LOCAL keeps current disk behavior;
      * S3/MINIO stores workspace objects in an S3-compatible bucket.
      */
@@ -182,6 +187,13 @@ public class FileStorageConfig {
      */
     public String getFullBackgroundDir() {
         return resolveChildDir(getFullUploadDir(), backgroundDir);
+    }
+
+    /**
+     * 获取完整的贴纸图片目录路径
+     */
+    public String getFullStickerDir() {
+        return resolveChildDir(getFullUploadDir(), stickerDir);
     }
 
     private String resolveDir(String dir) {

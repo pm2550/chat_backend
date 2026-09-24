@@ -1,10 +1,8 @@
 package com.chatapp.controller;
 
-import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
-import com.chatapp.repository.ChatRoomRepository;
-import com.chatapp.repository.MessageRepository;
 import com.chatapp.service.AuditLogService;
+import com.chatapp.service.FileAccessService;
 import com.chatapp.service.FileStorageService;
 import com.chatapp.service.UserService;
 import lombok.RequiredArgsConstructor;
@@ -17,7 +15,6 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
-import java.util.Optional;
 
 /**
  * 文件访问控制器
@@ -29,8 +26,7 @@ import java.util.Optional;
 public class FileController {
 
     private final FileStorageService fileStorageService;
-    private final MessageRepository messageRepository;
-    private final ChatRoomRepository chatRoomRepository;
+    private final FileAccessService fileAccessService;
     private final UserService userService;
     private final AuditLogService auditLogService;
 
@@ -90,6 +86,34 @@ public class FileController {
         return getMessageScopedFile(fileName, "/api/files/image-gen/" + fileName, "image-gen", auth);
     }
 
+    /**
+     * 获取贴纸图。能看到贴纸包（公开 / 自己的 / 已订阅）或能看到引用它的贴纸消息即可访问。
+     * 贴纸是反复展示的素材，不逐张写下载审计。
+     */
+    @GetMapping("/sticker/{fileName}")
+    public ResponseEntity<ByteArrayResource> getStickerFile(
+            @PathVariable String fileName,
+            Authentication auth) {
+        if (auth == null || auth.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        User currentUser = userService.findUserByUsername(auth.getName());
+        FileAccessService.Decision decision =
+                fileAccessService.authorize("/api/files/sticker/" + fileName, currentUser.getId());
+        if (!decision.granted()) {
+            return denied(decision);
+        }
+        try {
+            byte[] fileData = fileStorageService.getFile("sticker", fileName);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType(getContentType(fileName)))
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + fileName + "\"")
+                    .body(new ByteArrayResource(fileData));
+        } catch (IOException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
     private ResponseEntity<ByteArrayResource> getMessageScopedFile(
             String fileName,
             String fileUrl,
@@ -100,24 +124,23 @@ public class FileController {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
             }
             User currentUser = userService.findUserByUsername(auth.getName());
-            Optional<Message> message = messageRepository.findFirstByFileUrlAndIsDeletedFalse(fileUrl);
-            if (message.isEmpty()) {
-                return ResponseEntity.notFound().build();
-            }
-            Long roomId = message.get().getChatRoom().getId();
-            if (!chatRoomRepository.isMember(roomId, currentUser.getId())) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+            FileAccessService.Decision decision = fileAccessService.authorize(fileUrl, currentUser.getId());
+            if (!decision.granted()) {
+                return denied(decision);
             }
 
             byte[] fileData = fileStorageService.getFile(storageType, fileName);
             ByteArrayResource resource = new ByteArrayResource(fileData);
-            auditLogService.record(
-                    currentUser,
-                    "FILE_DOWNLOAD",
-                    "MESSAGE",
-                    message.get().getId(),
-                    roomId,
-                    fileName);
+            if (decision.grantedByMessage()) {
+                // 记录实际放行的那条消息（可能是转发副本），而不是全库第一条引用。
+                auditLogService.record(
+                        currentUser,
+                        "FILE_DOWNLOAD",
+                        "MESSAGE",
+                        decision.messageId(),
+                        decision.roomId(),
+                        fileName);
+            }
             
             // 确定文件类型
             String contentType = getContentType(fileName);
@@ -129,6 +152,12 @@ public class FileController {
         } catch (IOException e) {
             return ResponseEntity.notFound().build();
         }
+    }
+
+    private ResponseEntity<ByteArrayResource> denied(FileAccessService.Decision decision) {
+        return decision.status() == FileAccessService.Status.FORBIDDEN
+                ? ResponseEntity.status(HttpStatus.FORBIDDEN).build()
+                : ResponseEntity.notFound().build();
     }
 
     /**

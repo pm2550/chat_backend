@@ -2,6 +2,7 @@ package com.chatapp.service;
 
 import com.chatapp.entity.Message;
 import com.chatapp.repository.MessageRepository;
+import com.chatapp.repository.StickerPackRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -24,12 +25,13 @@ import static org.mockito.Mockito.*;
 class MessageRetentionServiceTest {
     @Mock private MessageRepository messageRepository;
     @Mock private FileStorageService fileStorageService;
+    @Mock private StickerPackRepository stickerPackRepository;
 
     private MessageRetentionService service;
 
     @BeforeEach
     void setUp() {
-        service = new MessageRetentionService(messageRepository, fileStorageService);
+        service = new MessageRetentionService(messageRepository, fileStorageService, stickerPackRepository);
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "retentionDays", 30L);
         ReflectionTestUtils.setField(service, "batchSize", 10);
@@ -95,13 +97,63 @@ class MessageRetentionServiceTest {
     }
 
     @Test
+    void cleanupExpiredMessagesKeepsFilesStillReferencedByForwardedCopiesOrStickerPacks() throws Exception {
+        Message forwardedSource = new Message();
+        forwardedSource.setId(3L);
+        forwardedSource.setFileUrl("/api/files/chat/forwarded.png");
+        Message legacySticker = new Message();
+        legacySticker.setId(4L);
+        legacySticker.setFileUrl("/api/files/chat/legacy-sticker.png");
+
+        when(messageRepository.findExpiredForRetention(any(LocalDateTime.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(forwardedSource, legacySticker)))
+                .thenReturn(new PageImpl<>(List.of()));
+        when(messageRepository.existsActiveMessageReferencingFileUrl("/api/files/chat/forwarded.png"))
+                .thenReturn(true);
+        when(stickerPackRepository.existsReferencingUrl("/api/files/chat/legacy-sticker.png"))
+                .thenReturn(true);
+        when(fileStorageService.listExpiredImageGenFileUrls(any(LocalDateTime.class), anyInt())).thenReturn(List.of());
+
+        MessageRetentionService.CleanupResult result = service.cleanupExpiredMessages();
+
+        assertThat(result.expiredMessages()).isEqualTo(2);
+        assertThat(result.deletedFiles()).isZero();
+        assertThat(forwardedSource.getIsDeleted()).isTrue();
+        verify(fileStorageService, never()).deleteFile(anyString());
+    }
+
+    @Test
+    void cleanupExpiredMessagesChecksReferencesOnlyAfterTheWholeBatchIsExpired() throws Exception {
+        Message first = new Message();
+        first.setId(5L);
+        first.setFileUrl("/api/files/chat/shared.png");
+        Message second = new Message();
+        second.setId(6L);
+        second.setFileUrl("/api/files/chat/shared.png");
+
+        when(messageRepository.findExpiredForRetention(any(LocalDateTime.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(first, second)))
+                .thenReturn(new PageImpl<>(List.of()));
+        when(messageRepository.existsActiveMessageReferencingFileUrl("/api/files/chat/shared.png"))
+                .thenAnswer(invocation -> !Boolean.TRUE.equals(first.getIsDeleted())
+                        || !Boolean.TRUE.equals(second.getIsDeleted()));
+        when(fileStorageService.deleteFile("/api/files/chat/shared.png")).thenReturn(true);
+        when(fileStorageService.listExpiredImageGenFileUrls(any(LocalDateTime.class), anyInt())).thenReturn(List.of());
+
+        MessageRetentionService.CleanupResult result = service.cleanupExpiredMessages();
+
+        assertThat(result.deletedFiles()).isEqualTo(1);
+        verify(fileStorageService, times(1)).deleteFile("/api/files/chat/shared.png");
+    }
+
+    @Test
     void cleanupExpiredMessagesCanBeDisabled() throws IOException {
         ReflectionTestUtils.setField(service, "enabled", false);
 
         MessageRetentionService.CleanupResult result = service.cleanupExpiredMessages();
 
         assertThat(result.disabled()).isTrue();
-        verifyNoInteractions(messageRepository, fileStorageService);
+        verifyNoInteractions(messageRepository, fileStorageService, stickerPackRepository);
     }
 
     @Test

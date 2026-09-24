@@ -102,6 +102,7 @@ public class AgentVisionAttachmentService {
         return "chat".equals(type)
                 || "image-gen".equals(type)
                 || "background".equals(type)
+                || "sticker".equals(type)
                 || "avatar".equals(type)
                 || "workspace".equals(type);
     }
