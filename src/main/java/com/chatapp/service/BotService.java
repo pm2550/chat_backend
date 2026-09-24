@@ -186,8 +186,9 @@ public class BotService {
             Long ownerId = bot.getCreatedBy() != null ? bot.getCreatedBy().getId() : null;
             applyCredentialSelection(bot, ownerId, request.getProviderCredentialId(), request.getApiKey());
         }
-        if (request.getModelName() != null) bot.setModelName(request.getModelName());
-        if (request.getSystemPrompt() != null) bot.setSystemPrompt(request.getSystemPrompt());
+        // null = 不改；空串 = 清空（编辑器清掉输入框时发空串，而不是 null）。
+        if (request.getModelName() != null) bot.setModelName(blankToNull(request.getModelName().trim()));
+        if (request.getSystemPrompt() != null) bot.setSystemPrompt(blankToNull(request.getSystemPrompt()));
         if (request.getTemperature() != null) bot.setTemperature(request.getTemperature());
         if (request.getMaxTokens() != null) bot.setMaxTokens(request.getMaxTokens());
         if (request.getReasoningEffort() != null) bot.setReasoningEffort(request.getReasoningEffort());

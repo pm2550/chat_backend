@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -265,6 +266,21 @@ public class LLMService {
         msgNode.set("content", objectMapper.valueToTree(msg.getContent()));
     }
 
+    /**
+     * Claude 4.7 起（Opus 4.7/4.8、Opus 5、Sonnet 5、Fable、Mythos…）移除了 temperature 等采样参数，
+     * 传了直接 400。只对明确支持的旧型号（Claude 3.x、Claude 4 ~ 4.6 各系列）发送；
+     * 不认识的新型号宁可不发。前端 bot_edit_screen 的滑杆显示规则与此保持一致。
+     */
+    static boolean claudeAcceptsTemperature(String model) {
+        if (model == null || model.isBlank()) {
+            return false;
+        }
+        String normalized = model.trim().toLowerCase(Locale.ROOT);
+        normalized = normalized.substring(normalized.lastIndexOf('/') + 1);
+        return normalized.matches(
+                "^claude-(?:3[-.].*|(?:opus|sonnet|haiku)-4(?:-[0-6])?(?:[-@](?:\\d{8}|latest))?)$");
+    }
+
     private boolean usesOpenAiReasoningParameters(BotConfig config, String model) {
         if (config.getLlmProvider() != BotConfig.LLMProvider.OPENAI || model == null) {
             return false;
@@ -360,6 +376,11 @@ public class LLMService {
             ObjectNode requestBody = objectMapper.createObjectNode();
             requestBody.put("model", model);
             requestBody.put("max_tokens", config.getMaxTokens() != null ? config.getMaxTokens() : 2048);
+            if (claudeAcceptsTemperature(model)) {
+                // Claude 的 temperature 取值 0~1（编辑器滑杆是 0~2，超出部分按 1 处理）。
+                double temperature = config.getTemperature() != null ? config.getTemperature() : 0.7;
+                requestBody.put("temperature", Math.max(0.0, Math.min(1.0, temperature)));
+            }
 
             // Extract system message if present
             String systemMessage = null;
