@@ -13,6 +13,7 @@ import com.chatapp.service.MessageReactionService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.PushNotificationService;
 import com.chatapp.service.RoomTypingAggregator;
+import com.chatapp.service.UserPresenceService;
 import com.chatapp.service.UserPrivacyService;
 import com.chatapp.service.tool.PendingClientCallRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -20,6 +21,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -82,6 +85,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     private final PendingClientCallRegistry pendingClientCallRegistry;
     private final MessageReactionService messageReactionService;
     private final UserPrivacyService userPrivacyService;
+    private final UserPresenceService userPresenceService;
 
     /** 客户端自带的消息临时 id 最长多少字符，超出的不回显。 */
     private static final int MAX_CLIENT_MESSAGE_ID_LENGTH = 64;
@@ -111,6 +115,12 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
      */
     private final Map<Long, Set<WebSocketSession>> backgroundSessions = new ConcurrentHashMap<>();
 
+    /**
+     * 每个用户一把锁，让"看连接表 → 写 users.online_status"成为一步：多台设备同时连上/断开时，
+     * 最后落库的一定是按最终连接表算出来的状态，而不是某个过时的中间态。
+     */
+    private final Map<Long, Object> presenceLocks = new ConcurrentHashMap<>();
+
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         User user = (User) session.getAttributes().get(ATTR_USER);
@@ -125,11 +135,19 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             log.info("WebSocket background connected: userId={}, sessionId={}", user.getId(), session.getId());
             return;
         }
-        userSessions.computeIfAbsent(user.getId(),
-                id -> ConcurrentHashMap.newKeySet()).add(session);
+        boolean[] first = {false};
+        // compute 保证和 removeSession 的"删空即摘掉"互斥，不会把连接加进一个刚被摘掉的集合里。
+        userSessions.compute(user.getId(), (id, sessions) -> {
+            Set<WebSocketSession> next = sessions != null ? sessions : ConcurrentHashMap.newKeySet();
+            first[0] = next.isEmpty();
+            next.add(session);
+            return next;
+        });
         log.info("WebSocket connected: userId={}, sessionId={}", user.getId(), session.getId());
-        // 连上线时对外显示用户自己选的状态（离开/忙碌/隐身），不是一律"在线"。
-        broadcastStatus(user.getId(), user.chosenPresence().name());
+        if (first[0]) {
+            // 连上线时对外显示用户自己选的状态（离开/忙碌/隐身），不是一律"在线"。
+            broadcastStatus(user.getId(), syncPresence(user.getId()).name());
+        }
     }
 
     @Override
@@ -151,14 +169,56 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             }
             return;
         }
-        Set<WebSocketSession> sessions = userSessions.get(userId);
-        if (sessions == null || !sessions.remove(session)) {
-            return;
-        }
-        if (sessions.isEmpty()) {
-            userSessions.remove(userId, sessions);
+        boolean[] last = {false};
+        userSessions.computeIfPresent(userId, (id, sessions) -> {
+            if (!sessions.remove(session) || !sessions.isEmpty()) {
+                return sessions;
+            }
+            last[0] = true;
+            return null;
+        });
+        if (last[0]) {
+            syncPresence(userId);
             broadcastStatus(userId, "OFFLINE");
         }
+    }
+
+    /** 这个用户现在有没有前台连接（后台常驻连接不算在线）。 */
+    public boolean hasForegroundSession(Long userId) {
+        Set<WebSocketSession> sessions = userSessions.get(userId);
+        return sessions != null && !sessions.isEmpty();
+    }
+
+    /**
+     * 按连接表把 users.online_status 落库：有前台连接就是他选的状态，没有就是离线（并记最后在线时间）。
+     * 只在"从无到有 / 从有到无"时调用；每次都重新看连接表，所以调用顺序乱了也不会写错。
+     *
+     * @return 写入后的对外状态
+     */
+    public User.OnlineStatus syncPresence(Long userId) {
+        synchronized (presenceLocks.computeIfAbsent(userId, id -> new Object())) {
+            boolean online = hasForegroundSession(userId);
+            try {
+                if (online) {
+                    return userPresenceService.markConnected(userId);
+                }
+                userPresenceService.markDisconnected(userId);
+            } catch (RuntimeException e) {
+                // 落库失败不能影响连接本身；下次连上/断开会再写。
+                log.warn("Failed to persist presence for userId={}: {}", userId, e.getMessage());
+            }
+            return online ? User.OnlineStatus.ONLINE : User.OnlineStatus.OFFLINE;
+        }
+    }
+
+    /**
+     * 服务刚启动时没有任何连接，库里的"在线"都是上次运行留下的，一次性清掉。
+     * 启动过程中已经连上来的（web 服务器比这个事件早开）再按连接表补写回去。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void resetPresenceOnStartup() {
+        userPresenceService.resetAllOffline();
+        userSessions.keySet().forEach(this::syncPresence);
     }
 
     static boolean isBackground(WebSocketSession session) {
@@ -842,9 +902,14 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     /** 在线时切换"显示在线状态"，立刻让别人看到他上线/离线，而不是等下次重连。 */
     @TransactionalEventListener(fallbackExecution = true)
     public void onPresenceVisibilityChanged(UserPrivacyService.PresenceVisibilityChanged event) {
-        if (userSessions.containsKey(event.userId())) {
-            sendStatus(event.userId(), event.visible() ? "ONLINE" : "OFFLINE");
+        if (!hasForegroundSession(event.userId())) {
+            return;
         }
+        // 重新显示时用他选的状态（离开/忙碌/隐身），和连上线时一致。
+        String status = event.visible()
+                ? userPresenceService.chosenPresence(event.userId()).name()
+                : "OFFLINE";
+        sendStatus(event.userId(), status);
     }
 
     private void sendStatus(Long userId, String status) {

@@ -3,8 +3,10 @@ package com.chatapp.controller;
 import com.chatapp.dto.UserDto;
 import com.chatapp.entity.User;
 import com.chatapp.service.TokenBlacklistService;
+import com.chatapp.service.UserPresenceService;
 import com.chatapp.service.UserService;
 import com.chatapp.util.JwtUtils;
+import com.chatapp.websocket.RawWebSocketHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,6 +39,12 @@ class AuthControllerTest {
 
     @Mock
     private TokenBlacklistService tokenBlacklistService;
+
+    @Mock
+    private UserPresenceService userPresenceService;
+
+    @Mock
+    private RawWebSocketHandler rawWebSocketHandler;
 
     @InjectMocks
     private AuthController authController;
@@ -77,7 +85,9 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.data.user.username").value("testuser"));
 
         verify(userService).authenticate(any(UserDto.LoginRequest.class));
-        verify(userService).updateOnlineStatus(eq(1L), eq(User.OnlineStatus.ONLINE));
+        // 登录本身不让人"在线"：实时连接建立时才上线。
+        verifyNoInteractions(rawWebSocketHandler);
+        verify(userPresenceService, never()).markConnected(anyLong());
     }
 
     @Test
@@ -92,14 +102,16 @@ class AuthControllerTest {
         when(jwtUtils.generateAccessToken("testuser")).thenReturn("access-token-123");
         when(jwtUtils.generateRefreshToken("testuser")).thenReturn("refresh-token-456");
         when(userService.findByUsername("testuser")).thenReturn(testUser);
+        when(userPresenceService.chosenPresence(1L)).thenReturn(User.OnlineStatus.BUSY);
 
         mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(loginRequest)))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                // 返回给本人的是他选的状态，而不是库里"有没有连着"的状态。
+                .andExpect(jsonPath("$.data.user.onlineStatus").value("BUSY"));
 
-        verify(userService).updateOnlineStatus(eq(1L), eq(User.OnlineStatus.BUSY));
-        verify(userService, never()).updateOnlineStatus(eq(1L), eq(User.OnlineStatus.ONLINE));
+        verify(userPresenceService, never()).markConnected(anyLong());
     }
 
     @Test
@@ -193,6 +205,7 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.code").value(200));
 
         verify(tokenBlacklistService).blacklistToken("token-id-1", 3600000L);
-        verify(userService).updateOnlineStatus(eq(1L), eq(User.OnlineStatus.OFFLINE));
+        // 按连接表同步：别的设备还连着就仍在线，否则离线。
+        verify(rawWebSocketHandler).syncPresence(1L);
     }
 }

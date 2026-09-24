@@ -6,8 +6,10 @@ import com.chatapp.entity.User;
 import com.chatapp.exception.ClientTooOldException;
 import com.chatapp.exception.PasswordUpgradeRequiredException;
 import com.chatapp.service.TokenBlacklistService;
+import com.chatapp.service.UserPresenceService;
 import com.chatapp.service.UserService;
 import com.chatapp.util.JwtUtils;
+import com.chatapp.websocket.RawWebSocketHandler;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +31,8 @@ public class AuthController {
     private final UserService userService;
     private final JwtUtils jwtUtils;
     private final TokenBlacklistService tokenBlacklistService;
+    private final UserPresenceService userPresenceService;
+    private final RawWebSocketHandler rawWebSocketHandler;
 
     @PostMapping("/login")
     public ResponseEntity<ApiResponse<UserDto.JwtResponse>> login(@Valid @RequestBody UserDto.LoginRequest request) {
@@ -37,9 +41,8 @@ public class AuthController {
             String accessToken = jwtUtils.generateAccessToken(authenticated.getUsername());
             String refreshToken = jwtUtils.generateRefreshToken(authenticated.getUsername());
 
-            // 恢复用户自己选的状态（离开/忙碌/隐身），不要每次登录都改回在线。
-            userService.updateOnlineStatus(authenticated.getId(), authenticated.chosenPresence());
-            UserDto user = userService.findByUsername(authenticated.getUsername());
+            // 登录不改在线状态：只登录、没打开实时连接的人不算在线（连接建立时才上线）。
+            UserDto user = selfView(userService.findByUsername(authenticated.getUsername()));
 
             UserDto.JwtResponse jwtResponse = new UserDto.JwtResponse(accessToken, refreshToken, user);
             return ResponseEntity.ok(ApiResponse.success("登录成功", jwtResponse));
@@ -87,7 +90,8 @@ public class AuthController {
 
             String username = jwtUtils.getUserNameFromJwtToken(jwt);
             UserDto user = userService.findByUsername(username);
-            userService.updateOnlineStatus(user.getId(), User.OnlineStatus.OFFLINE);
+            // 退出的这台设备随后会断开连接；别的设备还连着就仍然在线，否则现在就是离线。
+            rawWebSocketHandler.syncPresence(user.getId());
 
             SecurityContextHolder.clearContext();
             return ResponseEntity.ok(ApiResponse.<Void>success("登出成功", null));
@@ -121,7 +125,7 @@ public class AuthController {
             // 就不会因为距离上次输密码满了 N 天而被强制重新登录。
             // 旧 token 不拉黑——客户端可能并发发起多次续期，拉黑会误杀后到的那次。
             String newRefreshToken = jwtUtils.generateRefreshToken(username);
-            UserDto user = userService.findByUsername(username);
+            UserDto user = selfView(userService.findByUsername(username));
 
             UserDto.JwtResponse jwtResponse = new UserDto.JwtResponse(newAccessToken, newRefreshToken, user);
             return ResponseEntity.ok(ApiResponse.success("令牌刷新成功", jwtResponse));
@@ -140,7 +144,7 @@ public class AuthController {
                     return ResponseEntity.badRequest().body(ApiResponse.badRequest("令牌已失效"));
                 }
                 String username = jwtUtils.getUserNameFromJwtToken(jwt);
-                UserDto user = userService.findByUsername(username);
+                UserDto user = selfView(userService.findByUsername(username));
                 return ResponseEntity.ok(ApiResponse.success("令牌有效", user));
             } else {
                 return ResponseEntity.badRequest().body(ApiResponse.badRequest("无效的令牌"));
@@ -148,6 +152,17 @@ public class AuthController {
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(ApiResponse.badRequest("令牌验证失败"));
         }
+    }
+
+    /**
+     * 返回给本人的资料里，状态是他自己选的（在线/离开/忙碌/隐身）。库里的 online_status
+     * 表示"现在有没有连着"，登录、续期时连接往往还没建立，不能当成"我的状态"。
+     */
+    private UserDto selfView(UserDto user) {
+        if (user != null && user.getId() != null) {
+            user.setOnlineStatus(userPresenceService.chosenPresence(user.getId()));
+        }
+        return user;
     }
 
     @GetMapping("/check-username")

@@ -74,7 +74,7 @@ public class UserProfileService {
         if (request.getOnlineStatus() != null && !request.getOnlineStatus().trim().isEmpty()) {
             try {
                 User.OnlineStatus status = User.OnlineStatus.valueOf(request.getOnlineStatus().toUpperCase());
-                user.setOnlineStatus(status);
+                // 只记用户的选择；对外的 online_status 由实时连接决定（见 UserPresenceService）。
                 user.setPresenceStatus(status);
             } catch (IllegalArgumentException e) {
                 throw new RuntimeException("无效的在线状态: " + request.getOnlineStatus());
@@ -138,19 +138,14 @@ public class UserProfileService {
     }
 
     /**
-     * 更新用户在线状态
+     * 记下用户手动选的状态（在线/离开/忙碌/隐身）。对外显示的 online_status 不在这里改：
+     * 它只由前台连接决定，调用方随后按连接表同步（没连着的人选了"在线"也仍是离线）。
      */
     public User updateOnlineStatus(Long userId, User.OnlineStatus status) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("用户不存在"));
 
-        user.setOnlineStatus(status);
-        // 记住用户的选择，下次登录按它恢复。
         user.setPresenceStatus(status);
-        if (status == User.OnlineStatus.OFFLINE) {
-            user.setLastSeen(LocalDateTime.now());
-        }
-
         return userRepository.save(user);
     }
 

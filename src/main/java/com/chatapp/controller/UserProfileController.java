@@ -8,6 +8,8 @@ import com.chatapp.service.UserPrivacyService;
 import com.chatapp.service.UserProfileService;
 import com.chatapp.service.UserService;
 import com.chatapp.websocket.RawWebSocketHandler;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -34,6 +36,7 @@ public class UserProfileController {
     private final UserService userService;
     private final UserPrivacyService userPrivacyService;
     private final RawWebSocketHandler rawWebSocketHandler;
+    private final ObjectMapper objectMapper;
 
     /**
      * 获取当前用户资料
@@ -47,7 +50,7 @@ public class UserProfileController {
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
-            response.put("data", user);
+            response.put("data", selfView(user));
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             Map<String, Object> response = new HashMap<>();
@@ -68,11 +71,15 @@ public class UserProfileController {
             UserDto currentUser = userService.findByUsername(auth.getName());
             Long userId = currentUser.getId();
             User updatedUser = userProfileService.updateProfile(userId, request);
+            if (request.getOnlineStatus() != null && !request.getOnlineStatus().isBlank()) {
+                rawWebSocketHandler.syncPresence(userId);
+                rawWebSocketHandler.broadcastPresenceChanged(userId, updatedUser.chosenPresence());
+            }
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "资料更新成功");
-            response.put("data", updatedUser);
+            response.put("data", selfView(updatedUser));
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             Map<String, Object> response = new HashMap<>();
@@ -145,13 +152,15 @@ public class UserProfileController {
             UserDto currentUser = userService.findByUsername(auth.getName());
             Long userId = currentUser.getId();
             User.OnlineStatus onlineStatus = User.OnlineStatus.valueOf(status.toUpperCase());
-            User updatedUser = userProfileService.updateOnlineStatus(userId, onlineStatus);
-            rawWebSocketHandler.broadcastPresenceChanged(userId, updatedUser.getOnlineStatus());
+            userProfileService.updateOnlineStatus(userId, onlineStatus);
+            // 在线时库里和别人看到的都换成新选的状态；没连着的人仍是离线。
+            rawWebSocketHandler.syncPresence(userId);
+            rawWebSocketHandler.broadcastPresenceChanged(userId, onlineStatus);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("message", "状态更新成功");
-            response.put("data", Map.of("onlineStatus", updatedUser.getOnlineStatus()));
+            response.put("data", Map.of("onlineStatus", onlineStatus));
             return ResponseEntity.ok(response);
         } catch (IllegalArgumentException e) {
             Map<String, Object> response = new HashMap<>();
@@ -318,6 +327,16 @@ public class UserProfileController {
             response.put("message", e.getMessage());
             return ResponseEntity.badRequest().body(response);
         }
+    }
+
+    /**
+     * 自己看自己：状态显示自己选的（在线/离开/忙碌/隐身）。库里的 online_status 表示"现在有没有连着"，
+     * 刚打开 App、连接还没建立时它是离线，不能拿来当"我的状态"。
+     */
+    private Map<String, Object> selfView(User user) {
+        Map<String, Object> data = objectMapper.convertValue(user, new TypeReference<Map<String, Object>>() { });
+        data.put("onlineStatus", user.chosenPresence());
+        return data;
     }
 
     /**
