@@ -1,6 +1,7 @@
 package com.chatapp.service;
 
 import com.chatapp.dto.BotDto;
+import com.chatapp.dto.MessageDto;
 import com.chatapp.entity.*;
 import com.chatapp.repository.AgentTaskRepository;
 import com.chatapp.repository.BotAllowedUserRepository;
@@ -476,7 +477,11 @@ public class BotService {
                     // External bridge: if this bot has an active webhook subscription, forward
                     // the event to the external bot (it replies via the inbound gateway) and
                     // skip the in-app LLM entirely.
-                    if (botWebhookService.dispatchIfSubscribed(config, chatRoomId, safeContent, senderId)) {
+                    // 外部 webhook 拿不到匿名发送者的真实 id。
+                    Long webhookSenderId = sourceMessage != null && Boolean.TRUE.equals(sourceMessage.getIsAnonymous())
+                            ? null
+                            : senderId;
+                    if (botWebhookService.dispatchIfSubscribed(config, chatRoomId, safeContent, webhookSenderId)) {
                         log.info("机器人 {} 已转发到外部 webhook (聊天室 {})", config.getBotName(), chatRoomId);
                         continue;
                     }
@@ -777,10 +782,9 @@ public class BotService {
         if (previous == null || previous.getContent() == null || previous.getContent().isBlank()) {
             return cleanMessage + "\n没有找到明确前文时，也要用阿雷/Kirara 风格自然接话，不要问“有什么可以帮你”。";
         }
-        String speaker = previous.getSender() != null
-                ? previous.getSender().getDisplayName() != null && !previous.getSender().getDisplayName().isBlank()
-                    ? previous.getSender().getDisplayName()
-                    : previous.getSender().getUsername()
+        // 匿名发言只报匿名名，不能让机器人知道（或说出）背后是谁。
+        String speaker = previous.getSender() != null || Boolean.TRUE.equals(previous.getIsAnonymous())
+                ? MessageDto.publicSenderName(previous)
                 : "前一个用户";
         return MENTION_ONLY_MARKER + """
                 

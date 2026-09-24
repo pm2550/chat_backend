@@ -1,6 +1,7 @@
 package com.chatapp.service;
 
 import com.chatapp.config.RateLimitConfig;
+import com.chatapp.dto.SelfUserDto;
 import com.chatapp.dto.UserDto;
 import com.chatapp.entity.User;
 import com.chatapp.exception.ClientTooOldException;
@@ -160,6 +161,15 @@ public class UserService implements UserDetailsService {
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new RuntimeException("用户不存在"));
         return convertToDto(user);
+    }
+
+    /**
+     * 本人看自己的资料（带邮箱、手机号）。只能用于当前登录用户自己的回包。
+     */
+    public SelfUserDto findSelfByUsername(String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("用户不存在"));
+        return new SelfUserDto(convertToDto(user), user.getEmail(), user.getPhone());
     }
 
     /**

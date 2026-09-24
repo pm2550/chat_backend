@@ -1,5 +1,6 @@
 package com.chatapp.controller;
 
+import com.chatapp.dto.PublicUserProfile;
 import com.chatapp.dto.MessageDto;
 import com.chatapp.dto.ChatRoomSummaryDto;
 import com.chatapp.entity.ChatRoom;
@@ -266,7 +267,7 @@ public class ChatRoomController {
 
             Map<String, Object> response = new HashMap<>();
             response.put("messages", messages.getContent().stream()
-                    .map(MessageDto::fromEntity)
+                    .map(message -> MessageDto.fromEntity(message, currentUser.getId()))
                     .toList());
             response.put("currentPage", messages.getNumber());
             response.put("totalPages", messages.getTotalPages());
@@ -907,23 +908,12 @@ public class ChatRoomController {
         }
     }
 
+    /** 群成员彼此只看公开资料，邮箱、手机号不给。 */
     private Map<String, Object> toUserSummary(User user) {
-        Map<String, Object> summary = new HashMap<>();
-        summary.put("id", user.getId());
-        summary.put("username", user.getUsername());
-        summary.put("email", user.getEmail());
-        summary.put("phone", user.getPhone());
-        summary.put("displayName", user.getDisplayName());
-        summary.put("avatarUrl", user.getAvatarUrl());
+        Map<String, Object> summary = PublicUserProfile.of(user);
         summary.put("avatarFramePreset", userSettingsRepository.findByUserId(user.getId())
                 .map(settings -> settings.getAvatarFramePreset())
                 .orElse("none"));
-        summary.put("bio", user.getBio());
-        summary.put("onlineStatus", user.getOnlineStatus());
-        summary.put("lastSeen", user.getLastSeen());
-        summary.put("isActive", user.getIsActive());
-        summary.put("createdAt", user.getCreatedAt());
-        summary.put("updatedAt", user.getUpdatedAt());
         return summary;
     }
 }

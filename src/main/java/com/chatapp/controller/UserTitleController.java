@@ -1,6 +1,7 @@
 package com.chatapp.controller;
 
 import com.chatapp.dto.ApiResponse;
+import com.chatapp.dto.SelfUserDto;
 import com.chatapp.dto.UserDto;
 import com.chatapp.service.UserService;
 import jakarta.validation.Valid;
@@ -21,12 +22,13 @@ public class UserTitleController {
     private final UserService userService;
 
     @PutMapping("/me/title")
-    public ResponseEntity<ApiResponse<UserDto>> updateMyTitle(
+    public ResponseEntity<ApiResponse<SelfUserDto>> updateMyTitle(
             @Valid @RequestBody UserDto.TitleRequest request,
             Authentication auth) {
         UserDto currentUser = userService.findByUsername(auth.getName());
-        UserDto result = userService.updateTitle(currentUser.getId(), request);
-        return ResponseEntity.ok(ApiResponse.success("头衔已更新", result));
+        userService.updateTitle(currentUser.getId(), request);
+        // 客户端拿回包整个替换"我"的资料，所以要带本人的邮箱、手机号。
+        return ResponseEntity.ok(ApiResponse.success("头衔已更新", userService.findSelfByUsername(auth.getName())));
     }
 
     @PutMapping("/{userId}/title")

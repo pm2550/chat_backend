@@ -267,6 +267,133 @@ class RawWebSocketIntegrationTest {
     }
 
     @Test
+    @DisplayName("Anonymous WS broadcast: others get no real identity, the sender's sessions get sentByMe")
+    void anonymous_ws_broadcast_is_personalised_per_recipient() throws Exception {
+        anonymousService.toggleAnonymous(room.getId(), alice.getId(), true);
+
+        TestWebSocketSession aliceSession = connect(alice);
+        TestWebSocketSession aliceSecondDevice = connect(alice);
+        TestWebSocketSession bobSession = connect(bob);
+        drainStatus(aliceSession, aliceSecondDevice, bobSession);
+
+        rawWebSocketHandler.handleMessage(aliceSession, new TextMessage(objectMapper.writeValueAsString(Map.of(
+                "type", "message",
+                "chatRoomId", room.getId(),
+                "content", "who am i",
+                "messageType", "TEXT",
+                "isAnonymous", true
+        ))));
+
+        String bobRaw = awaitRawMessage(bobSession, "message");
+        assertNotNull(bobRaw, "bob missed anonymous broadcast");
+        assertNoIdentityOf(alice, bobRaw);
+        JsonNode bobMsg = objectMapper.readTree(bobRaw).path("message");
+        assertTrue(bobMsg.path("senderId").isNull(), "anonymous senderId must not reach others");
+        assertTrue(bobMsg.path("sender").isNull(), "anonymous sender object must not reach others");
+        assertFalse(bobMsg.path("sentByMe").asBoolean(true));
+        String anonymousName = bobMsg.path("anonymousName").asText();
+        assertFalse(anonymousName.isBlank());
+        assertEquals(anonymousName, bobMsg.path("senderName").asText());
+
+        for (TestWebSocketSession own : List.of(aliceSession, aliceSecondDevice)) {
+            JsonNode ownMsg = awaitMessage(own, "message");
+            assertNotNull(ownMsg, "sender's own sessions must get the message back");
+            assertTrue(ownMsg.path("message").path("sentByMe").asBoolean(), "own sessions get sentByMe=true");
+            assertEquals(alice.getId().longValue(), ownMsg.path("message").path("senderId").asLong());
+            assertEquals(anonymousName, ownMsg.path("message").path("senderName").asText());
+        }
+
+        // 编辑后整条替换的推送同样按人区分。
+        Long messageId = bobMsg.path("id").asLong();
+        Message edited = messageService.editMessage(messageId, alice.getId(), "who am i (edited)");
+        rawWebSocketHandler.broadcastMessageUpdated(edited);
+        String bobUpdate = awaitRawMessage(bobSession, "message");
+        assertNotNull(bobUpdate);
+        assertNoIdentityOf(alice, bobUpdate);
+        JsonNode aliceUpdate = awaitMessage(aliceSession, "message");
+        assertTrue(aliceUpdate.path("message").path("sentByMe").asBoolean());
+    }
+
+    @Test
+    @DisplayName("Offline push for an anonymous message carries no real name or sender id")
+    void anonymous_message_push_has_no_real_identity() throws Exception {
+        anonymousService.toggleAnonymous(room.getId(), alice.getId(), true);
+        TestWebSocketSession aliceSession = connect(alice);
+        drainStatus(aliceSession);
+
+        rawWebSocketHandler.handleMessage(aliceSession, new TextMessage(objectMapper.writeValueAsString(Map.of(
+                "type", "message",
+                "chatRoomId", room.getId(),
+                "content", "offline anonymous ping",
+                "messageType", "TEXT",
+                "isAnonymous", true
+        ))));
+        assertNotNull(awaitMessage(aliceSession, "message"));
+
+        org.mockito.ArgumentCaptor<String> title = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.ArgumentCaptor<String> body = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.ArgumentCaptor<String> data = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(pushNotificationService).sendPushNotification(
+                eq(bob.getId()), title.capture(), body.capture(), data.capture());
+        String everything = title.getValue() + "\n" + body.getValue() + "\n" + data.getValue();
+        assertNoIdentityOf(alice, everything);
+        assertFalse(data.getValue().contains("senderId"), "push data must not carry the anonymous sender id");
+        assertEquals("offline anonymous ping", body.getValue());
+    }
+
+    @Test
+    @DisplayName("Replying to an anonymous message does not leak the quoted sender")
+    void reply_to_anonymous_message_does_not_leak_quoted_sender() throws Exception {
+        anonymousService.toggleAnonymous(room.getId(), alice.getId(), true);
+        Message anonymous = messageService.sendAnonymousEncryptedMessage(
+                alice.getId(), room.getId(), "secret take", null, null, Message.MessageType.TEXT, null);
+        TestWebSocketSession aliceSession = connect(alice);
+        TestWebSocketSession bobSession = connect(bob);
+        drainStatus(aliceSession, bobSession);
+
+        rawWebSocketHandler.handleMessage(bobSession, new TextMessage(objectMapper.writeValueAsString(Map.of(
+                "type", "message",
+                "chatRoomId", room.getId(),
+                "content", "replying to the masked one",
+                "messageType", "TEXT",
+                "replyToId", anonymous.getId()
+        ))));
+
+        String bobRaw = awaitRawMessage(bobSession, "message");
+        assertNotNull(bobRaw);
+        assertNoIdentityOf(alice, bobRaw);
+        JsonNode quoted = objectMapper.readTree(bobRaw).path("message").path("replyToMessage");
+        assertEquals("secret take", quoted.path("content").asText());
+        assertTrue(quoted.path("senderId").isNull());
+        assertFalse(quoted.path("anonymousName").asText().isBlank());
+
+        JsonNode aliceView = awaitMessage(aliceSession, "message");
+        assertNotNull(aliceView);
+        // alice 看到的是别人的回复（不是她发的），但被引用的那条是她自己的匿名消息，也不带她的身份。
+        assertFalse(aliceView.path("message").path("sentByMe").asBoolean(true));
+        assertTrue(aliceView.path("message").path("replyToMessage").path("senderId").isNull());
+    }
+
+    private void assertNoIdentityOf(User user, String payload) {
+        assertFalse(payload.contains(user.getUsername()), "payload leaks username: " + payload);
+        assertFalse(payload.contains(user.getEmail()), "payload leaks email: " + payload);
+        assertFalse(payload.contains("\"" + user.getDisplayName() + "\""), "payload leaks display name: " + payload);
+        assertFalse(payload.contains("\"senderId\":" + user.getId()), "payload leaks sender id: " + payload);
+    }
+
+    private String awaitRawMessage(TestWebSocketSession session, String expectedType) throws Exception {
+        long deadline = System.currentTimeMillis() + 3000;
+        while (System.currentTimeMillis() < deadline) {
+            String msg = session.messages.poll(3000, TimeUnit.MILLISECONDS);
+            if (msg == null) return null;
+            if (expectedType.equals(objectMapper.readTree(msg).path("type").asText())) {
+                return msg;
+            }
+        }
+        return null;
+    }
+
+    @Test
     @DisplayName("Sending message to a room user is not a member of is rejected")
     void send_requires_membership() throws Exception {
         String suffix = UUID.randomUUID().toString().substring(0, 8);

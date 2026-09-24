@@ -1,5 +1,6 @@
 package com.chatapp.controller;
 
+import com.chatapp.dto.SelfUserDto;
 import com.chatapp.dto.UserDto;
 import com.chatapp.entity.User;
 import com.chatapp.service.TokenBlacklistService;
@@ -58,7 +59,6 @@ class AuthControllerTest {
         testUser = new UserDto();
         testUser.setId(1L);
         testUser.setUsername("testuser");
-        testUser.setEmail("test@example.com");
         testUser.setDisplayName("Test User");
         testUser.setOnlineStatus(User.OnlineStatus.ONLINE);
     }
@@ -73,7 +73,7 @@ class AuthControllerTest {
         when(userService.authenticate(any(UserDto.LoginRequest.class))).thenReturn(authenticated);
         when(jwtUtils.generateAccessToken("testuser")).thenReturn("access-token-123");
         when(jwtUtils.generateRefreshToken("testuser")).thenReturn("refresh-token-456");
-        when(userService.findByUsername("testuser")).thenReturn(testUser);
+        when(userService.findSelfByUsername("testuser")).thenReturn(new SelfUserDto(testUser, "test@example.com", null));
 
         mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -82,7 +82,10 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.accessToken").value("access-token-123"))
                 .andExpect(jsonPath("$.data.refreshToken").value("refresh-token-456"))
-                .andExpect(jsonPath("$.data.user.username").value("testuser"));
+                .andExpect(jsonPath("$.data.user.username").value("testuser"))
+                // 登录回包是给本人的：带自己的邮箱，且资料是平铺的（和以前同形）。
+                .andExpect(jsonPath("$.data.user.email").value("test@example.com"))
+                .andExpect(jsonPath("$.data.user.id").value(1));
 
         verify(userService).authenticate(any(UserDto.LoginRequest.class));
         // 登录本身不让人"在线"：实时连接建立时才上线。
@@ -101,7 +104,7 @@ class AuthControllerTest {
         when(userService.authenticate(any(UserDto.LoginRequest.class))).thenReturn(authenticated);
         when(jwtUtils.generateAccessToken("testuser")).thenReturn("access-token-123");
         when(jwtUtils.generateRefreshToken("testuser")).thenReturn("refresh-token-456");
-        when(userService.findByUsername("testuser")).thenReturn(testUser);
+        when(userService.findSelfByUsername("testuser")).thenReturn(new SelfUserDto(testUser, "test@example.com", null));
         when(userPresenceService.chosenPresence(1L)).thenReturn(User.OnlineStatus.BUSY);
 
         mockMvc.perform(post("/api/auth/login")
@@ -123,7 +126,7 @@ class AuthControllerTest {
         when(jwtUtils.getUserNameFromJwtToken("old-refresh")).thenReturn("testuser");
         when(jwtUtils.generateAccessToken("testuser")).thenReturn("new-access");
         when(jwtUtils.generateRefreshToken("testuser")).thenReturn("new-refresh");
-        when(userService.findByUsername("testuser")).thenReturn(testUser);
+        when(userService.findSelfByUsername("testuser")).thenReturn(new SelfUserDto(testUser, "test@example.com", null));
 
         mockMvc.perform(post("/api/auth/refresh")
                         .header("Authorization", "Bearer old-refresh"))

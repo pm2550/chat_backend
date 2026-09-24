@@ -13,6 +13,10 @@ import lombok.ToString;
 import java.time.LocalDateTime;
 import java.util.Set;
 
+/**
+ * 对外的用户资料：任何人都可能看到，所以<b>没有</b>邮箱、手机号字段。
+ * 只有本人自己的资料（登录/续期/校验/改头衔的回包）才用 {@link SelfUserDto} 带上它们。
+ */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -20,8 +24,6 @@ public class UserDto {
 
     private Long id;
     private String username;
-    private String email;
-    private String phone;
     private String displayName;
     private String avatarUrl;
     private String avatarFramePreset;
@@ -157,16 +159,16 @@ public class UserDto {
         private String accessToken;
         private String refreshToken;
         private String type = "Bearer";
-        private UserDto user;
+        private SelfUserDto user;
 
-        public JwtResponse(String accessToken, String refreshToken, UserDto user) {
+        public JwtResponse(String accessToken, String refreshToken, SelfUserDto user) {
             this.accessToken = accessToken;
             this.refreshToken = refreshToken;
             this.user = user;
         }
 
         // Legacy compatibility
-        public JwtResponse(String token, UserDto user) {
+        public JwtResponse(String token, SelfUserDto user) {
             this.accessToken = token;
             this.user = user;
         }
