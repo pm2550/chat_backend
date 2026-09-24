@@ -27,6 +27,7 @@ import static org.hamcrest.Matchers.startsWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -209,6 +210,50 @@ class AppVersionControllerIntegrationTest {
                 .filter(version -> version.getVersionCode().equals(versionCode))
                 .count();
         assertEquals(1, matching);
+    }
+
+    @Test
+    @DisplayName("Version check without platform is a 400 that names the parameter")
+    void checkVersion_withoutPlatform_isBadRequest() throws Exception {
+        mockMvc.perform(get("/api/v1/app/version"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("缺少必填参数: platform"));
+    }
+
+    @Test
+    @DisplayName("Published artifacts carry a SHA-256 that clients can verify")
+    void publishFromCi_recordsSha256_andVersionCheckReturnsIt() throws Exception {
+        int versionCode = 15000 + (int) (System.nanoTime() % 1000);
+        MockMultipartFile metadata = new MockMultipartFile(
+                "metadata",
+                "",
+                MediaType.APPLICATION_JSON_VALUE,
+                ("{\"platform\":\"MACOS\",\"versionName\":\"1.2.0-sha\",\"versionCode\":"
+                        + versionCode + "}").getBytes()
+        );
+        MockMultipartFile artifact = new MockMultipartFile(
+                "artifact",
+                "pm-chat-macos-sha.zip",
+                "application/zip",
+                "abc".getBytes()
+        );
+        // sha256("abc")
+        String expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+        mockMvc.perform(multipart("/api/v1/app/version/publish-from-ci")
+                        .file(metadata)
+                        .file(artifact)
+                        .header("Authorization", "Bearer test-ci-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version.sha256").value(expected));
+
+        mockMvc.perform(get("/api/v1/app/version")
+                        .param("platform", "macos")
+                        .param("currentVersionCode", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.updateAvailable").value(true))
+                .andExpect(jsonPath("$.fileSize").value(3))
+                .andExpect(jsonPath("$.sha256").value(expected));
     }
 
     @Test

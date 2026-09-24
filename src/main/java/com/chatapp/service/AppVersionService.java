@@ -15,10 +15,15 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -43,7 +48,7 @@ public class AppVersionService {
                 .findFirstByPlatformAndIsActiveTrueOrderByVersionCodeDesc(platform);
 
         if (latest.isEmpty() || latest.get().getVersionCode() <= currentVersionCode) {
-            return new AppVersionDto.CheckResponse(false, false, null, null, null, null, null);
+            return new AppVersionDto.CheckResponse(false, false, null, null, null, null, null, null);
         }
 
         AppVersion v = latest.get();
@@ -54,7 +59,8 @@ public class AppVersionService {
                 v.getVersionCode(),
                 v.getReleaseNotes(),
                 v.getDownloadUrl(),
-                v.getFileSize()
+                v.getFileSize(),
+                v.getSha256()
         );
     }
 
@@ -107,10 +113,14 @@ public class AppVersionService {
                 filename = "app-" + request.getVersionName() + "-" + request.getPlatform().name().toLowerCase();
             }
             Path target = dir.resolve(filename);
-            Files.copy(artifact.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
+            MessageDigest digest = sha256Digest();
+            try (InputStream in = new DigestInputStream(artifact.getInputStream(), digest)) {
+                Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+            }
 
             version.setArtifactFilename(filename);
             version.setFileSize(artifact.getSize());
+            version.setSha256(HexFormat.of().formatHex(digest.digest()));
             version.setDownloadUrl("/api/v1/app/download/" + platformDir + "/" + filename);
         }
 
@@ -138,6 +148,14 @@ public class AppVersionService {
         return toDto(savedVersion);
     }
 
+    private static MessageDigest sha256Digest() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("JVM 不支持 SHA-256", e);
+        }
+    }
+
     public Path getArtifactPath(String platform, String filename) {
         Path path = Paths.get(storagePath, platform, filename).normalize();
         if (!path.startsWith(Paths.get(storagePath).normalize())) {
@@ -161,6 +179,7 @@ public class AppVersionService {
         dto.setReleaseNotes(v.getReleaseNotes());
         dto.setDownloadUrl(v.getDownloadUrl());
         dto.setFileSize(v.getFileSize());
+        dto.setSha256(v.getSha256());
         dto.setCreatedAt(v.getCreatedAt());
         return dto;
     }

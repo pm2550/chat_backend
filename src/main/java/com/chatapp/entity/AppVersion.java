@@ -46,6 +46,10 @@ public class AppVersion {
     @Column(name = "file_size")
     private Long fileSize;
 
+    /** 安装包的 SHA-256（小写十六进制），客户端自更新前用它校验下载是否完整。 */
+    @Column(name = "sha256", length = 64)
+    private String sha256;
+
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
 

@@ -22,6 +22,7 @@ public class AppVersionDto {
     private String releaseNotes;
     private String downloadUrl;
     private Long fileSize;
+    private String sha256;
     private LocalDateTime createdAt;
 
     @Data
@@ -35,6 +36,7 @@ public class AppVersionDto {
         private String releaseNotes;
         private String downloadUrl;
         private Long fileSize;
+        private String sha256;
     }
 
     @Data

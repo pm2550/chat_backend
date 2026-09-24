@@ -10,6 +10,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
@@ -57,6 +58,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
         log.warn("请求参数类型错误: {}={}", ex.getName(), ex.getValue());
         return ResponseEntity.badRequest().body(ApiResponse.badRequest("请求参数类型错误"));
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingParameter(MissingServletRequestParameterException ex) {
+        return ResponseEntity.badRequest()
+                .body(ApiResponse.badRequest("缺少必填参数: " + ex.getParameterName()));
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)
