@@ -252,6 +252,27 @@ public class UserService implements UserDetailsService {
     }
 
     /**
+     * 敏感操作前再确认一次当前登录密码（只支持客户端哈希账号）。输错和登录一样计入失败次数、
+     * 一起被锁定，免得拿到登录令牌的人借这个接口猜密码。
+     *
+     * @throws LockedException 失败次数过多
+     */
+    public boolean matchesCurrentClientHash(User user, String clientHash) {
+        String username = user.getUsername();
+        if (rateLimitConfig.isLoginLocked(username)) {
+            throw new LockedException("尝试次数过多，请稍后再试");
+        }
+        if (!SCHEME_CLIENT.equals(normalizeScheme(user.getPasswordScheme()))
+                || !isNotBlank(clientHash) || clientHash.length() < 32 || clientHash.length() > 256
+                || !passwordEncoder.matches(clientHash, user.getPassword())) {
+            rateLimitConfig.recordLoginFailure(username);
+            return false;
+        }
+        rateLimitConfig.resetLoginFailures(username);
+        return true;
+    }
+
+    /**
      * 更新用户头像
      */
     @Transactional

@@ -3,6 +3,7 @@ package com.chatapp.dto;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -48,6 +49,10 @@ public class E2eeDto {
         private String wrappedPrivateKey;
         private String wrapSalt;
         private String wrapParams;
+        /** 恢复码包装（没设置过就是 null）。老客户端不认识这几个字段，直接忽略。 */
+        private String recoveryWrappedPrivateKey;
+        private String recoveryWrapSalt;
+        private String recoveryWrapParams;
     }
 
     @Data
@@ -62,6 +67,8 @@ public class E2eeDto {
          */
         private boolean passwordSchemeSupported;
         private List<OwnKey> keys;
+        /** 当前版本的密钥有恢复码包装：客户端据此决定要不要提示"设置恢复码"。 */
+        private boolean recoveryConfigured;
     }
 
     /** 新建一把身份密钥（首次开启，或密码被重置后重新生成）。 */
@@ -95,6 +102,34 @@ public class E2eeDto {
         private String wrappedPrivateKey;
         private String wrapSalt;
         private String wrapParams;
+    }
+
+    /**
+     * 设置（或重新生成）恢复码：用同一个新恢复码包装的每个版本的私钥。
+     * 没带上的版本，旧的恢复码包装会被清掉——重新生成之后旧恢复码彻底失效。
+     * 恢复码本身永远不会出现在请求里。
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SetRecoveryRequest {
+        private List<KeyWrap> wraps;
+        /** 客户端看到的当前版本；别的设备刚换过密钥时拒绝，免得新版本没被包进去。 */
+        private Integer expectedActiveKeyVersion;
+    }
+
+    /**
+     * 用恢复码找回私钥后，用"现在的"登录密码重新包装（密码被重置过，旧包装解不开）。
+     * {@code clientHash} 是当前登录密码的客户端哈希，服务器据此确认是本人在操作，
+     * 防止拿到登录令牌的人把密码包装换成垃圾。
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @ToString(exclude = "clientHash")
+    public static class PasswordRewrapRequest {
+        private String clientHash;
+        private List<KeyWrap> wraps;
     }
 
     /**
