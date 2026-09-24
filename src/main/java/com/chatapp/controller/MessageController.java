@@ -139,12 +139,18 @@ public class MessageController {
 
             String fileUrl;
             long fileSize = file.getSize();
+            boolean encryptedAttachment = encryptedContent != null && !encryptedContent.isBlank();
             // 端到端加密的附件是密文，不能也不该转码；其余语音统一转成 MP3，谁都能放。
             java.util.Optional<byte[]> mp3 = messageType == Message.MessageType.VOICE
-                    && (encryptedContent == null || encryptedContent.isBlank())
+                    && !encryptedAttachment
                     ? voiceTranscoder.toMp3(file.getBytes())
                     : java.util.Optional.empty();
-            if (mp3.isPresent()) {
+            if (encryptedAttachment) {
+                // 先查会话能不能加密，别先把密文存下来再拒绝。
+                messageService.requireEncryptableAttachment(currentUser.getId(), chatRoomId,
+                        encryptedContent, encryptionVersion);
+                fileUrl = fileStorageService.uploadEncryptedChatFile(file);
+            } else if (mp3.isPresent()) {
                 fileName = voiceFileName(fileName);
                 contentType = "audio/mpeg";
                 fileSize = mp3.get().length;
@@ -176,7 +182,7 @@ public class MessageController {
                     "MESSAGE",
                     message.getId(),
                     chatRoomId,
-                    fileName);
+                    message.getFileName());
             processBotsAndBroadcast(message, currentUser.getId());
             
             return ResponseEntity.ok(response);
@@ -507,7 +513,8 @@ public class MessageController {
             Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
-            Message message = messageService.editMessage(messageId, currentUser.getId(), request.getContent());
+            Message message = messageService.editMessage(messageId, currentUser.getId(), request.getContent(),
+                    request.getEncryptedContent(), request.getEncryptionVersion());
             rawWebSocketHandler.broadcastMessageUpdated(message);
             auditLogService.record(
                     currentUser,
@@ -792,9 +799,16 @@ public class MessageController {
 
     public static class EditMessageRequest {
         private String content;
+        /** 编辑端到端加密消息时，客户端重新加密后的信封。 */
+        private String encryptedContent;
+        private Integer encryptionVersion;
 
         public String getContent() { return content; }
         public void setContent(String content) { this.content = content; }
+        public String getEncryptedContent() { return encryptedContent; }
+        public void setEncryptedContent(String encryptedContent) { this.encryptedContent = encryptedContent; }
+        public Integer getEncryptionVersion() { return encryptionVersion; }
+        public void setEncryptionVersion(Integer encryptionVersion) { this.encryptionVersion = encryptionVersion; }
     }
 
     public static class ForwardMessageRequest {

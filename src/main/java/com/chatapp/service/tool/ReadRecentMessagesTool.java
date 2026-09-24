@@ -2,6 +2,7 @@ package com.chatapp.service.tool;
 
 import com.chatapp.entity.Message;
 import com.chatapp.repository.MessageRepository;
+import com.chatapp.service.E2eeKeyService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -51,6 +52,9 @@ public class ReadRecentMessagesTool implements Tool {
         root.put("roomId", context.roomId());
         ArrayNode messages = root.putArray("messages");
         for (Message message : latestDesc) {
+            if (E2eeKeyService.isEncrypted(message)) {
+                continue; // 端到端加密消息服务器读不到内容
+            }
             messages.add(formatMessage(message));
         }
         return root;

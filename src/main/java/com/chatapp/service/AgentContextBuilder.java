@@ -343,6 +343,10 @@ public class AgentContextBuilder {
         List<HistoricalMessage> history = new ArrayList<>();
         for (int i = 0; i < recent.size(); i++) {
             Message message = recent.get(i);
+            if (E2eeKeyService.isEncrypted(message)) {
+                // 端到端加密消息服务器只有占位文字，塞进上下文只会误导模型。
+                continue;
+            }
             boolean isImage = agentVisionAttachmentService.isImageMessage(message);
             String content = message.getContent() != null ? message.getContent() : "";
             AgentVisionAttachmentService.ImageContext imageContext = isImage

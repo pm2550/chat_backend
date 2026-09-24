@@ -12,6 +12,7 @@ import com.chatapp.entity.User;
 import com.chatapp.repository.UserRepository;
 import com.chatapp.service.ChatRoomService;
 import com.chatapp.service.CloudStorageService;
+import com.chatapp.service.E2eeKeyService;
 import com.chatapp.service.LLMService;
 import com.chatapp.service.MessageReactionService;
 import com.chatapp.service.MessageService;
@@ -705,26 +706,28 @@ class RawWebSocketIntegrationTest {
     }
 
     @Test
-    @DisplayName("Encrypted WebSocket message preserves ciphertext fields")
+    @DisplayName("Encrypted WebSocket message preserves ciphertext fields in a private chat")
     void encrypted_message_broadcast() throws Exception {
+        ChatRoom dm = chatRoomService.createPrivateChat(alice.getId(), bob.getId());
         TestWebSocketSession aliceSession = connect(alice);
         TestWebSocketSession bobSession = connect(bob);
         drainStatus(aliceSession, bobSession);
 
         rawWebSocketHandler.handleMessage(aliceSession, new TextMessage(objectMapper.writeValueAsString(Map.of(
                 "type", "message",
-                "chatRoomId", room.getId(),
+                "chatRoomId", dm.getId(),
                 "content", "[加密消息]",
                 "messageType", "TEXT",
                 "encryptedContent", "ZW5jcnlwdGVk",
-                "encryptionVersion", 1
+                "encryptionVersion", E2eeKeyService.MESSAGE_ENCRYPTION_VERSION
         ))));
 
         JsonNode received = awaitMessage(bobSession, "message");
         assertNotNull(received, "bob did not receive encrypted broadcast");
-        assertEquals("[加密消息]", received.path("message").path("content").asText());
+        assertEquals(E2eeKeyService.OLD_CLIENT_PLACEHOLDER, received.path("message").path("content").asText());
         assertEquals("ZW5jcnlwdGVk", received.path("message").path("encryptedContent").asText());
-        assertEquals(1, received.path("message").path("encryptionVersion").asInt());
+        assertEquals(E2eeKeyService.MESSAGE_ENCRYPTION_VERSION,
+                received.path("message").path("encryptionVersion").asInt());
     }
 
     @Test
@@ -1072,6 +1075,11 @@ class RawWebSocketIntegrationTest {
         private final Map<String, Object> attributes = new HashMap<>();
         private final BlockingQueue<String> messages = new LinkedBlockingQueue<>();
         private boolean open = true;
+
+        /** 同包的其他 WebSocket 集成测试复用这个会话桩时读收到的帧。 */
+        BlockingQueue<String> messages() {
+            return messages;
+        }
 
         @Override
         public String getId() {

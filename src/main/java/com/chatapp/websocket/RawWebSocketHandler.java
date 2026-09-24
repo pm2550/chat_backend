@@ -9,6 +9,7 @@ import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.service.BotService;
 import com.chatapp.service.BotReplyDeliveryService;
+import com.chatapp.service.E2eeKeyService;
 import com.chatapp.service.MessageReactionService;
 import com.chatapp.service.MessageReadStateService;
 import com.chatapp.service.MessageService;
@@ -1075,6 +1076,10 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     }
 
     private String notificationBody(Message message) {
+        if (E2eeKeyService.isEncrypted(message)) {
+            // 服务器只有密文；文件名也可能是隐私，统一不带任何内容。
+            return E2eeKeyService.NOTIFICATION_PLACEHOLDER;
+        }
         Message.MessageType type = message.getMessageType();
         if (type == Message.MessageType.IMAGE) {
             return "[图片] " + fallback(message.getFileName(), message.getContent());

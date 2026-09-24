@@ -57,6 +57,9 @@ public class UserService implements UserDetailsService {
     private final ModelMapper modelMapper;
     private final RateLimitConfig rateLimitConfig;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private E2eeKeyService e2eeKeyService;
+
     @Value("${auth.client-salt-hmac-secret}")
     private String clientSaltHmacSecret;
 
@@ -242,6 +245,10 @@ public class UserService implements UserDetailsService {
             user.setPasswordScheme(SCHEME_LEGACY);
         }
         userRepository.save(user);
+        if (e2eeKeyService != null) {
+            // 同一事务：私钥换不了包装就连密码也不改，免得加密历史再也解不开。
+            e2eeKeyService.rewrapForPasswordChange(userId, request.getE2eeKeyWraps());
+        }
     }
 
     /**
