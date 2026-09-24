@@ -63,8 +63,42 @@ public class ChatRoomMessageSearchController {
         response.put("keyword", query);
         response.put("limit", safeLimit);
         response.put("offset", safeOffset);
+        response.put("currentPage", page.getNumber());
+        response.put("totalPages", page.getTotalPages());
         response.put("totalElements", page.getTotalElements());
         response.put("hasNext", page.hasNext());
+        response.put("hasPrevious", page.hasPrevious());
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * 消息列表页的全局搜索：在当前用户所在的所有会话里按关键词搜消息，
+     * 每条结果都带 chatRoomId，客户端据此跳转到对应会话。
+     */
+    @GetMapping("/messages/search")
+    public ResponseEntity<?> searchMessagesAcrossRooms(
+            @RequestParam(value = "q", required = false) String query,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            Authentication auth) {
+        String keyword = query == null ? "" : query.trim();
+        if (keyword.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "关键词不能为空"));
+        }
+        User currentUser = userService.findUserByUsername(auth.getName());
+        Pageable pageable = PageRequest.of(Math.max(0, page), Math.max(1, Math.min(size, 50)));
+        Page<Message> result = messageService.searchMessagesAcrossRooms(currentUser.getId(), keyword, pageable);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("messages", result.getContent().stream()
+                .map(MessageDto::fromEntity)
+                .toList());
+        response.put("keyword", keyword);
+        response.put("currentPage", result.getNumber());
+        response.put("totalPages", result.getTotalPages());
+        response.put("totalElements", result.getTotalElements());
+        response.put("hasNext", result.hasNext());
+        response.put("hasPrevious", result.hasPrevious());
         return ResponseEntity.ok(response);
     }
 

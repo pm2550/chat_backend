@@ -613,6 +613,14 @@ public class MessageService {
                 .orElseGet(() -> messageRepository.searchInChatRoom(chatRoomId, keyword, pageable));
     }
 
+    /**
+     * 在当前用户所在的全部会话中搜索消息（屏蔽的会话、清空前的记录和已删除消息不参与）。
+     */
+    @Transactional(readOnly = true)
+    public Page<Message> searchMessagesAcrossRooms(Long userId, String keyword, Pageable pageable) {
+        return messageRepository.searchInUserChatRooms(userId, keyword, pageable);
+    }
+
     public List<MessageDto> searchContext(Long chatRoomId, Message message) {
         List<Message> before = messageRepository.findContextBefore(
                 chatRoomId,

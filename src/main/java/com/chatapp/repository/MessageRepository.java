@@ -163,6 +163,29 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
                                              @Param("clearedBeforeMessageId") Long clearedBeforeMessageId,
                                              Pageable pageable);
 
+    /**
+     * 跨房间全局搜索：只搜当前用户所在、未屏蔽的活跃房间，并遵守每个成员自己的清空记录起点。
+     */
+    @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
+    @Query(value = "SELECT m FROM Message m, ChatRoomMember crm " +
+                   "WHERE crm.user.id = :userId AND crm.chatRoom = m.chatRoom " +
+                   "AND m.chatRoom.isActive = true " +
+                   "AND COALESCE(crm.isBlocked, false) = false " +
+                   "AND m.isDeleted = false " +
+                   "AND (crm.clearedBeforeMessageId IS NULL OR m.id > crm.clearedBeforeMessageId) " +
+                   "AND LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+                   "ORDER BY m.createdAt DESC, m.id DESC",
+           countQuery = "SELECT COUNT(m) FROM Message m, ChatRoomMember crm " +
+                        "WHERE crm.user.id = :userId AND crm.chatRoom = m.chatRoom " +
+                        "AND m.chatRoom.isActive = true " +
+                        "AND COALESCE(crm.isBlocked, false) = false " +
+                        "AND m.isDeleted = false " +
+                        "AND (crm.clearedBeforeMessageId IS NULL OR m.id > crm.clearedBeforeMessageId) " +
+                        "AND LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%'))")
+    Page<Message> searchInUserChatRooms(@Param("userId") Long userId,
+                                        @Param("keyword") String keyword,
+                                        Pageable pageable);
+
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity"})
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false " +
            "AND m.createdAt < :createdAt ORDER BY m.createdAt DESC")
