@@ -946,6 +946,11 @@ class RawWebSocketIntegrationTest {
         private final BlockingQueue<String> messages = new LinkedBlockingQueue<>();
         private boolean open = true;
 
+        /** 同包的其他 WebSocket 集成测试复用这个会话桩时读收到的帧。 */
+        BlockingQueue<String> messages() {
+            return messages;
+        }
+
         @Override
         public String getId() {
             return id;

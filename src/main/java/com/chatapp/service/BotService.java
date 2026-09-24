@@ -811,7 +811,7 @@ public class BotService {
             if (sourceMessage.getId() != null && sourceMessage.getId().equals(message.getId())) {
                 continue;
             }
-            if (message.getBotConfig() != null) {
+            if (message.getBotConfig() != null || E2eeKeyService.isEncrypted(message)) {
                 continue;
             }
             if (message.getContent() != null && !message.getContent().isBlank()) {

@@ -116,7 +116,7 @@ public class UserDto {
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
-    @ToString(exclude = {"oldPassword", "oldClientHash", "newPassword", "newClientHash", "newClientSalt"})
+    @ToString(exclude = {"oldPassword", "oldClientHash", "newPassword", "newClientHash", "newClientSalt", "e2eeKeyWraps"})
     public static class ChangePasswordRequest {
         private String oldPassword;
         private String oldClientHash;
@@ -125,6 +125,13 @@ public class UserDto {
         private String newClientHash;
         private String newClientSalt;
         private String newArgon2Params;
+        /** 开了端到端加密的用户：客户端用新密码重新包装的私钥，和改密码一起落库。 */
+        private java.util.List<E2eeDto.KeyWrap> e2eeKeyWraps;
+
+        public ChangePasswordRequest(String oldPassword, String oldClientHash, String newPassword,
+                                     String newClientHash, String newClientSalt, String newArgon2Params) {
+            this(oldPassword, oldClientHash, newPassword, newClientHash, newClientSalt, newArgon2Params, null);
+        }
 
         @AssertTrue(message = "must provide one old credential and one new credential bundle")
         public boolean isValidChange() {

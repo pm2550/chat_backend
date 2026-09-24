@@ -116,6 +116,25 @@ public class FileStorageService {
     }
 
     /**
+     * 保存端到端加密的聊天附件：内容是客户端加密过的密文，真实文件名和类型在消息密文里，
+     * 服务器看不到，所以不按扩展名白名单检查，统一存成 .bin（下载时就是 application/octet-stream）。
+     * 大小限制照旧。
+     */
+    public String uploadEncryptedChatFile(MultipartFile file) throws IOException {
+        if (file.isEmpty()) {
+            throw new IllegalArgumentException("文件不能为空");
+        }
+        if (file.getSize() > fileStorageConfig.getMaxFileSize()) {
+            throw new IllegalArgumentException("文件大小不能超过 " +
+                (fileStorageConfig.getMaxFileSize() / 1024 / 1024) + "MB");
+        }
+        String fileName = UUID.randomUUID() + ".bin";
+        Path targetLocation = Paths.get(fileStorageConfig.getFullChatFileDir()).resolve(fileName);
+        storeEncryptedFile(targetLocation, file);
+        return "/api/files/chat/" + fileName;
+    }
+
+    /**
      * 上传聊天背景。背景是视觉皮肤资源，和聊天附件 ACL 分开存储。
      */
     public String uploadChatBackground(MultipartFile file) throws IOException {

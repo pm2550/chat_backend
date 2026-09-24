@@ -27,7 +27,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.util.Base64;
 import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -67,6 +66,9 @@ public class MessageService {
 
     @Autowired(required = false)
     private MessageReadStateService readStateService;
+
+    @Autowired(required = false)
+    private E2eeKeyService e2eeKeyService;
 
     /**
      * 一次已读推进了读者的已读位置多少：(previousLastReadMessageId, lastReadMessageId] 这段里
@@ -144,10 +146,15 @@ public class MessageService {
         validateCanSendMessage(senderId, chatRoomId);
         Message replyTo = resolveReplyTarget(chatRoomId, replyToMessageId);
 
+        boolean encrypted = encryptedContentBase64 != null && !encryptedContentBase64.isBlank();
+        byte[] ciphertext = encrypted
+                ? requireE2ee().requireEncryptableMessage(chatRoom, encryptedContentBase64, encryptionVersion, false)
+                : null;
+
         // 创建消息
         Message message = new Message();
-        boolean encrypted = encryptedContentBase64 != null && !encryptedContentBase64.isBlank();
-        message.setContent(encrypted && (content == null || content.isBlank()) ? "[加密消息]" : content);
+        // 密文消息的 content 一律由服务器写占位：客户端就算误传了明文也不落库，老客户端显示这句提示。
+        message.setContent(encrypted ? E2eeKeyService.OLD_CLIENT_PLACEHOLDER : content);
         message.setMessageType(messageType);
         message.setSender(sender);
         message.setChatRoom(chatRoom);
@@ -158,8 +165,8 @@ public class MessageService {
             message.setMentionedUserIds(resolveMentionedUserIds(content, chatRoom));
         }
         if (encrypted) {
-            message.setEncryptedContent(decodeEncryptedContent(encryptedContentBase64));
-            message.setEncryptionVersion(encryptionVersion != null ? encryptionVersion : 1);
+            message.setEncryptedContent(ciphertext);
+            message.setEncryptionVersion(encryptionVersion);
         }
 
         message = messageRepository.save(message);
@@ -193,6 +200,10 @@ public class MessageService {
                                                  Integer encryptionVersion,
                                                  Message.MessageType messageType,
                                                  Long replyToMessageId) {
+        if (encryptedContentBase64 != null && !encryptedContentBase64.isBlank()) {
+            // 匿名要靠服务器替人遮名字，和"服务器不可见内容"的私聊加密是两回事，不混用。
+            throw new IllegalArgumentException("匿名消息不能端到端加密");
+        }
         AnonymousIdentity identity = anonymousService.getOrCreateIdentityEntity(senderId, chatRoomId);
         Message message = sendEncryptedMessage(
                 senderId,
@@ -237,22 +248,33 @@ public class MessageService {
                 .orElseThrow(() -> new RuntimeException("聊天室不存在"));
 
         validateCanSendMessage(senderId, chatRoomId);
+        boolean encrypted = encryptedContentBase64 != null && !encryptedContentBase64.isBlank();
+        byte[] ciphertext = encrypted
+                ? requireE2ee().requireEncryptableMessage(chatRoom, encryptedContentBase64, encryptionVersion, false)
+                : null;
 
         // 创建文件消息
         Message message = new Message();
-        message.setContent(fileName); // 文件名作为内容
         message.setMessageType(messageType);
         message.setSender(sender);
         message.setChatRoom(chatRoom);
         message.setFileUrl(fileUrl);
-        message.setFileName(fileName);
-        message.setFileType(fileType);
         message.setFileSize(fileSize);
         message.setCreatedAt(LocalDateTime.now());
         message.setMessageStatus(Message.MessageStatus.SENT);
-        if (encryptedContentBase64 != null && !encryptedContentBase64.isBlank()) {
-            message.setEncryptedContent(decodeEncryptedContent(encryptedContentBase64));
-            message.setEncryptionVersion(encryptionVersion != null ? encryptionVersion : 1);
+        if (encrypted) {
+            // 加密附件：上传的是密文，真实文件名、类型和解密密钥都在密文信封里。
+            // 一律按 FILE 存：老客户端显示成一张"加密附件"文件卡片，而不是一张裂开的图。
+            message.setMessageType(Message.MessageType.FILE);
+            message.setContent(E2eeKeyService.OLD_CLIENT_PLACEHOLDER);
+            message.setFileName(E2eeKeyService.ATTACHMENT_FILE_NAME);
+            message.setFileType("application/octet-stream");
+            message.setEncryptedContent(ciphertext);
+            message.setEncryptionVersion(encryptionVersion);
+        } else {
+            message.setContent(fileName); // 文件名作为内容
+            message.setFileName(fileName);
+            message.setFileType(fileType);
         }
 
         message = messageRepository.save(message);
@@ -264,12 +286,26 @@ public class MessageService {
         return message;
     }
 
-    private byte[] decodeEncryptedContent(String encryptedContentBase64) {
-        try {
-            return Base64.getDecoder().decode(encryptedContentBase64);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("加密内容必须是有效 Base64");
+    /** 上传加密附件前的检查：成员、禁言、会话能否加密、信封格式。 */
+    public void requireEncryptableAttachment(Long senderId, Long chatRoomId,
+                                             String encryptedContentBase64, Integer encryptionVersion) {
+        ChatRoom chatRoom = chatRoomRepository.findById(chatRoomId)
+                .orElseThrow(() -> new RuntimeException("聊天室不存在"));
+        validateCanSendMessage(senderId, chatRoomId);
+        requireE2ee().requireEncryptableMessage(chatRoom, encryptedContentBase64, encryptionVersion, false);
+    }
+
+    /** 撤回/删除后连密文一起清掉，否则新客户端还能把原文解出来。 */
+    private void clearCiphertext(Message message) {
+        message.setEncryptedContent(null);
+        message.setEncryptionVersion(null);
+    }
+
+    private E2eeKeyService requireE2ee() {
+        if (e2eeKeyService == null) {
+            throw new IllegalStateException("端到端加密服务未启用");
         }
+        return e2eeKeyService;
     }
 
     Set<Long> resolveMentionedUserIds(String content, ChatRoom chatRoom) {
@@ -518,6 +554,7 @@ public class MessageService {
         // 标记为已删除
         message.setIsDeleted(true);
         message.setContent("[消息已撤回]");
+        clearCiphertext(message);
         message = messageRepository.save(message);
 
         log.info("用户 {} 撤回了消息 {}", userId, messageId);
@@ -525,6 +562,15 @@ public class MessageService {
     }
 
     public Message editMessage(Long messageId, Long userId, String content) {
+        return editMessage(messageId, userId, content, null, null);
+    }
+
+    /**
+     * 编辑消息。加密消息只能改成新的密文（客户端重新加密），明文消息只能改成明文：
+     * 否则老客户端拿占位文字一改，就把加密消息变成了明文。
+     */
+    public Message editMessage(Long messageId, Long userId, String content,
+                               String encryptedContentBase64, Integer encryptionVersion) {
         Message message = messageRepository.findWithSenderById(messageId)
                 .orElseThrow(() -> new RuntimeException("消息不存在"));
         if (!chatRoomRepository.isMember(message.getChatRoom().getId(), userId)) {
@@ -538,6 +584,21 @@ public class MessageService {
         }
         if (message.getMessageType() != Message.MessageType.TEXT) {
             throw new IllegalArgumentException("仅支持编辑文本消息");
+        }
+        boolean wasEncrypted = E2eeKeyService.isEncrypted(message);
+        boolean encrypted = encryptedContentBase64 != null && !encryptedContentBase64.isBlank();
+        if (wasEncrypted != encrypted) {
+            throw new IllegalArgumentException(wasEncrypted
+                    ? "这条消息已端到端加密，请更新到最新版本后编辑"
+                    : "普通消息不能编辑成加密消息");
+        }
+        if (encrypted) {
+            message.setEncryptedContent(requireE2ee().requireEncryptableMessage(
+                    message.getChatRoom(), encryptedContentBase64, encryptionVersion, false));
+            message.setEncryptionVersion(encryptionVersion);
+            message.setContent(E2eeKeyService.OLD_CLIENT_PLACEHOLDER);
+            message.setIsEdited(true);
+            return messageRepository.save(message);
         }
         if (content == null || content.isBlank()) {
             throw new IllegalArgumentException("消息内容不能为空");
@@ -555,6 +616,10 @@ public class MessageService {
             throw new IllegalArgumentException("您无权限查看原消息");
         }
         validateCanSendMessage(userId, targetRoomId);
+        if (E2eeKeyService.isEncrypted(source)) {
+            // 密文和原会话的双方密钥绑定，照搬到别的会话谁也解不开；客户端会解密后重新发送。
+            throw new IllegalArgumentException("端到端加密消息请更新到最新版本后转发");
+        }
         User sender = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("发送者不存在"));
         ChatRoom targetRoom = chatRoomRepository.findById(targetRoomId)
@@ -706,6 +771,7 @@ public class MessageService {
         // 标记为已删除
         message.setIsDeleted(true);
         message.setContent("[消息已删除]");
+        clearCiphertext(message);
         message = messageRepository.save(message);
 
         log.info("用户 {} 删除了消息 {} (聊天室: {})", operatorId, messageId, chatRoomId);

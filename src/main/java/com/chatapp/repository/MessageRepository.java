@@ -48,7 +48,7 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity", "replyToMessage.botConfig"})
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false AND " +
-           "LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) ORDER BY m.createdAt DESC")
+           "LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) AND m.encryptedContent IS NULL ORDER BY m.createdAt DESC")
     Page<Message> searchMessagesInChatRoom(@Param("chatRoomId") Long chatRoomId,
                                           @Param("keyword") String keyword,
                                           Pageable pageable);
@@ -138,15 +138,16 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     List<Message> findLatestVisibleMessagesForRooms(@Param("userId") Long userId,
                                                      @Param("roomIds") List<Long> roomIds);
 
+    // 所有关键词搜索都排除端到端加密消息：服务器只有占位文字，搜"加密"会把它们全搜出来。
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity", "replyToMessage.botConfig"})
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false AND " +
-           "LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) ORDER BY m.createdAt DESC")
+           "LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) AND m.encryptedContent IS NULL ORDER BY m.createdAt DESC")
     Page<Message> searchInChatRoom(@Param("chatRoomId") Long chatRoomId, @Param("keyword") String keyword, Pageable pageable);
 
     @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom", "anonymousIdentity", "botConfig", "replyToMessage", "replyToMessage.sender", "replyToMessage.anonymousIdentity", "replyToMessage.botConfig"})
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false " +
            "AND (:clearedBeforeMessageId IS NULL OR m.id > :clearedBeforeMessageId) " +
-           "AND LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+           "AND LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) AND m.encryptedContent IS NULL " +
            "ORDER BY m.createdAt DESC")
     Page<Message> searchInChatRoomAfterClear(@Param("chatRoomId") Long chatRoomId,
                                              @Param("keyword") String keyword,
@@ -163,7 +164,7 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
                    "AND COALESCE(crm.isBlocked, false) = false " +
                    "AND m.isDeleted = false " +
                    "AND (crm.clearedBeforeMessageId IS NULL OR m.id > crm.clearedBeforeMessageId) " +
-                   "AND LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+                   "AND LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) AND m.encryptedContent IS NULL " +
                    "ORDER BY m.createdAt DESC, m.id DESC",
            countQuery = "SELECT COUNT(m) FROM Message m, ChatRoomMember crm " +
                         "WHERE crm.user.id = :userId AND crm.chatRoom = m.chatRoom " +
@@ -171,7 +172,7 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
                         "AND COALESCE(crm.isBlocked, false) = false " +
                         "AND m.isDeleted = false " +
                         "AND (crm.clearedBeforeMessageId IS NULL OR m.id > crm.clearedBeforeMessageId) " +
-                        "AND LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%'))")
+                        "AND LOWER(m.content) LIKE LOWER(CONCAT('%', :keyword, '%')) AND m.encryptedContent IS NULL")
     Page<Message> searchInUserChatRooms(@Param("userId") Long userId,
                                         @Param("keyword") String keyword,
                                         Pageable pageable);
