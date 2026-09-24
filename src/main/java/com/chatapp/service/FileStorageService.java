@@ -64,6 +64,7 @@ public class FileStorageService {
             Files.createDirectories(Paths.get(fileStorageConfig.getFullChatFileDir()));
             Files.createDirectories(Paths.get(fileStorageConfig.getFullImageGenDir()));
             Files.createDirectories(Paths.get(fileStorageConfig.getFullBackgroundDir()));
+            Files.createDirectories(Paths.get(fileStorageConfig.getFullStickerDir()));
             if (isLocalWorkspaceStorage()) {
                 Files.createDirectories(Paths.get(fileStorageConfig.getFullWorkspaceFileDir()));
             } else {
@@ -130,8 +131,18 @@ public class FileStorageService {
         return "/api/files/background/" + fileName;
     }
 
+    /**
+     * 保存贴纸包图片。贴纸独立存放在 /api/files/sticker/ 下，按贴纸包可见性授权，
+     * 不再混进聊天附件目录（否则没发过的贴纸找不到消息，会被当成无权访问）。
+     */
     public String uploadStickerFile(String originalFilename, String contentType, byte[] bytes) throws IOException {
-        return uploadChatImageBytes(originalFilename, contentType, bytes, "sticker.png");
+        String safeName = cleanFileName(originalFilename, "sticker.png");
+        validateImageFile(safeName, contentType, bytes == null ? 0 : bytes.length);
+        String fileExtension = getFileExtension(safeName);
+        String fileName = UUID.randomUUID() + "." + (fileExtension.isBlank() ? "png" : fileExtension);
+        Path targetLocation = Paths.get(fileStorageConfig.getFullStickerDir()).resolve(fileName);
+        storeEncryptedBytes(targetLocation, bytes == null ? new byte[0] : bytes);
+        return "/api/files/sticker/" + fileName;
     }
 
     /**
@@ -252,6 +263,10 @@ public class FileStorageService {
                 String fileName = filePath.substring("/api/files/image-gen/".length());
                 Path file = Paths.get(fileStorageConfig.getFullImageGenDir()).resolve(fileName);
                 return deleteLocalFile(file);
+            } else if (filePath.startsWith("/api/files/sticker/")) {
+                String fileName = filePath.substring("/api/files/sticker/".length());
+                Path file = Paths.get(fileStorageConfig.getFullStickerDir()).resolve(fileName);
+                return deleteLocalFile(file);
             } else if (filePath.startsWith("/api/files/background/")) {
                 String fileName = filePath.substring("/api/files/background/".length());
                 Path file = Paths.get(fileStorageConfig.getFullBackgroundDir()).resolve(fileName);
@@ -293,6 +308,8 @@ public class FileStorageService {
             filePath = Paths.get(fileStorageConfig.getFullImageGenDir()).resolve(fileName);
         } else if ("background".equals(type)) {
             filePath = Paths.get(fileStorageConfig.getFullBackgroundDir()).resolve(fileName);
+        } else if ("sticker".equals(type)) {
+            filePath = Paths.get(fileStorageConfig.getFullStickerDir()).resolve(fileName);
         } else if ("workspace".equals(type)) {
             return getWorkspaceFile(null, fileName);
         } else {

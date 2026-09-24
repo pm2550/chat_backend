@@ -10,6 +10,7 @@ import com.chatapp.repository.StickerPackSubscriptionRepository;
 import com.chatapp.repository.StickerRepository;
 import com.chatapp.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -38,7 +39,8 @@ public class StickerService {
     }
 
     @Transactional(readOnly = true)
-    public List<StickerDto> listStickers(Long packId) {
+    public List<StickerDto> listStickers(Long userId, Long packId) {
+        requirePackVisible(userId, packId);
         return stickerRepository.findByPackIdOrderByIndexInPackAscIdAsc(packId).stream()
                 .map(StickerDto::fromEntity)
                 .toList();
@@ -149,6 +151,7 @@ public class StickerService {
         if (subscriptionRepository.findByPackIdAndUserId(packId, userId).isPresent()) {
             return;
         }
+        requirePackVisible(userId, packId);
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
         StickerPack pack = stickerPackRepository.findById(packId)
@@ -162,6 +165,15 @@ public class StickerService {
     @Transactional
     public void unsubscribe(Long userId, Long packId) {
         subscriptionRepository.deleteByPackIdAndUserId(packId, userId);
+    }
+
+    /**
+     * 私有贴纸包只有上传者和已订阅的人能看；不能靠猜 packId 列出或订阅别人的私有包。
+     */
+    private void requirePackVisible(Long userId, Long packId) {
+        if (packId == null || !stickerPackRepository.isVisibleToUser(packId, userId)) {
+            throw new AccessDeniedException("无权查看这个贴纸包");
+        }
     }
 
     private boolean isStickerImage(String name) {

@@ -221,6 +221,16 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
            "FROM Message m WHERE m.isDeleted = false AND (m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl)")
     boolean existsActiveMessageReferencingFileUrl(@Param("fileUrl") String fileUrl);
 
-    @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"sender", "chatRoom"})
-    Optional<Message> findFirstByFileUrlAndIsDeletedFalse(String fileUrl);
+    /**
+     * 找出引用该文件、且 userId 所在聊天室里的未删除消息（按 id 升序）。转发和贴纸会让多条消息
+     * 共用同一个 fileUrl，所以不能只看第一条消息所在的房间。调用方传 PageRequest.of(0, 1) 取一条用于审计。
+     */
+    @Query("SELECT m FROM Message m WHERE m.isDeleted = false " +
+           "AND (m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl) " +
+           "AND EXISTS (SELECT 1 FROM ChatRoomMember crm " +
+           "            WHERE crm.chatRoom.id = m.chatRoom.id AND crm.user.id = :userId) " +
+           "ORDER BY m.id ASC")
+    List<Message> findActiveMessagesReferencingFileUrlVisibleTo(@Param("fileUrl") String fileUrl,
+                                                                @Param("userId") Long userId,
+                                                                Pageable pageable);
 }

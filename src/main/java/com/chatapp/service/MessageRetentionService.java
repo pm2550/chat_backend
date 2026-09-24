@@ -2,6 +2,7 @@ package com.chatapp.service;
 
 import com.chatapp.entity.Message;
 import com.chatapp.repository.MessageRepository;
+import com.chatapp.repository.StickerPackRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -25,6 +27,7 @@ public class MessageRetentionService {
 
     private final MessageRepository messageRepository;
     private final FileStorageService fileStorageService;
+    private final StickerPackRepository stickerPackRepository;
 
     @Value("${message.retention.enabled:true}")
     private boolean enabled;
@@ -63,12 +66,18 @@ public class MessageRetentionService {
                 break;
             }
 
+            Set<String> batchFiles = new LinkedHashSet<>();
             for (Message message : messages) {
-                deletedFiles += deleteMessageFiles(message, seenFiles);
+                collectMessageScopedFiles(message, batchFiles);
                 expireMessage(message);
             }
             messageRepository.saveAll(messages);
             expiredMessages += messages.size();
+            // 先把整批消息标成过期再判断引用：转发副本、贴纸消息会和别的消息共用同一个文件，
+            // 只有没有任何未删除消息 / 贴纸包再引用时才能删盘上的文件。
+            for (String fileUrl : batchFiles) {
+                deletedFiles += deleteFileIfUnreferenced(fileUrl, seenFiles);
+            }
 
             if (messages.size() < safeBatchSize) {
                 break;
@@ -84,12 +93,13 @@ public class MessageRetentionService {
         return result;
     }
 
-    private int deleteMessageFiles(Message message, Set<String> seenFiles) {
-        int deleted = 0;
-        deleted += deleteFileIfMessageScoped(message.getFileUrl(), seenFiles);
-        deleted += deleteFileIfMessageScoped(message.getImageGenUrl(), seenFiles);
-        deleted += deleteFileIfMessageScoped(message.getThumbnailUrl(), seenFiles);
-        return deleted;
+    private void collectMessageScopedFiles(Message message, Set<String> batchFiles) {
+        for (String fileUrl : new String[] {
+                message.getFileUrl(), message.getImageGenUrl(), message.getThumbnailUrl()}) {
+            if (isMessageScopedFile(fileUrl)) {
+                batchFiles.add(fileUrl);
+            }
+        }
     }
 
     private int cleanupExpiredOrphanImageGenFiles(LocalDateTime cutoff, int maxFiles, Set<String> seenFiles) {
@@ -110,10 +120,16 @@ public class MessageRetentionService {
         return deleted;
     }
 
-    private int deleteFileIfMessageScoped(String fileUrl, Set<String> seenFiles) {
-        if (!isMessageScopedFile(fileUrl) || !seenFiles.add(fileUrl)) {
+    private int deleteFileIfUnreferenced(String fileUrl, Set<String> seenFiles) {
+        if (seenFiles.contains(fileUrl)) {
             return 0;
         }
+        if (messageRepository.existsActiveMessageReferencingFileUrl(fileUrl)
+                || stickerPackRepository.existsReferencingUrl(fileUrl)) {
+            // 仍被引用：不记入 seenFiles，后面批次过期最后一条引用时还要再判断一次。
+            return 0;
+        }
+        seenFiles.add(fileUrl);
         boolean deleted = fileStorageService.deleteFile(fileUrl);
         if (!deleted) {
             log.debug("消息过期清理未删除文件，可能已不存在或路径不受支持: {}", fileUrl);

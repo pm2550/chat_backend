@@ -74,6 +74,10 @@ public class MessageService {
         }
         var sticker = stickerRepository.findById(stickerId)
                 .orElseThrow(() -> new IllegalArgumentException("贴纸不存在"));
+        if (!stickerRepository.isStickerVisibleToUser(stickerId, senderId)) {
+            // 否则可以按 id 把别人私有包里的贴纸发进自己的房间，绕过贴纸包可见性。
+            throw new IllegalArgumentException("无权使用这个贴纸");
+        }
         Message message = anonymous
                 ? sendAnonymousEncryptedMessage(senderId, chatRoomId, "[贴纸]", null, null, Message.MessageType.STICKER)
                 : sendEncryptedMessage(senderId, chatRoomId, "[贴纸]", null, null, Message.MessageType.STICKER);

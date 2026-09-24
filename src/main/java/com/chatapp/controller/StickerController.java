@@ -50,8 +50,10 @@ public class StickerController {
     }
 
     @GetMapping("/{packId}/stickers")
-    public ResponseEntity<ApiResponse<List<StickerDto>>> listStickers(@PathVariable Long packId) {
-        return ResponseEntity.ok(ApiResponse.success(stickerService.listStickers(packId)));
+    public ResponseEntity<ApiResponse<List<StickerDto>>> listStickers(@PathVariable Long packId,
+                                                                     Authentication auth) {
+        UserDto user = userService.findByUsername(auth.getName());
+        return ResponseEntity.ok(ApiResponse.success(stickerService.listStickers(user.getId(), packId)));
     }
 
     @PostMapping("/{packId}/subscribe")

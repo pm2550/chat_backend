@@ -452,11 +452,15 @@ public class BotGatewayService {
     private StoredGatewayFile parseStoredGatewayFile(String fileUrl) {
         String chatPrefix = "/api/files/chat/";
         String imageGenPrefix = "/api/files/image-gen/";
+        String stickerPrefix = "/api/files/sticker/";
         if (fileUrl.startsWith(chatPrefix)) {
             return new StoredGatewayFile("chat", fileUrl.substring(chatPrefix.length()));
         }
         if (fileUrl.startsWith(imageGenPrefix)) {
             return new StoredGatewayFile("image-gen", fileUrl.substring(imageGenPrefix.length()));
+        }
+        if (fileUrl.startsWith(stickerPrefix)) {
+            return new StoredGatewayFile("sticker", fileUrl.substring(stickerPrefix.length()));
         }
         throw new IllegalArgumentException("不支持的文件路径");
     }
