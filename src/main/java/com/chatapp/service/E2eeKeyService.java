@@ -1,11 +1,14 @@
 package com.chatapp.service;
 
 import com.chatapp.dto.E2eeDto;
+import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
+import com.chatapp.entity.ChatRoomBot;
 import com.chatapp.entity.E2eeIdentityKey;
 import com.chatapp.entity.E2eeUserState;
 import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
+import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.E2eeIdentityKeyRepository;
@@ -44,7 +47,7 @@ public class E2eeKeyService {
     /** 推送、通知里用的文字，不带任何内容。 */
     public static final String NOTIFICATION_PLACEHOLDER = "[加密消息]";
     /** 附件的文件名同样可能是隐私，统一换成这个。 */
-    public static final String ATTACHMENT_FILE_NAME = "加密附件";
+    public static final String ATTACHMENT_FILE_NAME = "加密附件（请更新到最新版本查看）";
     /** encrypted_content 是 BLOB（64KB），留些余量。 */
     public static final int MAX_ENVELOPE_BYTES = 60_000;
 
@@ -52,6 +55,9 @@ public class E2eeKeyService {
     public static final String REASON_NOT_PRIVATE = "NOT_PRIVATE";
     public static final String REASON_NOT_TWO_MEMBERS = "NOT_TWO_MEMBERS";
     public static final String REASON_HAS_BOTS = "HAS_BOTS";
+
+    /** 内置 Agent 的名字（和 ChatRoomService.ensureSystemAgentBinding 查的是同一个）。 */
+    private static final String SYSTEM_AGENT_NAME = "Agent";
 
     private static final Pattern WRAP_PARAMS = Pattern.compile(
             "^m=(\\d+),t=(\\d+),p=(\\d+),v=(\\d+),hashLen=(\\d+)$");
@@ -63,6 +69,7 @@ public class E2eeKeyService {
     private final UserRepository userRepository;
     private final ChatRoomRepository chatRoomRepository;
     private final ChatRoomBotRepository chatRoomBotRepository;
+    private final BotConfigRepository botConfigRepository;
 
     @Transactional(readOnly = true)
     public E2eeDto.OwnKeys ownKeys(Long userId) {
@@ -132,6 +139,9 @@ public class E2eeKeyService {
                 .mapToInt(E2eeIdentityKey::getKeyVersion)
                 .max()
                 .orElse(0) + 1;
+        if (request.getKeyVersion() != null && request.getKeyVersion() != nextVersion) {
+            throw new IllegalStateException("加密密钥已在其他设备上更新，请刷新后重试");
+        }
         E2eeIdentityKey key = new E2eeIdentityKey();
         key.setUserId(userId);
         key.setKeyVersion(nextVersion);
@@ -273,10 +283,25 @@ public class E2eeKeyService {
         if (members == null || members.size() != 2) {
             return REASON_NOT_TWO_MEMBERS;
         }
-        if (!chatRoomBotRepository.findByChatRoomIdAndIsActiveTrue(room.getId()).isEmpty()) {
-            return REASON_HAS_BOTS;
-        }
-        return null;
+        Long systemAgentId = botConfigRepository.findFirstByBotNameAndCreatedByIsNullOrderByIdAsc(SYSTEM_AGENT_NAME)
+                .map(BotConfig::getId)
+                .orElse(null);
+        boolean hasBots = chatRoomBotRepository.findActiveBotsWithConfig(room.getId()).stream()
+                .anyMatch(binding -> !isPassiveSystemAgent(binding, systemAgentId));
+        return hasBots ? REASON_HAS_BOTS : null;
+    }
+
+    /**
+     * 每个会话建好时都会自动挂上内置的 Agent（ChatRoomService.ensureSystemAgentBinding），
+     * 只在被 @ 时才读那一条消息。加密消息服务器看不到 @，它也就永远不会被触发、读不到内容，
+     * 所以不算"会话里有机器人"——否则所有私聊都开不了加密。用户自己拉进来的机器人、
+     * 或把 Agent 改成关键词/全部触发，都算。
+     */
+    private boolean isPassiveSystemAgent(ChatRoomBot binding, Long systemAgentId) {
+        return systemAgentId != null
+                && binding.getBotConfig() != null
+                && systemAgentId.equals(binding.getBotConfig().getId())
+                && binding.getTriggerMode() == ChatRoomBot.TriggerMode.MENTION;
     }
 
     private boolean isEnabled(E2eeUserState state, int keyCount) {

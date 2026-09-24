@@ -4,6 +4,7 @@ import com.chatapp.dto.BotDto;
 import com.chatapp.dto.UrlPreviewDto;
 import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoomBot;
+import com.chatapp.service.E2eeKeyService;
 import com.chatapp.service.AgentGatewayService;
 import com.chatapp.service.CloudStorageService;
 import com.chatapp.service.LLMService;
@@ -440,7 +441,7 @@ public class MessageIntegrationTest {
     }
 
     @Test
-    @DisplayName("Send encrypted text message preserves ciphertext envelope")
+    @DisplayName("Encrypted envelopes: kept verbatim in private chats, content replaced by the old-client placeholder, refused in groups")
     void testSendEncryptedTextMessage() throws Exception {
         Object[] user1 = createUserAndLogin("encryptedsender");
         String token1 = (String) user1[0];
@@ -448,21 +449,35 @@ public class MessageIntegrationTest {
         Object[] user2 = createUserAndLogin("encryptedreceiver");
         Long userId2 = (Long) user2[1];
 
-        Long roomId = createGroupChat(token1, "Encrypted Room " + uniqueSuffix, List.of(userId2));
         Map<String, Object> request = new HashMap<>();
-        request.put("chatRoomId", roomId);
-        request.put("content", "[加密消息]");
+        request.put("content", "明文不该被存下来");
         request.put("encryptedContent", "ZW5jcnlwdGVk");
-        request.put("encryptionVersion", 1);
+        request.put("encryptionVersion", E2eeKeyService.MESSAGE_ENCRYPTION_VERSION);
 
+        // 群聊不做端到端加密。
+        request.put("chatRoomId", createGroupChat(token1, "Encrypted Room " + uniqueSuffix, List.of(userId2)));
+        mockMvc.perform(post("/api/v1/messages")
+                .header("Authorization", "Bearer " + token1)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+
+        MvcResult privateChat = mockMvc.perform(post("/api/v1/chat-rooms/private/" + userId2)
+                        .header("Authorization", "Bearer " + token1))
+                .andExpect(status().isOk())
+                .andReturn();
+        Map<String, Object> chatRoom = (Map<String, Object>) objectMapper
+                .readValue(privateChat.getResponse().getContentAsString(), Map.class)
+                .get("chatRoom");
+        request.put("chatRoomId", ((Number) chatRoom.get("id")).longValue());
         mockMvc.perform(post("/api/v1/messages")
                 .header("Authorization", "Bearer " + token1)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.content").value("[加密消息]"))
+                .andExpect(jsonPath("$.data.content").value(E2eeKeyService.OLD_CLIENT_PLACEHOLDER))
                 .andExpect(jsonPath("$.data.encryptedContent").value("ZW5jcnlwdGVk"))
-                .andExpect(jsonPath("$.data.encryptionVersion").value(1));
+                .andExpect(jsonPath("$.data.encryptionVersion").value(E2eeKeyService.MESSAGE_ENCRYPTION_VERSION));
     }
 
     @Test

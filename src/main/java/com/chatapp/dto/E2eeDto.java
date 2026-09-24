@@ -69,6 +69,8 @@ public class E2eeDto {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class CreateKeyRequest {
+        /** 客户端认为的新版本号：包装私钥时它参与了 AAD，必须和服务器分配的一致。 */
+        private Integer keyVersion;
         private String publicKey;
         private String wrappedPrivateKey;
         private String wrapSalt;

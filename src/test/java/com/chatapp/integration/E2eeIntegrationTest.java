@@ -124,6 +124,18 @@ class E2eeIntegrationTest extends IntegrationTestSupport {
 
         // 另一台设备还以为没有密钥，想再生成一把：拒绝，改为解锁已有的。
         createKey(aliceBearer, randomBase64(32), null).andExpect(status().isConflict());
+        Map<String, Object> staleVersion = new HashMap<>();
+        staleVersion.put("keyVersion", 1);
+        staleVersion.put("publicKey", randomBase64(32));
+        staleVersion.put("wrappedPrivateKey", randomBase64(60));
+        staleVersion.put("wrapSalt", randomBase64(16));
+        staleVersion.put("wrapParams", ARGON2);
+        staleVersion.put("expectedActiveKeyVersion", 1);
+        mockMvc.perform(post("/api/v1/e2ee/keys")
+                        .header("Authorization", aliceBearer)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(staleVersion)))
+                .andExpect(status().isConflict());
         createKey(aliceBearer, randomBase64(32), 1)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.activeKeyVersion").value(2))
@@ -302,6 +314,74 @@ class E2eeIntegrationTest extends IntegrationTestSupport {
                 .filter(m -> m.getChatRoom().getId().equals(dm.getId())
                         || m.getChatRoom().getId().equals(group.getId()))
                 .count());
+    }
+
+    @Test
+    @DisplayName("encrypted attachments are stored as opaque FILE blobs: no real name, type or transcoding")
+    void encrypted_attachment_is_opaque() throws Exception {
+        String envelope = randomBase64(200);
+        org.springframework.mock.web.MockMultipartFile ciphertext = new org.springframework.mock.web.MockMultipartFile(
+                "file", "encrypted.bin", "application/octet-stream", randomBytes(4096));
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .multipart("/api/v1/messages/file")
+                        .file(ciphertext)
+                        .param("chatRoomId", dm.getId().toString())
+                        .param("messageType", "VOICE")
+                        .param("encryptedContent", envelope)
+                        .param("encryptionVersion", String.valueOf(E2eeKeyService.MESSAGE_ENCRYPTION_VERSION))
+                        .header("Authorization", aliceBearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.messageType").value("FILE"))
+                .andExpect(jsonPath("$.data.fileName").value(E2eeKeyService.ATTACHMENT_FILE_NAME))
+                .andExpect(jsonPath("$.data.fileType").value("application/octet-stream"))
+                .andExpect(jsonPath("$.data.fileUrl").value(org.hamcrest.Matchers.endsWith(".bin")))
+                .andExpect(jsonPath("$.data.content").value(E2eeKeyService.OLD_CLIENT_PLACEHOLDER))
+                .andExpect(jsonPath("$.data.encryptedContent").value(envelope));
+
+        // 群聊里不能上传加密附件（先检查，不会先把密文存下来）。
+        ChatRoom group = chatRoomService.createGroupChat(alice.getId(), "att-" + uniqueSuffix, "g",
+                List.of(bob.getId()));
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .multipart("/api/v1/messages/file")
+                        .file(ciphertext)
+                        .param("chatRoomId", group.getId().toString())
+                        .param("encryptedContent", envelope)
+                        .param("encryptionVersion", String.valueOf(E2eeKeyService.MESSAGE_ENCRYPTION_VERSION))
+                        .header("Authorization", aliceBearer))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("the built-in mention-only Agent auto-attached to every chat does not block encryption")
+    void passive_system_agent_does_not_block_encryption() throws Exception {
+        BotConfig agent = botConfigRepository.findFirstByBotNameAndCreatedByIsNullOrderByIdAsc("Agent")
+                .orElseGet(() -> {
+                    BotConfig created = new BotConfig();
+                    created.setBotName("Agent");
+                    created.setLlmProvider(BotConfig.LLMProvider.HERMES);
+                    return botConfigRepository.save(created);
+                });
+        User carol = registerClientHashUser("e2ee_carol_" + uniqueSuffix, "Carol");
+        ChatRoom withAgent = chatRoomService.createPrivateChat(alice.getId(), carol.getId());
+        ChatRoomBot binding = chatRoomBotRepository
+                .findByChatRoomIdAndBotConfigId(withAgent.getId(), agent.getId())
+                .orElseThrow(() -> new AssertionError("every new chat gets the system Agent"));
+
+        mockMvc.perform(get("/api/v1/e2ee/rooms/" + withAgent.getId() + "/status")
+                        .header("Authorization", aliceBearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.eligible").value(true));
+        sendEncryptedRest(withAgent.getId(), randomBase64(100));
+
+        // 把 Agent 改成"所有消息都触发"：它要读每条消息，这个会话就不能再加密。
+        binding.setTriggerMode(ChatRoomBot.TriggerMode.ALL);
+        chatRoomBotRepository.save(binding);
+        mockMvc.perform(get("/api/v1/e2ee/rooms/" + withAgent.getId() + "/status")
+                        .header("Authorization", aliceBearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.eligible").value(false))
+                .andExpect(jsonPath("$.data.reason").value(E2eeKeyService.REASON_HAS_BOTS));
     }
 
     @Test

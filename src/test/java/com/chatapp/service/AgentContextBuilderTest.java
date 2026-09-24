@@ -92,6 +92,22 @@ class AgentContextBuilderTest {
     }
 
     @Test
+    @DisplayName("end-to-end encrypted messages never enter the agent context")
+    void skipsEndToEndEncryptedMessages() {
+        mockMembers();
+        Message encrypted = message(3L, bob, "[加密消息，请更新到最新版本查看]", 1);
+        encrypted.setEncryptedContent(new byte[] {1, 2, 3});
+        encrypted.setEncryptionVersion(2);
+        when(messageRepository.findRecentMessages(eq(10L), eq(5)))
+                .thenReturn(List.of(encrypted, message(2L, alice, "plain question", 2)));
+
+        AgentContextBuilder.AgentContextEnvelope env = builder.buildContext(task("summarize"));
+
+        assertEquals(1, env.conversationHistory().size());
+        assertEquals("plain question", env.conversationHistory().get(0).content());
+    }
+
+    @Test
     @DisplayName("respects max_history_messages from bot config")
     void respectsMaxHistoryMessagesFromBotConfig() {
         bot.setMaxHistoryMessages(3);
