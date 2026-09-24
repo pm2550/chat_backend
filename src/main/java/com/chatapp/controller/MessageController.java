@@ -92,7 +92,7 @@ public class MessageController {
             
             Map<String, Object> response = new HashMap<>();
             response.put("message", "消息发送成功");
-            response.put("data", MessageDto.fromEntity(message));
+            response.put("data", MessageDto.fromEntity(message, currentUser.getId()));
 
             rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
             auditLogService.record(
@@ -167,7 +167,7 @@ public class MessageController {
             
             Map<String, Object> response = new HashMap<>();
             response.put("message", "文件消息发送成功");
-            response.put("data", MessageDto.fromEntity(message));
+            response.put("data", MessageDto.fromEntity(message, currentUser.getId()));
 
             rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
             auditLogService.record(
@@ -219,7 +219,7 @@ public class MessageController {
 
             Map<String, Object> response = new HashMap<>();
             response.put("message", "图片消息发送成功");
-            response.put("data", MessageDto.fromEntity(message));
+            response.put("data", MessageDto.fromEntity(message, currentUser.getId()));
 
             rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
             auditLogService.record(
@@ -283,7 +283,7 @@ public class MessageController {
             
             Map<String, Object> response = new HashMap<>();
             response.put("message", "回复消息发送成功");
-            response.put("data", MessageDto.fromEntity(message));
+            response.put("data", MessageDto.fromEntity(message, currentUser.getId()));
 
             rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
             processBotsAndBroadcast(message, currentUser.getId());
@@ -492,7 +492,7 @@ public class MessageController {
 
             return ResponseEntity.ok(Map.of(
                 "message", "消息已撤回",
-                "data", MessageDto.fromEntity(message)
+                "data", MessageDto.fromEntity(message, currentUser.getId())
             ));
         } catch (Exception e) {
             log.error("撤回消息失败: {}", e.getMessage());
@@ -544,7 +544,7 @@ public class MessageController {
                     "targetRoom=" + request.getTargetChatRoomId());
             return ResponseEntity.ok(Map.of(
                     "message", "消息已转发",
-                    "data", MessageDto.fromEntity(message)
+                    "data", MessageDto.fromEntity(message, currentUser.getId())
             ));
         } catch (Exception e) {
             log.error("转发消息失败: {}", e.getMessage());
@@ -637,7 +637,7 @@ public class MessageController {
 
             return ResponseEntity.ok(Map.of(
                 "message", "消息已删除",
-                "data", MessageDto.fromEntity(message)
+                "data", MessageDto.fromEntity(message, currentUser.getId())
             ));
         } catch (Exception e) {
             log.error("删除消息失败: {}", e.getMessage());
@@ -718,7 +718,7 @@ public class MessageController {
             response.put("chatRoomId", chatRoomId);
             response.put("totalCount", stats.getTotalCount());
             response.put("unreadCount", stats.getUnreadCount());
-            response.put("lastMessage", MessageDto.fromEntity(stats.getLastMessage()));
+            response.put("lastMessage", MessageDto.fromEntity(stats.getLastMessage(), currentUser.getId()));
             
             return ResponseEntity.ok(response);
         } catch (Exception e) {
@@ -868,14 +868,10 @@ public class MessageController {
         };
     }
 
-    private List<MessageDto> toMessageDtos(List<Message> messages) {
-        return messages.stream()
-                .map(MessageDto::fromEntity)
-                .collect(Collectors.toList());
-    }
-
     private List<MessageDto> toMessageDtos(List<Message> messages, Long currentUserId) {
-        List<MessageDto> dtos = messageReadStateService.applyReadState(messages, toMessageDtos(messages));
+        List<MessageDto> dtos = messageReadStateService.applyReadState(messages, messages.stream()
+                .map(message -> MessageDto.fromEntity(message, currentUserId))
+                .collect(Collectors.toList()));
         return userPrivacyService.maskReadStateForViewer(
                 messageReactionService.attachAggregates(dtos, currentUserId),
                 currentUserId);

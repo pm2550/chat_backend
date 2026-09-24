@@ -50,11 +50,12 @@ public class ChatRoomMessageSearchController {
                 query == null ? "" : query.trim(),
                 pageable);
 
+        Long viewerId = currentUser.getId();
         List<MessageDto> messages = page.getContent().stream()
-                .map(MessageDto::fromEntity)
+                .map(message -> MessageDto.fromEntity(message, viewerId))
                 .toList();
         List<Map<String, Object>> results = page.getContent().stream()
-                .map(message -> resultFor(roomId, message))
+                .map(message -> resultFor(roomId, message, viewerId))
                 .toList();
 
         Map<String, Object> response = new HashMap<>();
@@ -91,7 +92,7 @@ public class ChatRoomMessageSearchController {
 
         Map<String, Object> response = new HashMap<>();
         response.put("messages", result.getContent().stream()
-                .map(MessageDto::fromEntity)
+                .map(message -> MessageDto.fromEntity(message, currentUser.getId()))
                 .toList());
         response.put("keyword", keyword);
         response.put("currentPage", result.getNumber());
@@ -102,14 +103,15 @@ public class ChatRoomMessageSearchController {
         return ResponseEntity.ok(response);
     }
 
-    private Map<String, Object> resultFor(Long roomId, Message message) {
+    private Map<String, Object> resultFor(Long roomId, Message message, Long viewerId) {
+        MessageDto dto = MessageDto.fromEntity(message, viewerId);
         Map<String, Object> result = new HashMap<>();
         result.put("messageId", message.getId());
         result.put("content", message.getContent());
-        result.put("senderName", MessageDto.fromEntity(message).getSenderName());
+        result.put("senderName", dto.getSenderName());
         result.put("timestamp", message.getCreatedAt());
-        result.put("message", MessageDto.fromEntity(message));
-        result.put("beforeAfterContext", messageService.searchContext(roomId, message));
+        result.put("message", dto);
+        result.put("beforeAfterContext", messageService.searchContext(roomId, message, viewerId));
         return result;
     }
 }

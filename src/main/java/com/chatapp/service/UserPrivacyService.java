@@ -92,7 +92,12 @@ public class UserPrivacyService {
             return messages;
         }
         for (MessageDto message : messages) {
-            if (message == null || !viewerId.equals(message.getSenderId())) {
+            if (message == null) {
+                continue;
+            }
+            // 匿名消息对外不带 senderId，按真实发送者判断。
+            Long senderId = message.getRealSenderId() != null ? message.getRealSenderId() : message.getSenderId();
+            if (!viewerId.equals(senderId)) {
                 continue;
             }
             if (message.getMessageStatus() == Message.MessageStatus.READ) {

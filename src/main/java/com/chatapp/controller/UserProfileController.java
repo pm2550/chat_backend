@@ -1,5 +1,6 @@
 package com.chatapp.controller;
 
+import com.chatapp.dto.PublicUserProfile;
 import com.chatapp.dto.UserDto;
 import com.chatapp.dto.UserProfileUpdateRequest;
 import com.chatapp.entity.User;
@@ -336,31 +337,23 @@ public class UserProfileController {
     private Map<String, Object> selfView(User user) {
         Map<String, Object> data = objectMapper.convertValue(user, new TypeReference<Map<String, Object>>() { });
         data.put("onlineStatus", user.chosenPresence());
+        // 实体序列化不带邮箱、手机号（只给本人），这里是本人，显式补上。
+        data.put("email", user.getEmail());
+        data.put("phone", user.getPhone());
         return data;
     }
 
     /**
      * 搜索结果不再直接返回实体：实体会带上别人的在线状态（绕过"显示在线状态"设置）
-     * 以及登录用的 clientSalt 等字段。
+     * 以及登录用的 clientSalt 等字段；邮箱、手机号也不给（只属于本人）。
      */
     private Map<String, Object> toSearchResult(User user, Long viewerId, Set<Long> hidingOnlineStatus) {
         boolean hidePresence = !user.getId().equals(viewerId) && hidingOnlineStatus.contains(user.getId());
-        Map<String, Object> data = new HashMap<>();
-        data.put("id", user.getId());
-        data.put("username", user.getUsername());
-        data.put("email", user.getEmail());
-        data.put("phone", user.getPhone());
-        data.put("displayName", user.getDisplayName());
-        data.put("avatarUrl", user.getAvatarUrl());
-        data.put("bio", user.getBio());
-        data.put("title", user.getTitle());
-        data.put("titleColor", user.getTitleColor());
-        data.put("titleEffect", user.getTitleEffect());
-        data.put("onlineStatus", hidePresence ? User.OnlineStatus.OFFLINE : user.getOnlineStatus());
-        data.put("lastSeen", hidePresence ? null : user.getLastSeen());
-        data.put("isActive", user.getIsActive());
-        data.put("createdAt", user.getCreatedAt());
-        data.put("updatedAt", user.getUpdatedAt());
+        Map<String, Object> data = PublicUserProfile.of(user);
+        if (hidePresence) {
+            data.put("onlineStatus", User.OnlineStatus.OFFLINE);
+            data.put("lastSeen", null);
+        }
         return data;
     }
 

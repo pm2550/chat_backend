@@ -1,6 +1,7 @@
 package com.chatapp.controller;
 
 import com.chatapp.dto.ApiResponse;
+import com.chatapp.dto.SelfUserDto;
 import com.chatapp.dto.UserDto;
 import com.chatapp.entity.User;
 import com.chatapp.exception.ClientTooOldException;
@@ -42,7 +43,7 @@ public class AuthController {
             String refreshToken = jwtUtils.generateRefreshToken(authenticated.getUsername());
 
             // 登录不改在线状态：只登录、没打开实时连接的人不算在线（连接建立时才上线）。
-            UserDto user = selfView(userService.findByUsername(authenticated.getUsername()));
+            SelfUserDto user = selfView(userService.findSelfByUsername(authenticated.getUsername()));
 
             UserDto.JwtResponse jwtResponse = new UserDto.JwtResponse(accessToken, refreshToken, user);
             return ResponseEntity.ok(ApiResponse.success("登录成功", jwtResponse));
@@ -71,10 +72,12 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<ApiResponse<UserDto>> register(@Valid @RequestBody UserDto.RegisterRequest request) {
+    public ResponseEntity<ApiResponse<SelfUserDto>> register(@Valid @RequestBody UserDto.RegisterRequest request) {
         try {
             UserDto user = userService.registerUser(request);
-            return ResponseEntity.ok(ApiResponse.success("注册成功", user));
+            // 回包给注册者本人：邮箱、手机号就是他刚提交的那两项。
+            return ResponseEntity.ok(ApiResponse.success("注册成功",
+                    new SelfUserDto(user, request.getEmail(), request.getPhone())));
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(ApiResponse.badRequest(e.getMessage()));
         }
@@ -125,7 +128,7 @@ public class AuthController {
             // 就不会因为距离上次输密码满了 N 天而被强制重新登录。
             // 旧 token 不拉黑——客户端可能并发发起多次续期，拉黑会误杀后到的那次。
             String newRefreshToken = jwtUtils.generateRefreshToken(username);
-            UserDto user = selfView(userService.findByUsername(username));
+            SelfUserDto user = selfView(userService.findSelfByUsername(username));
 
             UserDto.JwtResponse jwtResponse = new UserDto.JwtResponse(newAccessToken, newRefreshToken, user);
             return ResponseEntity.ok(ApiResponse.success("令牌刷新成功", jwtResponse));
@@ -135,7 +138,7 @@ public class AuthController {
     }
 
     @GetMapping("/validate")
-    public ResponseEntity<ApiResponse<UserDto>> validateToken(@RequestHeader("Authorization") String token) {
+    public ResponseEntity<ApiResponse<SelfUserDto>> validateToken(@RequestHeader("Authorization") String token) {
         try {
             String jwt = token.substring(7);
             if (jwtUtils.validateJwtToken(jwt)) {
@@ -144,7 +147,7 @@ public class AuthController {
                     return ResponseEntity.badRequest().body(ApiResponse.badRequest("令牌已失效"));
                 }
                 String username = jwtUtils.getUserNameFromJwtToken(jwt);
-                UserDto user = selfView(userService.findByUsername(username));
+                SelfUserDto user = selfView(userService.findSelfByUsername(username));
                 return ResponseEntity.ok(ApiResponse.success("令牌有效", user));
             } else {
                 return ResponseEntity.badRequest().body(ApiResponse.badRequest("无效的令牌"));
@@ -158,9 +161,9 @@ public class AuthController {
      * 返回给本人的资料里，状态是他自己选的（在线/离开/忙碌/隐身）。库里的 online_status
      * 表示"现在有没有连着"，登录、续期时连接往往还没建立，不能当成"我的状态"。
      */
-    private UserDto selfView(UserDto user) {
-        if (user != null && user.getId() != null) {
-            user.setOnlineStatus(userPresenceService.chosenPresence(user.getId()));
+    private SelfUserDto selfView(SelfUserDto user) {
+        if (user != null && user.getProfile() != null && user.getId() != null) {
+            user.getProfile().setOnlineStatus(userPresenceService.chosenPresence(user.getId()));
         }
         return user;
     }

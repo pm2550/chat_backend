@@ -60,12 +60,13 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByOnlineStatus(User.OnlineStatus onlineStatus);
 
     /**
-     * 搜索用户（按用户名、显示名或邮箱）
+     * 搜索用户（按用户名、显示名模糊匹配；邮箱只做完整匹配）。
+     * 邮箱不做模糊匹配：否则可以一个字一个字地试出别人的邮箱。
      */
     @Query("SELECT u FROM User u WHERE u.isActive = true AND " +
            "(LOWER(u.username) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
            "LOWER(u.displayName) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
-           "LOWER(u.email) LIKE LOWER(CONCAT('%', :keyword, '%')))")
+           "LOWER(u.email) = LOWER(:keyword))")
     Page<User> searchUsers(@Param("keyword") String keyword, Pageable pageable);
 
     /**

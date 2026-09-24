@@ -872,22 +872,35 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         broadcastStatus(userId, status.name());
     }
 
+    /**
+     * 每个接收者看到的消息按人定制，但最多只序列化两次：发送者本人的各个会话拿"本人版"
+     * （sentByMe=true，匿名消息也带回真实 sender），其余成员拿"公开版"（匿名消息不带真实身份）。
+     */
     private void broadcastMessage(Message saved,
                                   Long exceptUserId,
                                   MessageEvent event,
                                   String clientMessageId,
                                   boolean notifyOffline) {
-        ObjectNode envelope = objectMapper.createObjectNode();
-        envelope.put("type", "message");
-        envelope.put("event", event.wireName);
-        if (clientMessageId != null) {
-            envelope.put("clientMessageId", clientMessageId);
+        Long ownerId = saved.getSender() != null ? saved.getSender().getId() : null;
+        boolean withReadState = event == MessageEvent.UPDATED;
+        TextMessage publicFrame = messageFrame(event, clientMessageId, toMessageJson(saved, withReadState, null));
+        TextMessage ownerFrame = null;
+        List<Long> members = roomMembers(saved.getChatRoom().getId());
+        if (ownerId != null && !ownerId.equals(exceptUserId) && members.contains(ownerId)) {
+            ownerFrame = messageFrame(event, clientMessageId, toMessageJson(saved, withReadState, ownerId));
         }
-        envelope.set("message", toMessageJson(saved, event == MessageEvent.UPDATED));
-        if (exceptUserId == null) {
-            broadcastToRoom(saved.getChatRoom().getId(), envelope);
-        } else {
-            broadcastToRoomExcept(saved.getChatRoom().getId(), exceptUserId, envelope);
+        for (Long userId : members) {
+            if (userId.equals(exceptUserId)) {
+                continue;
+            }
+            Set<WebSocketSession> sessions = userSessions.get(userId);
+            if (sessions == null) {
+                continue;
+            }
+            TextMessage frame = userId.equals(ownerId) && ownerFrame != null ? ownerFrame : publicFrame;
+            if (frame != null) {
+                sessions.forEach(s -> sendFrame(s, frame));
+            }
         }
         if (notifyOffline) {
             pushOfflineMessageNotification(saved);
@@ -993,10 +1006,8 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
 
         Long chatRoomId = message.getChatRoom().getId();
         Long senderId = message.getSender().getId();
-        String senderName = message.getSender().getDisplayName() != null
-                && !message.getSender().getDisplayName().isBlank()
-                ? message.getSender().getDisplayName()
-                : message.getSender().getUsername();
+        // 匿名消息的通知只露匿名名，推送数据里也不带真实发送者。
+        String senderName = MessageDto.publicSenderName(message);
         // 私聊的房间名是自动拼的"甲 & 乙"，通知标题直接用发送者更清楚。
         boolean privateChat = message.getChatRoom().getRoomType() == ChatRoom.RoomType.PRIVATE;
         String title = !privateChat
@@ -1079,12 +1090,14 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
 
     private String notificationData(Message message) {
         try {
-            return objectMapper.writeValueAsString(Map.of(
-                    "type", "message",
-                    "chatRoomId", message.getChatRoom().getId(),
-                    "messageId", message.getId(),
-                    "senderId", message.getSender().getId()
-            ));
+            Map<String, Object> data = new java.util.LinkedHashMap<>();
+            data.put("type", "message");
+            data.put("chatRoomId", message.getChatRoom().getId());
+            data.put("messageId", message.getId());
+            if (!Boolean.TRUE.equals(message.getIsAnonymous())) {
+                data.put("senderId", message.getSender().getId());
+            }
+            return objectMapper.writeValueAsString(data);
         } catch (Exception e) {
             return "{}";
         }
@@ -1108,7 +1121,15 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
      * 表情回应的 currentUserReacted 是按查看者算的，广播里统一为 false，客户端用 userIds 判断。
      */
     ObjectNode toMessageJson(Message m, boolean withReadState) {
-        MessageDto dto = MessageDto.fromEntity(m);
+        return toMessageJson(m, withReadState, null);
+    }
+
+    /** viewerId 为 null 时是给其他成员的公开版（sentByMe=false）；是发送者时为本人版。 */
+    ObjectNode toMessageJson(Message m, boolean withReadState, Long viewerId) {
+        MessageDto dto = MessageDto.fromEntity(m, viewerId);
+        if (viewerId == null) {
+            dto.setSentByMe(false);
+        }
         messageReactionService.attachAggregates(List.of(dto), null);
         if (withReadState) {
             // 已有消息被编辑/撤回：客户端会整条替换，已读数要和列表接口同一算法，否则会被冲回 0。
@@ -1124,6 +1145,33 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             json.set("timestamp", json.get("createdAt"));
         }
         return json;
+    }
+
+    private TextMessage messageFrame(MessageEvent event, String clientMessageId, ObjectNode message) {
+        ObjectNode envelope = objectMapper.createObjectNode();
+        envelope.put("type", "message");
+        envelope.put("event", event.wireName);
+        if (clientMessageId != null) {
+            envelope.put("clientMessageId", clientMessageId);
+        }
+        envelope.set("message", message);
+        try {
+            return new TextMessage(objectMapper.writeValueAsString(envelope));
+        } catch (IOException e) {
+            log.warn("Failed to serialize ws message: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private void sendFrame(WebSocketSession session, TextMessage frame) {
+        if (!session.isOpen()) return;
+        try {
+            synchronized (session) {
+                session.sendMessage(frame);
+            }
+        } catch (IOException e) {
+            log.warn("Failed to send ws message: {}", e.getMessage());
+        }
     }
 
     private void sendJson(WebSocketSession session, Object payload) {

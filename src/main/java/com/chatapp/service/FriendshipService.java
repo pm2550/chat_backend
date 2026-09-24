@@ -283,9 +283,10 @@ public class FriendshipService {
                         .orElse(null);
 
                     String normalizedKeyword = keyword.toLowerCase();
+                    // 邮箱只认完整匹配，模糊匹配等于把邮箱一点点透露出去。
                     return displayName.toLowerCase().contains(normalizedKeyword) ||
                            username.toLowerCase().contains(normalizedKeyword) ||
-                           email.toLowerCase().contains(normalizedKeyword) ||
+                           email.equalsIgnoreCase(keyword.trim()) ||
                            (alias != null && alias.toLowerCase().contains(normalizedKeyword));
                 })
                 .collect(Collectors.toList());

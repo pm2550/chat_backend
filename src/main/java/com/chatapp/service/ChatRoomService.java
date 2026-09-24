@@ -358,7 +358,7 @@ public class ChatRoomService {
                     .updatedAt(room.getUpdatedAt())
                     .participants(privateParticipants.getOrDefault(room.getId(), List.of()))
                     .memberCount(memberCounts.getOrDefault(room.getId(), 0L))
-                    .lastMessage(lastMessage == null ? null : MessageDto.fromEntity(lastMessage))
+                    .lastMessage(lastMessage == null ? null : MessageDto.fromEntity(lastMessage, userId))
                     .unreadCount(membership == null || membership.getUnreadCount() == null
                             ? 0 : membership.getUnreadCount())
                     .isPinned(membership != null && Boolean.TRUE.equals(membership.getIsPinned()))

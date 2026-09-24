@@ -1,6 +1,7 @@
 package com.chatapp.dto;
 
 import com.chatapp.entity.Message;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -13,6 +14,12 @@ import java.util.List;
 
 /**
  * 消息DTO类
+ *
+ * <p>匿名消息的真实身份只给发送者本人：{@link #fromEntity(Message)} 产出的是"公开版"，
+ * 匿名消息里没有 sender / senderId / 真名真头像，只有匿名身份；
+ * {@link #fromEntity(Message, Long)} 按查看者生成，查看者就是发送者时才带回真实 sender，
+ * 并用 {@code sentByMe} 告诉客户端"这是我发的"。服务器内部需要真实发送者时用
+ * {@link #getRealSenderId()}，它不会被序列化。</p>
  */
 @Data
 @NoArgsConstructor
@@ -68,12 +75,45 @@ public class MessageDto {
     private List<ReactionInfo> reactions = List.of();
     // 当前用户是否收藏了该消息；只有带用户上下文的列表接口才会填充，其余情况为 null
     private Boolean starredByMe;
+    // 这条消息是不是查看者自己发的（按查看者计算；不知道查看者时为 null）。
+    // 匿名消息对别人不带 senderId，客户端只能靠它认出"我发的"。
+    private Boolean sentByMe;
+    // 真实发送者，仅供服务器内部判断（已读遮蔽、推送排除等），永不下发。
+    @JsonIgnore
+    private Long realSenderId;
 
+    public static final String ANONYMOUS_FALLBACK_NAME = "匿名用户";
+
+    /** 公开版：不针对任何查看者，匿名消息不带真实身份。广播、机器人接口用它。 */
     public static MessageDto fromEntity(Message message) {
-        return fromEntity(message, true);
+        return fromEntity(message, true, null);
     }
 
-    private static MessageDto fromEntity(Message message, boolean includeReply) {
+    /** 按查看者生成：viewerId 是发送者本人时带回真实 sender，并填 sentByMe。 */
+    public static MessageDto fromEntity(Message message, Long viewerId) {
+        return fromEntity(message, true, viewerId);
+    }
+
+    /** 对外展示的发送者名字：匿名消息只给匿名名，机器人给机器人名，其余给显示名/用户名。 */
+    public static String publicSenderName(Message message) {
+        if (message == null) {
+            return null;
+        }
+        if (Boolean.TRUE.equals(message.getIsAnonymous())) {
+            return message.getAnonymousIdentity() != null
+                    ? prefer(message.getAnonymousIdentity().getAnonymousName(), ANONYMOUS_FALLBACK_NAME)
+                    : ANONYMOUS_FALLBACK_NAME;
+        }
+        if (message.getBotConfig() != null) {
+            return prefer(message.getBotDisplayName(), message.getBotConfig().getBotName());
+        }
+        if (message.getSender() == null) {
+            return null;
+        }
+        return prefer(message.getSender().getDisplayName(), message.getSender().getUsername());
+    }
+
+    private static MessageDto fromEntity(Message message, boolean includeReply, Long viewerId) {
         if (message == null) {
             return null;
         }
@@ -85,14 +125,25 @@ public class MessageDto {
         dto.setContentFormat(message.getContentFormat());
         dto.setMessageStatus(message.getMessageStatus());
 
-        UserDto sender = toUserDto(message.getSender());
-        dto.setSender(sender);
-        if (sender != null) {
-            dto.setSenderId(sender.getId());
-            dto.setSenderName(sender.getDisplayName() != null && !sender.getDisplayName().isBlank()
-                    ? sender.getDisplayName()
-                    : sender.getUsername());
-            dto.setSenderAvatar(sender.getAvatarUrl());
+        boolean anonymous = Boolean.TRUE.equals(message.getIsAnonymous());
+        Long realSenderId = message.getSender() == null ? null : message.getSender().getId();
+        boolean viewerIsSender = viewerId != null && viewerId.equals(realSenderId);
+        dto.setRealSenderId(realSenderId);
+        // 匿名消息只有发送者本人能看到真实 sender；别人（以及不针对查看者的公开版）一律不带。
+        if (!anonymous || viewerIsSender) {
+            UserDto sender = toUserDto(message.getSender());
+            dto.setSender(sender);
+            if (sender != null) {
+                dto.setSenderId(sender.getId());
+                dto.setSenderName(sender.getDisplayName() != null && !sender.getDisplayName().isBlank()
+                        ? sender.getDisplayName()
+                        : sender.getUsername());
+                dto.setSenderAvatar(sender.getAvatarUrl());
+            }
+        }
+        if (viewerId != null) {
+            // 机器人消息的 sender 是机器人的主人，但那不是"我发的"。
+            dto.setSentByMe(viewerIsSender && message.getBotConfig() == null);
         }
         if (message.getBotConfig() != null) {
             dto.setBotConfigId(message.getBotConfig().getId());
@@ -100,8 +151,12 @@ public class MessageDto {
             dto.setBotName(prefer(message.getBotDisplayName(), message.getBotConfig().getBotName()));
             dto.setBotAvatar(message.getBotConfig().getBotAvatar());
         }
-        dto.setIsAnonymous(Boolean.TRUE.equals(message.getIsAnonymous()));
-        if (Boolean.TRUE.equals(message.getIsAnonymous()) && message.getAnonymousIdentity() != null) {
+        dto.setIsAnonymous(anonymous);
+        if (anonymous) {
+            dto.setSenderName(ANONYMOUS_FALLBACK_NAME);
+            dto.setSenderAvatar(null);
+        }
+        if (anonymous && message.getAnonymousIdentity() != null) {
             dto.setAnonymousIdentityId(message.getAnonymousIdentity().getId());
             dto.setAnonymousName(message.getAnonymousIdentity().getAnonymousName());
             dto.setAnonymousAvatar(message.getAnonymousIdentity().getAnonymousAvatar());
@@ -115,7 +170,7 @@ public class MessageDto {
         if (message.getReplyToMessage() != null) {
             dto.setReplyToMessageId(message.getReplyToMessage().getId());
             if (includeReply) {
-                dto.setReplyToMessage(fromEntity(message.getReplyToMessage(), false));
+                dto.setReplyToMessage(fromEntity(message.getReplyToMessage(), false, viewerId));
             }
         }
         if (message.getForwardedFromMessage() != null) {
@@ -176,8 +231,6 @@ public class MessageDto {
         UserDto dto = new UserDto();
         dto.setId(user.getId());
         dto.setUsername(user.getUsername());
-        dto.setEmail(user.getEmail());
-        dto.setPhone(user.getPhone());
         dto.setDisplayName(user.getDisplayName());
         dto.setAvatarUrl(user.getAvatarUrl());
         dto.setTitle(user.getTitle());

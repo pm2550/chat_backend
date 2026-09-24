@@ -1,5 +1,6 @@
 package com.chatapp.controller;
 
+import com.chatapp.dto.PublicUserProfile;
 import com.chatapp.entity.Friendship;
 import com.chatapp.entity.User;
 import com.chatapp.entity.UserSettings;
@@ -390,23 +391,13 @@ public class FriendshipController {
                                               Set<Long> hidingOnlineStatus,
                                               Map<Long, String> avatarFrames) {
         boolean hidePresence = !user.getId().equals(viewerId) && hidingOnlineStatus.contains(user.getId());
-        Map<String, Object> summary = new HashMap<>();
-        summary.put("id", user.getId());
-        summary.put("username", user.getUsername());
-        summary.put("email", user.getEmail());
-        summary.put("phone", user.getPhone());
-        summary.put("displayName", user.getDisplayName());
-        summary.put("avatarUrl", user.getAvatarUrl());
-        summary.put("bio", user.getBio());
-        summary.put("title", user.getTitle());
-        summary.put("titleColor", user.getTitleColor());
-        summary.put("titleEffect", user.getTitleEffect());
+        // 好友请求的双方可能还是陌生人：只给公开资料，邮箱、手机号不出现在任何一方的列表里。
+        Map<String, Object> summary = PublicUserProfile.of(user);
         summary.put("avatarFramePreset", avatarFrames.getOrDefault(user.getId(), "none"));
-        summary.put("onlineStatus", hidePresence ? User.OnlineStatus.OFFLINE : user.getOnlineStatus());
-        summary.put("lastSeen", hidePresence ? null : user.getLastSeen());
-        summary.put("isActive", user.getIsActive());
-        summary.put("createdAt", user.getCreatedAt());
-        summary.put("updatedAt", user.getUpdatedAt());
+        if (hidePresence) {
+            summary.put("onlineStatus", User.OnlineStatus.OFFLINE);
+            summary.put("lastSeen", null);
+        }
         return summary;
     }
 }

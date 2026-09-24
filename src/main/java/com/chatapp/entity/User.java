@@ -56,9 +56,13 @@ public class User {
     @Column(name = "password_scheme", length = 32, nullable = false)
     private String passwordScheme = "BCRYPT_LEGACY";
 
+    // 邮箱、手机号只给本人看：实体无论被谁序列化都不带它们，
+    // 本人的资料由 SelfUserDto / UserProfileController.selfView 显式带上。
+    @JsonIgnore
     @Column(unique = true, nullable = false, length = 100)
     private String email;
 
+    @JsonIgnore
     @Column(length = 20)
     private String phone;
 

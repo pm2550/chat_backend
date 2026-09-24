@@ -28,7 +28,10 @@ public class AgentTaskDto {
         AgentTaskDto dto = new AgentTaskDto();
         dto.setId(task.getId());
         dto.setChatRoomId(task.getChatRoom() != null ? task.getChatRoom().getId() : null);
-        dto.setRequestedById(task.getRequestedBy() != null ? task.getRequestedBy().getId() : null);
+        // 匿名发起的任务不暴露真实发起人（任务列表是全房间可见的）。
+        dto.setRequestedById(task.getRequestedBy() != null && !Boolean.TRUE.equals(task.getAnonymousRequester())
+                ? task.getRequestedBy().getId()
+                : null);
         dto.setBotId(task.getBotConfig() != null ? task.getBotConfig().getId() : null);
         dto.setPrompt(task.getPrompt());
         dto.setResult(task.getResult());

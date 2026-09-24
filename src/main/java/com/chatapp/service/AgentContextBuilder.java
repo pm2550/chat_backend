@@ -645,7 +645,8 @@ public class AgentContextBuilder {
         if (user == null) {
             return "unknown";
         }
-        return firstText(user.getDisplayName(), user.getUsername(), user.getEmail(), "User " + user.getId());
+        // 邮箱不进 LLM 上下文：机器人也不该拿到别人的联系方式。
+        return firstText(user.getDisplayName(), user.getUsername(), "User " + user.getId());
     }
 
     private static String formatTimestamp(LocalDateTime timestamp) {

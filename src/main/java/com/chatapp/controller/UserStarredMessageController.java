@@ -38,7 +38,9 @@ public class UserStarredMessageController {
                 PageRequest.of(page, size, Sort.by("createdAt").descending()));
         return ResponseEntity.ok(Map.of(
                 "messages", messageReactionService.attachAggregates(
-                        messages.getContent().stream().map(MessageDto::fromEntity).toList(),
+                        messages.getContent().stream()
+                                .map(message -> MessageDto.fromEntity(message, currentUser.getId()))
+                                .toList(),
                         currentUser.getId()),
                 "currentPage", messages.getNumber(),
                 "totalPages", messages.getTotalPages(),

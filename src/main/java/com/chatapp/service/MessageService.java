@@ -738,7 +738,7 @@ public class MessageService {
         return messageRepository.searchInUserChatRooms(userId, keyword, pageable);
     }
 
-    public List<MessageDto> searchContext(Long chatRoomId, Message message) {
+    public List<MessageDto> searchContext(Long chatRoomId, Message message, Long viewerId) {
         List<Message> before = messageRepository.findContextBefore(
                 chatRoomId,
                 message.getCreatedAt(),
@@ -753,7 +753,7 @@ public class MessageService {
         }
         context.add(message);
         context.addAll(after);
-        return context.stream().map(MessageDto::fromEntity).toList();
+        return context.stream().map(item -> MessageDto.fromEntity(item, viewerId)).toList();
     }
 
     /**
@@ -816,6 +816,11 @@ public class MessageService {
         }
         // 关了已读回执的人也看不到别人的已读（互惠）。
         if (readStateService == null || !sharesReadReceipts(requesterId)) {
+            return List.of();
+        }
+        // 匿名消息的已读名单只给发送者本人：名单里唯独缺了谁，谁就是匿名的发送者。
+        if (Boolean.TRUE.equals(message.getIsAnonymous())
+                && (message.getSender() == null || !message.getSender().getId().equals(requesterId))) {
             return List.of();
         }
         // 与消息上的已读数同一个定义、同一批人（关了回执的读者不列出）。
