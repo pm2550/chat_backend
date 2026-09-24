@@ -61,6 +61,9 @@ public class MessageService {
     @Autowired(required = false)
     private MessageReadReceiptRepository readReceiptRepository;
 
+    @Autowired(required = false)
+    private UserPrivacyService userPrivacyService;
+
     /**
      * 发送消息
      */
@@ -385,15 +388,16 @@ public class MessageService {
             return;
         }
 
-        if (readReceiptRepository != null &&
-                readReceiptRepository.findByMessageIdAndUserId(messageId, userId).isEmpty()) {
+        if (sharesReadReceipts(userId)
+                && readReceiptRepository != null
+                && readReceiptRepository.findByMessageIdAndUserId(messageId, userId).isEmpty()) {
             var receipt = new com.chatapp.entity.MessageReadReceipt();
             receipt.setMessage(message);
             receipt.setUser(userRepository.findById(userId)
                     .orElseThrow(() -> new IllegalArgumentException("用户不存在")));
             readReceiptRepository.save(receipt);
             messageRepository.markAsRead(messageId, userId);
-        } else if (readReceiptRepository == null) {
+        } else if (sharesReadReceipts(userId) && readReceiptRepository == null) {
             messageRepository.markAsRead(messageId, userId);
         }
         chatRoomRepository.markMessageReadForMember(message.getChatRoom().getId(), userId, messageId);
@@ -678,6 +682,10 @@ public class MessageService {
         return messageRepository.countTotalUnreadMessages(userId);
     }
 
+    private boolean sharesReadReceipts(Long userId) {
+        return userPrivacyService == null || !userPrivacyService.readReceiptsDisabled(userId);
+    }
+
     @Transactional(readOnly = true)
     public List<com.chatapp.dto.ReadReceiptDto> getReadReceipts(Long messageId, Long requesterId) {
         Message message = messageRepository.findById(messageId)
@@ -685,10 +693,18 @@ public class MessageService {
         if (!chatRoomRepository.isMember(message.getChatRoom().getId(), requesterId)) {
             throw new IllegalArgumentException("您无权限查看此消息");
         }
-        if (readReceiptRepository == null) {
+        // 关了已读回执的人也看不到别人的已读（互惠）。
+        if (readReceiptRepository == null || !sharesReadReceipts(requesterId)) {
             return List.of();
         }
-        return readReceiptRepository.findByMessageIdOrderByReadAtAsc(messageId).stream()
+        var receipts = readReceiptRepository.findByMessageIdOrderByReadAtAsc(messageId);
+        // 之后才关掉回执的人，旧的已读记录也不再展示。
+        java.util.Set<Long> hidden = userPrivacyService == null
+                ? java.util.Set.of()
+                : userPrivacyService.usersWithReadReceiptsDisabled(
+                        receipts.stream().map(receipt -> receipt.getUser().getId()).toList());
+        return receipts.stream()
+                .filter(receipt -> !hidden.contains(receipt.getUser().getId()))
                 .map(com.chatapp.dto.ReadReceiptDto::fromEntity)
                 .toList();
     }
@@ -702,7 +718,10 @@ public class MessageService {
             throw new IllegalArgumentException("您不是该聊天室的成员");
         }
 
-        messageRepository.markAllAsReadInChatRoom(chatRoomId, userId);
+        // 关了"已读回执"只清自己的未读，不把消息标成对方可见的"已读"。
+        if (sharesReadReceipts(userId)) {
+            messageRepository.markAllAsReadInChatRoom(chatRoomId, userId);
+        }
         Message lastMessage = findVisibleLastMessage(chatRoomId, userId);
         chatRoomRepository.markRoomReadForMember(
                 chatRoomId,

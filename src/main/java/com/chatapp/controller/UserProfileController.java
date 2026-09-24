@@ -4,6 +4,7 @@ import com.chatapp.dto.UserDto;
 import com.chatapp.dto.UserProfileUpdateRequest;
 import com.chatapp.entity.User;
 import com.chatapp.entity.UserSettings;
+import com.chatapp.service.UserPrivacyService;
 import com.chatapp.service.UserProfileService;
 import com.chatapp.service.UserService;
 import lombok.RequiredArgsConstructor;
@@ -18,6 +19,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 用户资料控制器
@@ -29,6 +31,7 @@ public class UserProfileController {
 
     private final UserProfileService userProfileService;
     private final UserService userService;
+    private final UserPrivacyService userPrivacyService;
 
     /**
      * 获取当前用户资料
@@ -166,13 +169,19 @@ public class UserProfileController {
     @GetMapping("/search")
     public ResponseEntity<?> searchUsers(
             @RequestParam("keyword") String keyword,
-            @RequestParam(value = "limit", defaultValue = "10") int limit) {
+            @RequestParam(value = "limit", defaultValue = "10") int limit,
+            Authentication auth) {
         try {
+            UserDto currentUser = userService.findByUsername(auth.getName());
             List<User> users = userProfileService.searchUsers(keyword, limit);
+            Set<Long> hidingOnlineStatus = userPrivacyService.usersHidingOnlineStatus(
+                    users.stream().map(User::getId).toList());
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
-            response.put("data", users);
+            response.put("data", users.stream()
+                    .map(user -> toSearchResult(user, currentUser.getId(), hidingOnlineStatus))
+                    .toList());
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             Map<String, Object> response = new HashMap<>();
@@ -306,6 +315,31 @@ public class UserProfileController {
             response.put("message", e.getMessage());
             return ResponseEntity.badRequest().body(response);
         }
+    }
+
+    /**
+     * 搜索结果不再直接返回实体：实体会带上别人的在线状态（绕过"显示在线状态"设置）
+     * 以及登录用的 clientSalt 等字段。
+     */
+    private Map<String, Object> toSearchResult(User user, Long viewerId, Set<Long> hidingOnlineStatus) {
+        boolean hidePresence = !user.getId().equals(viewerId) && hidingOnlineStatus.contains(user.getId());
+        Map<String, Object> data = new HashMap<>();
+        data.put("id", user.getId());
+        data.put("username", user.getUsername());
+        data.put("email", user.getEmail());
+        data.put("phone", user.getPhone());
+        data.put("displayName", user.getDisplayName());
+        data.put("avatarUrl", user.getAvatarUrl());
+        data.put("bio", user.getBio());
+        data.put("title", user.getTitle());
+        data.put("titleColor", user.getTitleColor());
+        data.put("titleEffect", user.getTitleEffect());
+        data.put("onlineStatus", hidePresence ? User.OnlineStatus.OFFLINE : user.getOnlineStatus());
+        data.put("lastSeen", hidePresence ? null : user.getLastSeen());
+        data.put("isActive", user.getIsActive());
+        data.put("createdAt", user.getCreatedAt());
+        data.put("updatedAt", user.getUpdatedAt());
+        return data;
     }
 
     private Map<String, Object> toSettingsMap(UserSettings settings) {

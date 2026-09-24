@@ -11,6 +11,7 @@ import com.chatapp.service.MessageService;
 import com.chatapp.service.MessageReactionService;
 import com.chatapp.service.RemoteImageFetchService;
 import com.chatapp.service.VoiceTranscoder;
+import com.chatapp.service.UserPrivacyService;
 import com.chatapp.service.UserService;
 import com.chatapp.websocket.RawWebSocketHandler;
 import lombok.RequiredArgsConstructor;
@@ -49,6 +50,7 @@ public class MessageController {
     private final MessageReactionService messageReactionService;
     private final RemoteImageFetchService remoteImageFetchService;
     private final VoiceTranscoder voiceTranscoder;
+    private final UserPrivacyService userPrivacyService;
 
     /**
      * 发送文本消息
@@ -856,7 +858,9 @@ public class MessageController {
     }
 
     private List<MessageDto> toMessageDtos(List<Message> messages, Long currentUserId) {
-        return messageReactionService.attachAggregates(toMessageDtos(messages), currentUserId);
+        return userPrivacyService.maskReadStateForViewer(
+                messageReactionService.attachAggregates(toMessageDtos(messages), currentUserId),
+                currentUserId);
     }
 
     private void processBotsAndBroadcast(Message message, Long senderId) {

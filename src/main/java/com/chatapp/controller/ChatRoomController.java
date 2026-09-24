@@ -30,6 +30,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 聊天室控制器
@@ -46,6 +47,7 @@ public class ChatRoomController {
     private final UserSettingsRepository userSettingsRepository;
     private final RawWebSocketHandler webSocketHandler;
     private final com.chatapp.service.ModerationService moderationService;
+    private final com.chatapp.service.UserPrivacyService userPrivacyService;
 
     /**
      * 创建私聊
@@ -232,7 +234,7 @@ public class ChatRoomController {
             List<ChatRoomMember> members = chatRoomService.getChatRoomMembers(roomId);
             
             Map<String, Object> response = new HashMap<>();
-            response.put("members", toMemberSummaries(members));
+            response.put("members", toMemberSummaries(members, currentUser.getId()));
             response.put("count", members.size());
             
             return ResponseEntity.ok(response);
@@ -362,7 +364,7 @@ public class ChatRoomController {
 
             Map<String, Object> response = new HashMap<>();
             response.put("message", "群名片更新成功");
-            response.put("member", toMemberSummary(member));
+            response.put("member", toMemberSummaries(List.of(member), currentUser.getId()).get(0));
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             log.error("更新群名片失败: {}", e.getMessage());
@@ -385,7 +387,7 @@ public class ChatRoomController {
             List<ChatRoomMember> members = chatRoomService.getChatRoomMembers(roomId);
             Map<String, Object> response = new HashMap<>();
             response.put("message", "成员已加入群聊");
-            response.put("members", toMemberSummaries(members));
+            response.put("members", toMemberSummaries(members, currentUser.getId()));
             response.put("count", members.size());
 
             return ResponseEntity.ok(response);
@@ -819,8 +821,30 @@ public class ChatRoomController {
         public void setPreset(String preset) { this.preset = preset; }
     }
 
-    private List<Map<String, Object>> toMemberSummaries(List<ChatRoomMember> members) {
-        return members.stream().map(this::toMemberSummary).toList();
+    /**
+     * 成员列表按查看者过滤隐私：关了"显示在线状态"的成员不暴露在线/最后在线，
+     * 关了"已读回执"的成员不暴露读到哪条；查看者自己关了已读回执时也看不到别人的。
+     */
+    private List<Map<String, Object>> toMemberSummaries(List<ChatRoomMember> members, Long viewerId) {
+        List<Long> userIds = members.stream().map(member -> member.getUser().getId()).toList();
+        Set<Long> hidePresence = userPrivacyService.usersHidingOnlineStatus(userIds);
+        boolean viewerHidesReads = userPrivacyService.readReceiptsDisabled(viewerId);
+        Set<Long> hideReads = userPrivacyService.usersWithReadReceiptsDisabled(userIds);
+        return members.stream().map(member -> {
+            Long memberUserId = member.getUser().getId();
+            boolean self = memberUserId.equals(viewerId);
+            Map<String, Object> summary = toMemberSummary(member);
+            if (!self && hidePresence.contains(memberUserId)) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> user = (Map<String, Object>) summary.get("user");
+                user.put("onlineStatus", User.OnlineStatus.OFFLINE);
+                user.put("lastSeen", null);
+            }
+            if (!self && (viewerHidesReads || hideReads.contains(memberUserId))) {
+                summary.put("lastReadMessageId", null);
+            }
+            return summary;
+        }).toList();
     }
 
     private Map<String, Object> toNotificationSettings(ChatRoomMember member, Long roomId, Long userId) {

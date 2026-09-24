@@ -12,6 +12,7 @@ import com.chatapp.dto.MessageDto;
 import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
+import com.chatapp.repository.FriendshipRepository;
 import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.UserRepository;
 import com.chatapp.util.ChatCustomizationPresets;
@@ -51,6 +52,8 @@ public class ChatRoomService {
     private final FileStorageService fileStorageService;
     private final BotConfigRepository botConfigRepository;
     private final ChatRoomBotRepository chatRoomBotRepository;
+    private final FriendshipRepository friendshipRepository;
+    private final UserPrivacyService userPrivacyService;
 
     /**
      * 创建私聊房间
@@ -62,6 +65,13 @@ public class ChatRoomService {
         
         if (existingRoom != null) {
             return existingRoom;
+        }
+
+        // 对方关了"允许私聊"时，只有好友能发起新的私聊；已有会话不受影响（上面已经返回）。
+        if (!userId.equals(friendId)
+                && userPrivacyService.rejectsDirectMessagesFromStrangers(friendId)
+                && !friendshipRepository.areFriends(userId, friendId)) {
+            throw new IllegalArgumentException("对方只接受好友发起私聊，请先添加好友");
         }
 
         // 获取用户信息
@@ -282,8 +292,16 @@ public class ChatRoomService {
         }
 
         Map<Long, List<ChatRoomParticipantDto>> privateParticipants = new HashMap<>();
-        for (ChatRoomRepository.PrivateRoomParticipantProjection participant :
-                chatRoomRepository.findPrivateParticipantsByRoomIds(roomIds)) {
+        List<ChatRoomRepository.PrivateRoomParticipantProjection> participantRows =
+                chatRoomRepository.findPrivateParticipantsByRoomIds(roomIds);
+        // 关了"显示在线状态"的对方在会话列表里一律显示离线，本人不受影响。
+        Set<Long> hiddenPresence = userPrivacyService.usersHidingOnlineStatus(
+                participantRows.stream()
+                        .map(ChatRoomRepository.PrivateRoomParticipantProjection::getUserId)
+                        .filter(participantId -> !participantId.equals(userId))
+                        .toList());
+        for (ChatRoomRepository.PrivateRoomParticipantProjection participant : participantRows) {
+            boolean hidePresence = hiddenPresence.contains(participant.getUserId());
             privateParticipants.computeIfAbsent(participant.getRoomId(), ignored -> new ArrayList<>())
                     .add(ChatRoomParticipantDto.builder()
                             .id(participant.getUserId())
@@ -293,8 +311,8 @@ public class ChatRoomService {
                             .title(participant.getTitle())
                             .titleColor(participant.getTitleColor())
                             .titleEffect(participant.getTitleEffect())
-                            .onlineStatus(participant.getOnlineStatus())
-                            .lastSeen(participant.getLastSeen())
+                            .onlineStatus(hidePresence ? User.OnlineStatus.OFFLINE : participant.getOnlineStatus())
+                            .lastSeen(hidePresence ? null : participant.getLastSeen())
                             .isActive(participant.getActive())
                             .createdAt(participant.getCreatedAt())
                             .updatedAt(participant.getUpdatedAt())

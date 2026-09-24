@@ -10,6 +10,7 @@ import com.chatapp.dto.ChatRoomSummaryDto;
 import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
+import com.chatapp.repository.FriendshipRepository;
 import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,6 +54,12 @@ class ChatRoomServiceTest {
 
     @Mock
     private ChatRoomBotRepository chatRoomBotRepository;
+
+    @Mock
+    private FriendshipRepository friendshipRepository;
+
+    @Mock
+    private UserPrivacyService userPrivacyService;
 
     @InjectMocks
     private ChatRoomService chatRoomService;

@@ -24,6 +24,7 @@ public class FriendshipService {
 
     private final FriendshipRepository friendshipRepository;
     private final UserRepository userRepository;
+    private final UserPrivacyService userPrivacyService;
 
     /**
      * 发送好友请求
@@ -70,6 +71,11 @@ public class FriendshipService {
                     || existingDirect.getStatus() == Friendship.FriendshipStatus.BLOCKED) {
                 throw new IllegalArgumentException("用户已被屏蔽");
             }
+        }
+
+        // 对方关了"允许好友请求"。放在"对方已向我发请求就直接接受"之后：那种情况是对方主动的。
+        if (userPrivacyService.rejectsFriendRequests(friendId)) {
+            throw new IllegalArgumentException("对方已关闭好友请求，暂时无法添加");
         }
 
         // 创建新的好友请求

@@ -182,8 +182,8 @@ public class MessageDto {
         dto.setTitleColor(user.getTitleColor());
         dto.setTitleEffect(user.getTitleEffect());
         dto.setBio(user.getBio());
-        dto.setOnlineStatus(user.getOnlineStatus());
-        dto.setLastSeen(user.getLastSeen());
+        // 消息里的发送者不带在线状态/最后在线时间：消息不是在线状态的通道，
+        // 带上就会绕过"显示在线状态"的隐私设置（在线状态走成员/好友列表和 status 事件）。
         dto.setIsActive(user.getIsActive());
         dto.setCreatedAt(user.getCreatedAt());
         return dto;

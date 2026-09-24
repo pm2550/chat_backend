@@ -26,6 +26,7 @@ class FriendshipServiceTest {
 
     @Mock private FriendshipRepository friendshipRepository;
     @Mock private UserRepository userRepository;
+    @Mock private UserPrivacyService userPrivacyService;
 
     @InjectMocks private FriendshipService service;
 
