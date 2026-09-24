@@ -3,6 +3,7 @@ package com.chatapp.controller;
 import com.chatapp.dto.ApiResponse;
 import com.chatapp.dto.PollDto;
 import com.chatapp.dto.UserDto;
+import com.chatapp.service.MessageService;
 import com.chatapp.service.PollService;
 import com.chatapp.service.UserService;
 import com.chatapp.websocket.RawWebSocketHandler;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 public class PollController {
 
     private final PollService pollService;
+    private final MessageService messageService;
     private final UserService userService;
     private final RawWebSocketHandler webSocketHandler;
 
@@ -24,7 +26,11 @@ public class PollController {
     public ResponseEntity<ApiResponse<PollDto>> create(@RequestBody PollDto.CreateRequest request,
                                                        Authentication auth) {
         UserDto user = userService.findByUsername(auth.getName());
-        return ResponseEntity.ok(ApiResponse.success("投票已创建", pollService.create(user.getId(), request)));
+        PollDto poll = pollService.create(user.getId(), request);
+        // 投票本身是一条 POLL 消息：和普通消息一样实时推给房间（含发起人的其他设备）并发离线通知，
+        // 否则别人要重进房间才看得到。消息里带 pollId，客户端据此渲染投票卡。
+        webSocketHandler.broadcastMessage(messageService.getMessageForBroadcast(poll.getMessageId()));
+        return ResponseEntity.ok(ApiResponse.success("投票已创建", poll));
     }
 
     @PostMapping("/{pollId}/votes")
@@ -47,6 +53,10 @@ public class PollController {
     public ResponseEntity<ApiResponse<Void>> deleteVote(@PathVariable Long pollId, Authentication auth) {
         UserDto user = userService.findByUsername(auth.getName());
         pollService.deleteVote(pollId, user.getId());
+        Long roomId = pollService.getChatRoomId(pollId);
+        if (roomId != null) {
+            webSocketHandler.broadcastPollVoted(roomId, pollService.get(pollId, user.getId()));
+        }
         return ResponseEntity.ok(ApiResponse.success("投票已撤销", null));
     }
 

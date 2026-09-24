@@ -270,7 +270,8 @@ class MessageServiceTest {
 
         assertNotNull(result);
         assertSame(originalMsg, result.getReplyToMessage());
-        verify(messageRepository, atLeast(2)).save(any(Message.class));
+        // 引用在第一次保存时就带上，不再先存一条无引用的消息再补。
+        verify(messageRepository, times(1)).save(any(Message.class));
     }
 
     @Test
@@ -280,12 +281,71 @@ class MessageServiceTest {
         ChatRoom room2 = createTestChatRoom(20L, sender);
         Message originalMsg = createTestMessage(50L, sender, room2); // in room2
 
+        arrangeSender(sender, room1);
         when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(originalMsg));
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> messageService.replyToMessage(1L, 10L, 50L, "Reply", Message.MessageType.TEXT));
 
         assertTrue(ex.getMessage().contains("同一聊天室"));
+        verify(messageRepository, never()).save(any(Message.class));
+    }
+
+    @Test
+    void sendEncryptedMessage_withReplyTo_storesReplyOnTheNormalSendPath() {
+        User sender = createTestUser(1L, "sender");
+        ChatRoom room = createTestChatRoom(10L, sender);
+        Message originalMsg = createTestMessage(50L, sender, room);
+        arrangeSender(sender, room);
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(originalMsg));
+        when(messageRepository.save(any(Message.class))).thenAnswer(inv -> {
+            Message m = inv.getArgument(0);
+            if (m.getId() == null) m.setId(103L);
+            return m;
+        });
+
+        Message result = messageService.sendEncryptedMessage(
+                1L, 10L, "quoted", null, null, Message.MessageType.TEXT, 50L);
+
+        assertSame(originalMsg, result.getReplyToMessage());
+    }
+
+    @Test
+    void sendEncryptedMessage_rejectsReplyToDeletedMessage() {
+        User sender = createTestUser(1L, "sender");
+        ChatRoom room = createTestChatRoom(10L, sender);
+        Message originalMsg = createTestMessage(50L, sender, room);
+        originalMsg.setIsDeleted(true);
+        arrangeSender(sender, room);
+        when(messageRepository.findWithSenderById(50L)).thenReturn(Optional.of(originalMsg));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> messageService.sendEncryptedMessage(
+                        1L, 10L, "quoted", null, null, Message.MessageType.TEXT, 50L));
+
+        assertTrue(ex.getMessage().contains("已被删除"));
+        verify(messageRepository, never()).save(any(Message.class));
+    }
+
+    @Test
+    void sendEncryptedMessage_rejectsReplyToMissingMessage() {
+        User sender = createTestUser(1L, "sender");
+        ChatRoom room = createTestChatRoom(10L, sender);
+        arrangeSender(sender, room);
+        when(messageRepository.findWithSenderById(404L)).thenReturn(Optional.empty());
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> messageService.sendEncryptedMessage(
+                        1L, 10L, "quoted", null, null, Message.MessageType.TEXT, 404L));
+
+        assertTrue(ex.getMessage().contains("不存在"));
+    }
+
+    private void arrangeSender(User sender, ChatRoom room) {
+        when(userRepository.findById(sender.getId())).thenReturn(Optional.of(sender));
+        when(chatRoomRepository.findById(room.getId())).thenReturn(Optional.of(room));
+        when(chatRoomRepository.isMember(room.getId(), sender.getId())).thenReturn(true);
+        when(chatRoomRepository.isBotMuted(room.getId(), sender.getId())).thenReturn(false);
     }
 
     // ---- getChatRoomMessages ----
