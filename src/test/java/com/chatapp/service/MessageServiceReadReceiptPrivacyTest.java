@@ -21,7 +21,6 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -63,7 +62,6 @@ class MessageServiceReadReceiptPrivacyTest {
     void readingOneMessageWithReceiptsOffOnlyClearsOwnUnread() {
         when(messageRepository.findById(42L)).thenReturn(Optional.of(message));
         when(chatRoomRepository.isMember(5L, 2L)).thenReturn(true);
-        when(userPrivacyService.readReceiptsDisabled(2L)).thenReturn(true);
         when(readReceiptRepository.findByMessageIdAndUserId(42L, 2L))
                 .thenReturn(Optional.empty())
                 .thenReturn(Optional.of(new MessageReadReceipt()));
@@ -71,10 +69,9 @@ class MessageServiceReadReceiptPrivacyTest {
 
         messageService.markMessageAsRead(42L, 2L);
         // 同一条再读一次：不能再减一次自己的未读数。
-        Message second = messageService.markMessageAsRead(42L, 2L);
+        MessageService.ReadProgress second = messageService.markMessageAsRead(42L, 2L);
 
-        // 私有的回执行照记（用来判断读过没有），但消息对外的已读状态/已读数不变。
-        verify(messageRepository, never()).markAsRead(anyLong(), anyLong());
+        // 私有的回执行照记（用来判断读过没有）；对外的已读数在读取时把他过滤掉（见 MessageReadStateServiceTest）。
         verify(chatRoomRepository).markMessageReadForMember(5L, 2L, 42L);
         assertThat(second).isNull();
     }
@@ -86,35 +83,34 @@ class MessageServiceReadReceiptPrivacyTest {
         when(readReceiptRepository.findByMessageIdAndUserId(42L, 2L)).thenReturn(Optional.empty());
         when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L)));
 
-        messageService.markMessageAsRead(42L, 2L);
+        MessageService.ReadProgress progress = messageService.markMessageAsRead(42L, 2L);
 
         verify(readReceiptRepository).save(any(MessageReadReceipt.class));
-        verify(messageRepository).markAsRead(42L, 2L);
+        verify(chatRoomRepository).markMessageReadForMember(5L, 2L, 42L);
+        assertEquals(new MessageService.ReadProgress(5L, null, 42L), progress);
     }
 
     @Test
-    void readAllWithReceiptsOffDoesNotFlipSendersMessagesToRead() {
+    void readAllOnlyAdvancesTheReadersOwnPosition() {
         when(chatRoomRepository.isMember(5L, 2L)).thenReturn(true);
-        when(userPrivacyService.readReceiptsDisabled(2L)).thenReturn(true);
 
         messageService.markAllMessagesAsRead(5L, 2L);
 
-        verify(messageRepository, never()).markAllAsReadInChatRoom(anyLong(), anyLong());
+        // 已读数在读取时按已读位置算，不再往消息上写计数。
+        verify(messageRepository, never()).save(any());
         verify(chatRoomRepository).markRoomReadForMember(eq(5L), eq(2L), any());
     }
 
     @Test
-    void readByListHidesReadersWhoTurnedReceiptsOff() {
+    void readByListComesFromTheSharedReadStateDefinition() {
+        MessageReadStateService readStateService = mock(MessageReadStateService.class);
+        ReflectionTestUtils.setField(messageService, "readStateService", readStateService);
         when(messageRepository.findById(42L)).thenReturn(Optional.of(message));
         when(chatRoomRepository.isMember(5L, 1L)).thenReturn(true);
-        when(readReceiptRepository.findByMessageIdOrderByReadAtAsc(42L))
-                .thenReturn(List.of(receipt(2L), receipt(3L)));
-        when(userPrivacyService.usersWithReadReceiptsDisabled(List.of(2L, 3L))).thenReturn(Set.of(3L));
+        List<ReadReceiptDto> expected = List.of(new ReadReceiptDto(2L, "u2", "u2", null, null));
+        when(readStateService.readers(message)).thenReturn(expected);
 
-        List<ReadReceiptDto> readers = messageService.getReadReceipts(42L, 1L);
-
-        assertEquals(1, readers.size());
-        assertEquals(2L, readers.get(0).getUserId());
+        assertEquals(expected, messageService.getReadReceipts(42L, 1L));
     }
 
     @Test
@@ -123,15 +119,11 @@ class MessageServiceReadReceiptPrivacyTest {
         when(chatRoomRepository.isMember(5L, 1L)).thenReturn(true);
         when(userPrivacyService.readReceiptsDisabled(1L)).thenReturn(true);
 
-        assertTrue(messageService.getReadReceipts(42L, 1L).isEmpty());
-        verify(readReceiptRepository, never()).findByMessageIdOrderByReadAtAsc(anyLong());
-    }
+        MessageReadStateService readStateService = mock(MessageReadStateService.class);
+        ReflectionTestUtils.setField(messageService, "readStateService", readStateService);
 
-    private MessageReadReceipt receipt(Long userId) {
-        MessageReadReceipt receipt = new MessageReadReceipt();
-        receipt.setMessage(message);
-        receipt.setUser(user(userId));
-        return receipt;
+        assertTrue(messageService.getReadReceipts(42L, 1L).isEmpty());
+        verify(readStateService, never()).readers(any());
     }
 
     private User user(Long id) {

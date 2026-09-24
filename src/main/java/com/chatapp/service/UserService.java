@@ -26,7 +26,6 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
-import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
@@ -198,7 +197,7 @@ public class UserService implements UserDetailsService {
             user.setPhone(request.getPhone());
         }
         if (request.getOnlineStatus() != null) {
-            user.setOnlineStatus(request.getOnlineStatus());
+            // 只记用户的选择；对外的 online_status 由实时连接决定。
             user.setPresenceStatus(request.getOnlineStatus());
         }
 
@@ -232,19 +231,6 @@ public class UserService implements UserDetailsService {
             user.setArgon2Params(null);
             user.setPasswordScheme(SCHEME_LEGACY);
         }
-        userRepository.save(user);
-    }
-
-    /**
-     * 更新用户在线状态
-     */
-    @Transactional
-    public void updateOnlineStatus(Long userId, User.OnlineStatus status) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("用户不存在"));
-
-        user.setOnlineStatus(status);
-        user.setLastSeen(LocalDateTime.now());
         userRepository.save(user);
     }
 

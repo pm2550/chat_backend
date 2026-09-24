@@ -10,9 +10,11 @@ import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.service.BotService;
 import com.chatapp.service.BotReplyDeliveryService;
 import com.chatapp.service.MessageReactionService;
+import com.chatapp.service.MessageReadStateService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.PushNotificationService;
 import com.chatapp.service.RoomTypingAggregator;
+import com.chatapp.service.UserPresenceService;
 import com.chatapp.service.UserPrivacyService;
 import com.chatapp.service.tool.PendingClientCallRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -20,6 +22,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -82,6 +86,8 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     private final PendingClientCallRegistry pendingClientCallRegistry;
     private final MessageReactionService messageReactionService;
     private final UserPrivacyService userPrivacyService;
+    private final UserPresenceService userPresenceService;
+    private final MessageReadStateService messageReadStateService;
 
     /** 客户端自带的消息临时 id 最长多少字符，超出的不回显。 */
     private static final int MAX_CLIENT_MESSAGE_ID_LENGTH = 64;
@@ -111,6 +117,12 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
      */
     private final Map<Long, Set<WebSocketSession>> backgroundSessions = new ConcurrentHashMap<>();
 
+    /**
+     * 每个用户一把锁，让"看连接表 → 写 users.online_status"成为一步：多台设备同时连上/断开时，
+     * 最后落库的一定是按最终连接表算出来的状态，而不是某个过时的中间态。
+     */
+    private final Map<Long, Object> presenceLocks = new ConcurrentHashMap<>();
+
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         User user = (User) session.getAttributes().get(ATTR_USER);
@@ -125,11 +137,19 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             log.info("WebSocket background connected: userId={}, sessionId={}", user.getId(), session.getId());
             return;
         }
-        userSessions.computeIfAbsent(user.getId(),
-                id -> ConcurrentHashMap.newKeySet()).add(session);
+        boolean[] first = {false};
+        // compute 保证和 removeSession 的"删空即摘掉"互斥，不会把连接加进一个刚被摘掉的集合里。
+        userSessions.compute(user.getId(), (id, sessions) -> {
+            Set<WebSocketSession> next = sessions != null ? sessions : ConcurrentHashMap.newKeySet();
+            first[0] = next.isEmpty();
+            next.add(session);
+            return next;
+        });
         log.info("WebSocket connected: userId={}, sessionId={}", user.getId(), session.getId());
-        // 连上线时对外显示用户自己选的状态（离开/忙碌/隐身），不是一律"在线"。
-        broadcastStatus(user.getId(), user.chosenPresence().name());
+        if (first[0]) {
+            // 连上线时对外显示用户自己选的状态（离开/忙碌/隐身），不是一律"在线"。
+            broadcastStatus(user.getId(), syncPresence(user.getId()).name());
+        }
     }
 
     @Override
@@ -151,14 +171,56 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             }
             return;
         }
-        Set<WebSocketSession> sessions = userSessions.get(userId);
-        if (sessions == null || !sessions.remove(session)) {
-            return;
-        }
-        if (sessions.isEmpty()) {
-            userSessions.remove(userId, sessions);
+        boolean[] last = {false};
+        userSessions.computeIfPresent(userId, (id, sessions) -> {
+            if (!sessions.remove(session) || !sessions.isEmpty()) {
+                return sessions;
+            }
+            last[0] = true;
+            return null;
+        });
+        if (last[0]) {
+            syncPresence(userId);
             broadcastStatus(userId, "OFFLINE");
         }
+    }
+
+    /** 这个用户现在有没有前台连接（后台常驻连接不算在线）。 */
+    public boolean hasForegroundSession(Long userId) {
+        Set<WebSocketSession> sessions = userSessions.get(userId);
+        return sessions != null && !sessions.isEmpty();
+    }
+
+    /**
+     * 按连接表把 users.online_status 落库：有前台连接就是他选的状态，没有就是离线（并记最后在线时间）。
+     * 只在"从无到有 / 从有到无"时调用；每次都重新看连接表，所以调用顺序乱了也不会写错。
+     *
+     * @return 写入后的对外状态
+     */
+    public User.OnlineStatus syncPresence(Long userId) {
+        synchronized (presenceLocks.computeIfAbsent(userId, id -> new Object())) {
+            boolean online = hasForegroundSession(userId);
+            try {
+                if (online) {
+                    return userPresenceService.markConnected(userId);
+                }
+                userPresenceService.markDisconnected(userId);
+            } catch (RuntimeException e) {
+                // 落库失败不能影响连接本身；下次连上/断开会再写。
+                log.warn("Failed to persist presence for userId={}: {}", userId, e.getMessage());
+            }
+            return online ? User.OnlineStatus.ONLINE : User.OnlineStatus.OFFLINE;
+        }
+    }
+
+    /**
+     * 服务刚启动时没有任何连接，库里的"在线"都是上次运行留下的，一次性清掉。
+     * 启动过程中已经连上来的（web 服务器比这个事件早开）再按连接表补写回去。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void resetPresenceOnStartup() {
+        userPresenceService.resetAllOffline();
+        userSessions.keySet().forEach(this::syncPresence);
     }
 
     static boolean isBackground(WebSocketSession session) {
@@ -359,11 +421,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (chatRoomId == null) {
             return;
         }
-        Message lastMessage = messageService.markAllMessagesAsRead(chatRoomId, user.getId());
-        broadcastReadReceipt(
-                chatRoomId,
-                user.getId(),
-                lastMessage != null ? lastMessage.getId() : null);
+        broadcastReadReceipt(user.getId(), messageService.markAllMessagesAsRead(chatRoomId, user.getId()));
     }
 
     private void handleCallSignal(User user, JsonNode root) {
@@ -556,27 +614,44 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         pushOfflineMessageNotification(message);
     }
 
-    public void broadcastReadReceipt(Long chatRoomId, Long userId, Long lastReadMessageId) {
-        ObjectNode envelope = objectMapper.createObjectNode();
-        envelope.put("type", "read_receipt");
-        envelope.put("chatRoomId", chatRoomId);
-        envelope.put("userId", userId);
-        if (lastReadMessageId != null) {
-            envelope.put("lastReadMessageId", lastReadMessageId);
-        }
-        sendReadStateToOwnSessions(chatRoomId, userId, envelope);
-        sendReadReceiptToOthers(chatRoomId, userId, envelope);
+    /**
+     * 整房间已读。已读数按"读到哪条"算，所以回执带上这次推进的区间：
+     * (previousLastReadMessageId, lastReadMessageId] 之间别人发的消息各多一个读者，客户端照此加一，
+     * 和刷新后服务器算出来的一致；没推进就不通知别人（本人其他设备照样同步未读数）。
+     */
+    public void broadcastReadReceipt(Long userId, MessageService.ReadProgress progress) {
+        broadcastReadProgress(userId, null, progress);
     }
 
-    /** 单条消息被读（滚动到可见区域时标记）：其他成员据此给这一条加已读数。 */
-    public void broadcastMessageRead(Long chatRoomId, Long userId, Long messageId) {
+    /** 逐条已读（滚动到可见区域时标记）。messageId 只为老客户端保留，新客户端按区间处理。 */
+    public void broadcastMessageRead(Long userId, Long messageId, MessageService.ReadProgress progress) {
+        broadcastReadProgress(userId, messageId, progress);
+    }
+
+    private void broadcastReadProgress(Long userId, Long messageId, MessageService.ReadProgress progress) {
+        if (progress == null || progress.chatRoomId() == null) {
+            return;
+        }
+        Long chatRoomId = progress.chatRoomId();
         ObjectNode envelope = objectMapper.createObjectNode();
         envelope.put("type", "read_receipt");
         envelope.put("chatRoomId", chatRoomId);
         envelope.put("userId", userId);
-        envelope.put("messageId", messageId);
+        if (messageId != null) {
+            envelope.put("messageId", messageId);
+        }
+        if (progress.lastReadMessageId() != null) {
+            envelope.put("lastReadMessageId", progress.lastReadMessageId());
+        }
+        if (progress.previousLastReadMessageId() != null) {
+            envelope.put("previousLastReadMessageId", progress.previousLastReadMessageId());
+        } else {
+            envelope.putNull("previousLastReadMessageId");
+        }
         sendReadStateToOwnSessions(chatRoomId, userId, envelope);
-        sendReadReceiptToOthers(chatRoomId, userId, envelope);
+        if (progress.advanced()) {
+            sendReadReceiptToOthers(chatRoomId, userId, envelope);
+        }
     }
 
     /**
@@ -808,7 +883,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (clientMessageId != null) {
             envelope.put("clientMessageId", clientMessageId);
         }
-        envelope.set("message", toMessageJson(saved));
+        envelope.set("message", toMessageJson(saved, event == MessageEvent.UPDATED));
         if (exceptUserId == null) {
             broadcastToRoom(saved.getChatRoom().getId(), envelope);
         } else {
@@ -845,9 +920,14 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     /** 在线时切换"显示在线状态"，立刻让别人看到他上线/离线，而不是等下次重连。 */
     @TransactionalEventListener(fallbackExecution = true)
     public void onPresenceVisibilityChanged(UserPrivacyService.PresenceVisibilityChanged event) {
-        if (userSessions.containsKey(event.userId())) {
-            sendStatus(event.userId(), event.visible() ? "ONLINE" : "OFFLINE");
+        if (!hasForegroundSession(event.userId())) {
+            return;
         }
+        // 重新显示时用他选的状态（离开/忙碌/隐身），和连上线时一致。
+        String status = event.visible()
+                ? userPresenceService.chosenPresence(event.userId()).name()
+                : "OFFLINE";
+        sendStatus(event.userId(), status);
     }
 
     private void sendStatus(Long userId, String status) {
@@ -1027,12 +1107,19 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
      * 客户端按 id 整条替换后这些就"消失"了）。只额外补上老客户端读的几个别名。
      * 表情回应的 currentUserReacted 是按查看者算的，广播里统一为 false，客户端用 userIds 判断。
      */
-    ObjectNode toMessageJson(Message m) {
+    ObjectNode toMessageJson(Message m, boolean withReadState) {
         MessageDto dto = MessageDto.fromEntity(m);
         messageReactionService.attachAggregates(List.of(dto), null);
+        if (withReadState) {
+            // 已有消息被编辑/撤回：客户端会整条替换，已读数要和列表接口同一算法，否则会被冲回 0。
+            messageReadStateService.applyReadState(List.of(m), List.of(dto));
+            if (m.getSender() != null) {
+                userPrivacyService.maskReadStateForViewer(List.of(dto), m.getSender().getId());
+            }
+        }
         ObjectNode json = objectMapper.valueToTree(dto);
         json.put("type", m.getMessageType() != null ? m.getMessageType().name() : "TEXT");
-        json.put("status", m.getMessageStatus() != null ? m.getMessageStatus().name() : "SENT");
+        json.put("status", dto.getMessageStatus() != null ? dto.getMessageStatus().name() : "SENT");
         if (json.hasNonNull("createdAt")) {
             json.set("timestamp", json.get("createdAt"));
         }

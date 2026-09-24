@@ -5,7 +5,10 @@ import com.chatapp.service.LLMService;
 import com.chatapp.service.PushNotificationService;
 import com.chatapp.service.SelfDestructService;
 import com.chatapp.service.TokenBlacklistService;
+import com.chatapp.repository.UserRepository;
+import com.chatapp.websocket.RawWebSocketHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,8 +22,11 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.web.socket.CloseStatus;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -51,6 +57,29 @@ public class PrivacySettingsIntegrationTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private RawWebSocketHandler rawWebSocketHandler;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    private final List<RoomRealtimeSyncIntegrationTest.RecordingSession> openSessions = new ArrayList<>();
+
+    @AfterEach
+    void closeSessions() {
+        openSessions.forEach(session -> rawWebSocketHandler.afterConnectionClosed(session, CloseStatus.NORMAL));
+        openSessions.clear();
+    }
+
+    /** 在线 = 有前台实时连接（只登录不算）。 */
+    private void connect(Object[] user) {
+        var session = new RoomRealtimeSyncIntegrationTest.RecordingSession();
+        session.getAttributes().put(RawWebSocketHandler.ATTR_USER,
+                userRepository.findById((Long) user[1]).orElseThrow());
+        rawWebSocketHandler.afterConnectionEstablished(session);
+        openSessions.add(session);
+    }
 
     @MockBean
     private TokenBlacklistService tokenBlacklistService;
@@ -114,6 +143,8 @@ public class PrivacySettingsIntegrationTest {
         Object[] alice = createUserAndLogin("psalice");
         Object[] bob = createUserAndLogin("psbob");
         makeFriends(alice, bob);
+        connect(alice);
+        connect(bob);
         updateSettings((String) bob[0], Map.of("showOnlineStatus", false));
 
         mockMvc.perform(get("/api/v1/friends")

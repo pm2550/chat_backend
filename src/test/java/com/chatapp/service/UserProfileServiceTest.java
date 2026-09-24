@@ -156,13 +156,15 @@ class UserProfileServiceTest {
     }
 
     @Test
-    @DisplayName("updateOnlineStatus=OFFLINE also stamps lastSeen")
-    void update_status_offline_stamps() {
+    @DisplayName("updateOnlineStatus only records the choice; the connection decides online_status")
+    void update_status_records_choice_only() {
+        alice.setOnlineStatus(User.OnlineStatus.OFFLINE);
         when(userRepository.findById(1L)).thenReturn(Optional.of(alice));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        User result = service.updateOnlineStatus(1L, User.OnlineStatus.OFFLINE);
-        assertEquals(User.OnlineStatus.OFFLINE, result.getOnlineStatus());
-        assertNotNull(result.getLastSeen());
+        User result = service.updateOnlineStatus(1L, User.OnlineStatus.BUSY);
+        assertEquals(User.OnlineStatus.BUSY, result.chosenPresence());
+        assertEquals(User.OnlineStatus.OFFLINE, result.getOnlineStatus(),
+                "picking a status must not make a disconnected user look online");
     }
 
     @Test

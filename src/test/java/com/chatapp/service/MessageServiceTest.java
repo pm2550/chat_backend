@@ -423,10 +423,9 @@ class MessageServiceTest {
         when(messageRepository.findById(50L)).thenReturn(Optional.of(msg));
         when(chatRoomRepository.isMember(10L, 2L)).thenReturn(true);
 
-        // 返回被读的消息，控制器据此推送已读回执。
-        assertSame(msg, messageService.markMessageAsRead(50L, 2L));
+        // 返回已读位置的推进，控制器据此推送已读回执。
+        assertEquals(new MessageService.ReadProgress(10L, null, 50L), messageService.markMessageAsRead(50L, 2L));
 
-        verify(messageRepository).markAsRead(50L, 2L);
         verify(chatRoomRepository).markMessageReadForMember(10L, 2L, 50L);
     }
 
@@ -441,7 +440,7 @@ class MessageServiceTest {
 
         assertNull(messageService.markMessageAsRead(50L, 1L));
 
-        verify(messageRepository, never()).markAsRead(anyLong(), anyLong());
+        verify(chatRoomRepository, never()).markMessageReadForMember(anyLong(), anyLong(), anyLong());
     }
 
     // ---- recallMessage ----

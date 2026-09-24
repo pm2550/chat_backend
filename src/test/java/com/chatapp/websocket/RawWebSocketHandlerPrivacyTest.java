@@ -10,6 +10,8 @@ import com.chatapp.service.MessageService;
 import com.chatapp.service.PushNotificationService;
 import com.chatapp.service.RoomTypingAggregator;
 import com.chatapp.service.MessageReactionService;
+import com.chatapp.service.MessageReadStateService;
+import com.chatapp.service.UserPresenceService;
 import com.chatapp.service.UserPrivacyService;
 import com.chatapp.service.tool.PendingClientCallRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,6 +46,7 @@ class RawWebSocketHandlerPrivacyTest {
     private final ChatRoomRepository chatRoomRepository = mock(ChatRoomRepository.class);
     private final PushNotificationService pushNotificationService = mock(PushNotificationService.class);
     private final UserPrivacyService userPrivacyService = mock(UserPrivacyService.class);
+    private final UserPresenceService userPresenceService = mock(UserPresenceService.class);
     private RawWebSocketHandler handler;
     private final Map<Long, List<String>> received = new HashMap<>();
 
@@ -60,8 +63,12 @@ class RawWebSocketHandlerPrivacyTest {
                 new CallRoomRegistry(),
                 new PendingClientCallRegistry(),
                 mock(MessageReactionService.class),
-                userPrivacyService);
+                userPrivacyService,
+                userPresenceService,
+                mock(MessageReadStateService.class));
         when(chatRoomRepository.findMember(anyLong(), anyLong())).thenReturn(Optional.empty());
+        when(userPresenceService.markConnected(anyLong())).thenReturn(User.OnlineStatus.ONLINE);
+        when(userPresenceService.chosenPresence(anyLong())).thenReturn(User.OnlineStatus.ONLINE);
     }
 
     @Test
@@ -95,7 +102,7 @@ class RawWebSocketHandlerPrivacyTest {
         when(chatRoomRepository.findMemberUserIdsByRoomId(5L)).thenReturn(List.of(1L, 2L));
         when(userPrivacyService.readReceiptsDisabled(1L)).thenReturn(true);
 
-        handler.broadcastReadReceipt(5L, 1L, 99L);
+        handler.broadcastReadReceipt(1L, new MessageService.ReadProgress(5L, null, 99L));
 
         assertTrue(received.get(2L).isEmpty());
     }
@@ -108,7 +115,7 @@ class RawWebSocketHandlerPrivacyTest {
         when(chatRoomRepository.findMemberUserIdsByRoomId(5L)).thenReturn(List.of(1L, 2L, 3L));
         when(userPrivacyService.usersWithReadReceiptsDisabled(List.of(1L, 2L, 3L))).thenReturn(Set.of(3L));
 
-        handler.broadcastReadReceipt(5L, 1L, 99L);
+        handler.broadcastReadReceipt(1L, new MessageService.ReadProgress(5L, null, 99L));
 
         assertEquals(1, received.get(2L).size());
         assertTrue(received.get(2L).get(0).contains("\"read_receipt\""));
@@ -149,12 +156,42 @@ class RawWebSocketHandlerPrivacyTest {
         assertTrue(received.get(2L).get(1).contains("\"onlineStatus\":\"OFFLINE\""));
     }
 
+    @Test
+    void turningVisibilityBackOnAnnouncesTheChosenStatusNotOnline() {
+        connect(2L);
+        when(userPrivacyService.hidesOnlineStatus(1L)).thenReturn(true);
+        connect(1L);
+        when(userPresenceService.chosenPresence(1L)).thenReturn(User.OnlineStatus.BUSY);
+
+        handler.onPresenceVisibilityChanged(new UserPrivacyService.PresenceVisibilityChanged(1L, true));
+
+        assertEquals(1, received.get(2L).size());
+        assertTrue(received.get(2L).get(0).contains("\"onlineStatus\":\"BUSY\""), received.get(2L).get(0));
+    }
+
+    @Test
+    void visibilityChangeOfAUserWithOnlyABackgroundConnectionIsNotAnnounced() {
+        connect(2L);
+        connect(1L, true);
+
+        handler.onPresenceVisibilityChanged(new UserPrivacyService.PresenceVisibilityChanged(1L, true));
+
+        assertTrue(received.get(2L).isEmpty());
+    }
+
     private void connect(Long userId) {
+        connect(userId, false);
+    }
+
+    private void connect(Long userId, boolean background) {
         User user = new User();
         user.setId(userId);
         user.setUsername("u" + userId);
         Map<String, Object> attributes = new HashMap<>();
         attributes.put(RawWebSocketHandler.ATTR_USER, user);
+        if (background) {
+            attributes.put(RawWebSocketHandler.ATTR_BACKGROUND, Boolean.TRUE);
+        }
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getAttributes()).thenReturn(attributes);
         when(session.isOpen()).thenReturn(true);
