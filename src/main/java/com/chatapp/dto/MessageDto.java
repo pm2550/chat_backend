@@ -66,6 +66,8 @@ public class MessageDto {
     private String anonymousName;
     private String anonymousAvatar;
     private List<ReactionInfo> reactions = List.of();
+    // 当前用户是否收藏了该消息；只有带用户上下文的列表接口才会填充，其余情况为 null
+    private Boolean starredByMe;
 
     public static MessageDto fromEntity(Message message) {
         return fromEntity(message, true);

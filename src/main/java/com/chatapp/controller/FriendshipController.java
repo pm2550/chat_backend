@@ -2,6 +2,8 @@ package com.chatapp.controller;
 
 import com.chatapp.entity.Friendship;
 import com.chatapp.entity.User;
+import com.chatapp.entity.UserSettings;
+import com.chatapp.repository.UserSettingsRepository;
 import com.chatapp.service.FriendshipService;
 import com.chatapp.service.UserPrivacyService;
 import com.chatapp.service.UserService;
@@ -11,10 +13,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Objects;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * 好友管理控制器
@@ -28,6 +34,7 @@ public class FriendshipController {
     private final FriendshipService friendshipService;
     private final UserService userService;
     private final UserPrivacyService userPrivacyService;
+    private final UserSettingsRepository userSettingsRepository;
 
     /**
      * 发送好友请求
@@ -314,27 +321,39 @@ public class FriendshipController {
     }
 
     private List<Map<String, Object>> toUserSummaries(List<User> users, Long viewerId) {
+        Map<Long, String> avatarFrames = avatarFramesFor(users);
         Set<Long> hidden = userPrivacyService.usersHidingOnlineStatus(users.stream().map(User::getId).toList());
         return users.stream()
-                .map(user -> toUserSummary(user, viewerId, hidden))
+                .map(user -> toUserSummary(user, viewerId, hidden, avatarFrames))
                 .toList();
     }
 
     private List<Map<String, Object>> toFriendshipSummaries(List<Friendship> friendships, Long viewerId) {
+        List<User> people = friendships.stream()
+                .flatMap(friendship -> Stream.of(friendship.getUser(), friendship.getFriend()))
+                .toList();
+        Map<Long, String> avatarFrames = avatarFramesFor(people);
+        Set<Long> hidden = userPrivacyService.usersHidingOnlineStatus(
+                people.stream().map(User::getId).distinct().toList());
         return friendships.stream()
-                .map(friendship -> toFriendshipSummary(friendship, viewerId))
+                .map(friendship -> toFriendshipSummary(friendship, viewerId, hidden, avatarFrames))
                 .toList();
     }
 
     private Map<String, Object> toFriendshipSummary(Friendship friendship, Long viewerId) {
+        return toFriendshipSummaries(List.of(friendship), viewerId).get(0);
+    }
+
+    private Map<String, Object> toFriendshipSummary(Friendship friendship,
+                                                    Long viewerId,
+                                                    Set<Long> hidingOnlineStatus,
+                                                    Map<Long, String> avatarFrames) {
         Map<String, Object> summary = new HashMap<>();
         summary.put("id", friendship.getId());
         summary.put("status", friendship.getStatus().name());
         summary.put("statusDescription", friendship.getStatus().getDescription());
-        Set<Long> hidden = userPrivacyService.usersHidingOnlineStatus(
-                List.of(friendship.getUser().getId(), friendship.getFriend().getId()));
-        summary.put("user", toUserSummary(friendship.getUser(), viewerId, hidden));
-        summary.put("friend", toUserSummary(friendship.getFriend(), viewerId, hidden));
+        summary.put("user", toUserSummary(friendship.getUser(), viewerId, hidingOnlineStatus, avatarFrames));
+        summary.put("friend", toUserSummary(friendship.getFriend(), viewerId, hidingOnlineStatus, avatarFrames));
         summary.put("friendAlias", friendship.getFriendAlias());
         summary.put("isBlocked", friendship.getIsBlocked());
         summary.put("isPinned", friendship.getIsPinned());
@@ -344,8 +363,32 @@ public class FriendshipController {
         return summary;
     }
 
+    /**
+     * 一次查询解析一批用户的头像框，列表接口不再逐个用户查 user_settings。
+     */
+    private Map<Long, String> avatarFramesFor(Collection<User> users) {
+        List<Long> userIds = users.stream()
+                .filter(Objects::nonNull)
+                .map(User::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (userIds.isEmpty()) {
+            return Map.of();
+        }
+        return userSettingsRepository.findByUserIdIn(userIds).stream()
+                .filter(settings -> settings.getUser() != null && settings.getAvatarFramePreset() != null)
+                .collect(Collectors.toMap(
+                        settings -> settings.getUser().getId(),
+                        UserSettings::getAvatarFramePreset,
+                        (first, second) -> first));
+    }
+
     /** 关了"显示在线状态"的人，对别人一律显示离线、不给最后在线时间；本人不受影响。 */
-    private Map<String, Object> toUserSummary(User user, Long viewerId, Set<Long> hidingOnlineStatus) {
+    private Map<String, Object> toUserSummary(User user,
+                                              Long viewerId,
+                                              Set<Long> hidingOnlineStatus,
+                                              Map<Long, String> avatarFrames) {
         boolean hidePresence = !user.getId().equals(viewerId) && hidingOnlineStatus.contains(user.getId());
         Map<String, Object> summary = new HashMap<>();
         summary.put("id", user.getId());
@@ -355,6 +398,10 @@ public class FriendshipController {
         summary.put("displayName", user.getDisplayName());
         summary.put("avatarUrl", user.getAvatarUrl());
         summary.put("bio", user.getBio());
+        summary.put("title", user.getTitle());
+        summary.put("titleColor", user.getTitleColor());
+        summary.put("titleEffect", user.getTitleEffect());
+        summary.put("avatarFramePreset", avatarFrames.getOrDefault(user.getId(), "none"));
         summary.put("onlineStatus", hidePresence ? User.OnlineStatus.OFFLINE : user.getOnlineStatus());
         summary.put("lastSeen", hidePresence ? null : user.getLastSeen());
         summary.put("isActive", user.getIsActive());

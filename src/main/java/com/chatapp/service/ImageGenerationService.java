@@ -123,6 +123,8 @@ public class ImageGenerationService {
 
         String refId = refId(message.getId());
         var debit = pointsService.debit(chargedUserId, FEATURE_KEY, refId);
+        // 和普通发消息一致：发起人自己隐藏过的会话也要回到消息列表
+        chatRoomRepository.clearHiddenForMember(chatRoom.getId(), chargedUserId);
         chatRoomRepository.incrementUnreadForRoomMembersExcept(chatRoom.getId(), chargedUserId);
         // 离线通知等图片真正生成好再发一次（见 complete），排队/处理中的进度只算更新。
         rawWebSocketHandler.broadcastMessageWithoutOfflineNotification(message);

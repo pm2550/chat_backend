@@ -23,4 +23,9 @@ public interface UserSettingsRepository extends JpaRepository<UserSettings, Long
     @Query("SELECT s.user.id FROM UserSettings s WHERE s.user.id IN :userIds "
             + "AND s.messageNotificationsEnabled = false")
     List<Long> findUserIdsWithMessageNotificationsDisabled(@Param("userIds") Collection<Long> userIds);
+
+    /**
+     * 批量读取多个用户的设置，列表接口用来一次性解析头像框，避免逐个查询。
+     */
+    List<UserSettings> findByUserIdIn(Collection<Long> userIds);
 }

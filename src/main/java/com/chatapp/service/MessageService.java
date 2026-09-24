@@ -17,6 +17,7 @@ import com.chatapp.repository.StickerRepository;
 import com.chatapp.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.hibernate.Hibernate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -592,8 +593,10 @@ public class MessageService {
         if (!chatRoomRepository.isMember(roomId, userId)) {
             throw new IllegalArgumentException("您不是该聊天室的成员");
         }
+        // 控制器在事务外把消息转成 DTO（open-in-view 关闭），懒加载字段要在这里初始化，
+        // 否则置顶/取消置顶/获取置顶列表都会因 LazyInitializationException 失败。
         return pinnedMessageRepository.findByChatRoomIdOrderByCreatedAtDesc(roomId).stream()
-                .map(ChatRoomPinnedMessage::getMessage)
+                .map(pin -> initializeForDto(pin.getMessage()))
                 .toList();
     }
 
@@ -627,7 +630,27 @@ public class MessageService {
     @Transactional(readOnly = true)
     public Page<Message> getStarredMessages(Long userId, Pageable pageable) {
         return messageStarRepository.findByUserIdOrderByCreatedAtDesc(userId, pageable)
-                .map(MessageStar::getMessage);
+                .map(star -> initializeForDto(star.getMessage()));
+    }
+
+    /**
+     * 收藏/置顶列表里的消息是经由关联实体加载的，@提及集合和被回复消息不会随实体图一起取回；
+     * open-in-view 关闭后控制器转 DTO 时会抛 LazyInitializationException，所以在事务内先初始化。
+     */
+    private Message initializeForDto(Message message) {
+        if (message == null) {
+            return null;
+        }
+        Hibernate.initialize(message.getMentionedUserIds());
+        Message reply = message.getReplyToMessage();
+        if (reply != null) {
+            Hibernate.initialize(reply);
+            Hibernate.initialize(reply.getSender());
+            Hibernate.initialize(reply.getAnonymousIdentity());
+            Hibernate.initialize(reply.getBotConfig());
+            Hibernate.initialize(reply.getMentionedUserIds());
+        }
+        return message;
     }
 
     private void requireRoomAdminOrPrivateMember(Long roomId, Long userId) {
@@ -681,6 +704,14 @@ public class MessageService {
                         clearedBefore,
                         pageable))
                 .orElseGet(() -> messageRepository.searchInChatRoom(chatRoomId, keyword, pageable));
+    }
+
+    /**
+     * 在当前用户所在的全部会话中搜索消息（屏蔽的会话、清空前的记录和已删除消息不参与）。
+     */
+    @Transactional(readOnly = true)
+    public Page<Message> searchMessagesAcrossRooms(Long userId, String keyword, Pageable pageable) {
+        return messageRepository.searchInUserChatRooms(userId, keyword, pageable);
     }
 
     public List<MessageDto> searchContext(Long chatRoomId, Message message) {

@@ -566,9 +566,11 @@ public class MessageController {
                     message.getChatRoom().getId(),
                     "star_added",
                     Map.of("messageId", messageId, "userId", currentUser.getId()));
+            MessageDto data = MessageDto.fromEntity(message);
+            data.setStarredByMe(true);
             return ResponseEntity.ok(Map.of(
                     "message", "消息已收藏",
-                    "data", MessageDto.fromEntity(message)
+                    "data", data
             ));
         } catch (Exception e) {
             log.error("收藏消息失败: {}", e.getMessage());
@@ -586,9 +588,11 @@ public class MessageController {
                     message.getChatRoom().getId(),
                     "star_removed",
                     Map.of("messageId", messageId, "userId", currentUser.getId()));
+            MessageDto data = MessageDto.fromEntity(message);
+            data.setStarredByMe(false);
             return ResponseEntity.ok(Map.of(
                     "message", "消息已取消收藏",
-                    "data", MessageDto.fromEntity(message)
+                    "data", data
             ));
         } catch (Exception e) {
             log.error("取消收藏失败: {}", e.getMessage());
