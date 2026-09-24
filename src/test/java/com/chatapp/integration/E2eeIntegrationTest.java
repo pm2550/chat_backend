@@ -212,6 +212,147 @@ class E2eeIntegrationTest extends IntegrationTestSupport {
     }
 
     @Test
+    @DisplayName("recovery wraps are stored per key version and only ever returned to their owner")
+    void recovery_wraps_owner_only() throws Exception {
+        createKey(aliceBearer, randomBase64(32), null).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/e2ee/keys/me").header("Authorization", aliceBearer))
+                .andExpect(jsonPath("$.data.recoveryConfigured").value(false))
+                .andExpect(jsonPath("$.data.keys[0].recoveryWrappedPrivateKey").doesNotExist());
+
+        String recoveryWrap = randomBase64(60);
+        String recoverySalt = randomBase64(16);
+        setRecovery(aliceBearer, 1, List.of(recoveryWrap(1, recoveryWrap, recoverySalt)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.recoveryConfigured").value(true));
+
+        mockMvc.perform(get("/api/v1/e2ee/keys/me").header("Authorization", aliceBearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.recoveryConfigured").value(true))
+                .andExpect(jsonPath("$.data.keys[0].recoveryWrappedPrivateKey").value(recoveryWrap))
+                .andExpect(jsonPath("$.data.keys[0].recoveryWrapSalt").value(recoverySalt))
+                .andExpect(jsonPath("$.data.keys[0].recoveryWrapParams").value(E2eeKeyService.RECOVERY_WRAP_PARAMS))
+                // 密码包装还在，互不影响。
+                .andExpect(jsonPath("$.data.keys[0].wrappedPrivateKey").isNotEmpty());
+
+        // 别人：公钥目录、会话状态、自己的 /keys/me 都看不到 alice 的恢复码包装。
+        String directory = mockMvc.perform(get("/api/v1/e2ee/users/" + alice.getId() + "/keys")
+                        .header("Authorization", bobBearer))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String roomStatus = mockMvc.perform(get("/api/v1/e2ee/rooms/" + dm.getId() + "/status")
+                        .header("Authorization", bobBearer))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String bobOwn = mockMvc.perform(get("/api/v1/e2ee/keys/me").header("Authorization", bobBearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.keys.length()").value(0))
+                .andReturn().getResponse().getContentAsString();
+        for (String body : List.of(directory, roomStatus, bobOwn)) {
+            assertFalse(body.contains(recoveryWrap), "recovery wrap leaked: " + body);
+            assertFalse(body.contains("recoveryWrap"), "recovery fields leaked: " + body);
+        }
+        // bob 写不到 alice 的行：接口只按登录身份操作，bob 自己没有密钥。
+        setRecovery(bobBearer, null, List.of(recoveryWrap(1, randomBase64(60), randomBase64(16))))
+                .andExpect(status().isBadRequest());
+        assertEquals(recoveryWrap, keyRepository.findByUserIdAndKeyVersion(alice.getId(), 1)
+                .orElseThrow().getRecoveryWrappedPrivateKey());
+
+        // 格式不对、参数不认识、版本不存在、别的设备刚换过密钥：都拒绝。
+        setRecovery(aliceBearer, 1, List.of(recoveryWrap(1, randomBase64(40), randomBase64(16))))
+                .andExpect(status().isBadRequest());
+        Map<String, Object> slowParams = new HashMap<>(recoveryWrap(1, randomBase64(60), randomBase64(16)));
+        slowParams.put("wrapParams", ARGON2);
+        setRecovery(aliceBearer, 1, List.of(slowParams)).andExpect(status().isBadRequest());
+        setRecovery(aliceBearer, 1, List.of(recoveryWrap(7, randomBase64(60), randomBase64(16))))
+                .andExpect(status().isBadRequest());
+        setRecovery(aliceBearer, null, List.of(recoveryWrap(1, randomBase64(60), randomBase64(16))))
+                .andExpect(status().isConflict());
+        assertEquals(recoveryWrap, keyRepository.findByUserIdAndKeyVersion(alice.getId(), 1)
+                .orElseThrow().getRecoveryWrappedPrivateKey());
+    }
+
+    @Test
+    @DisplayName("new key version needs a new recovery code; regenerating drops wraps of the old code")
+    void recovery_across_key_versions() throws Exception {
+        createKey(aliceBearer, randomBase64(32), null).andExpect(status().isOk());
+        String oldCodeWrap = randomBase64(60);
+        setRecovery(aliceBearer, 1, List.of(recoveryWrap(1, oldCodeWrap, randomBase64(16))))
+                .andExpect(status().isOk());
+
+        // 密码被重置后重新生成密钥：新版本没有恢复码包装，客户端据此提示重新设置。
+        createKey(aliceBearer, randomBase64(32), 1)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.recoveryConfigured").value(false));
+        assertEquals(oldCodeWrap, keyRepository.findByUserIdAndKeyVersion(alice.getId(), 1)
+                .orElseThrow().getRecoveryWrappedPrivateKey());
+
+        // 新恢复码必须包含当前版本。
+        setRecovery(aliceBearer, 2, List.of(recoveryWrap(1, randomBase64(60), randomBase64(16))))
+                .andExpect(status().isBadRequest());
+
+        // 这台设备只解得开 v2：新恢复码只包 v2，v1 上旧恢复码的包装被清掉——旧码彻底作废。
+        String newCodeWrap = randomBase64(60);
+        setRecovery(aliceBearer, 2, List.of(recoveryWrap(2, newCodeWrap, randomBase64(16))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.recoveryConfigured").value(true));
+        E2eeIdentityKey v1 = keyRepository.findByUserIdAndKeyVersion(alice.getId(), 1).orElseThrow();
+        E2eeIdentityKey v2 = keyRepository.findByUserIdAndKeyVersion(alice.getId(), 2).orElseThrow();
+        assertNull(v1.getRecoveryWrappedPrivateKey());
+        assertNull(v1.getRecoveryWrapSalt());
+        assertNull(v1.getRecoveryWrapParams());
+        assertEquals(newCodeWrap, v2.getRecoveryWrappedPrivateKey());
+    }
+
+    @Test
+    @DisplayName("password change and recovery re-wrap only touch the password wrap")
+    void password_rewrap_keeps_recovery_wrap() throws Exception {
+        createKey(aliceBearer, randomBase64(32), null).andExpect(status().isOk());
+        String recoveryWrap = randomBase64(60);
+        setRecovery(aliceBearer, 1, List.of(recoveryWrap(1, recoveryWrap, randomBase64(16))))
+                .andExpect(status().isOk());
+
+        // 改密码：恢复码包装原样保留。
+        Map<String, Object> change = new HashMap<>();
+        change.put("oldClientHash", clientHash("alice-old"));
+        change.put("newClientHash", clientHash("alice-new"));
+        change.put("newClientSalt", randomBase64Url(16));
+        change.put("newArgon2Params", ARGON2);
+        change.put("e2eeKeyWraps", List.of(Map.of(
+                "version", 1,
+                "wrappedPrivateKey", randomBase64(60),
+                "wrapSalt", randomBase64(16),
+                "wrapParams", ARGON2)));
+        mockMvc.perform(post("/api/profile/password")
+                        .header("Authorization", aliceBearer)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(change)))
+                .andExpect(status().isOk());
+        assertEquals(recoveryWrap, keyRepository.findByUserIdAndKeyVersion(alice.getId(), 1)
+                .orElseThrow().getRecoveryWrappedPrivateKey());
+
+        // 用恢复码找回后换密码包装：必须带对当前密码，否则 422 且什么都不改。
+        String before = keyRepository.findByUserIdAndKeyVersion(alice.getId(), 1)
+                .orElseThrow().getWrappedPrivateKey();
+        String newWrap = randomBase64(60);
+        rewrapWithPassword(aliceBearer, clientHash("alice-old"), newWrap)
+                .andExpect(status().isUnprocessableEntity());
+        rewrapWithPassword(aliceBearer, null, newWrap).andExpect(status().isUnprocessableEntity());
+        assertEquals(before, keyRepository.findByUserIdAndKeyVersion(alice.getId(), 1)
+                .orElseThrow().getWrappedPrivateKey());
+
+        rewrapWithPassword(aliceBearer, clientHash("alice-new"), newWrap)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.keys[0].wrappedPrivateKey").value(newWrap))
+                .andExpect(jsonPath("$.data.keys[0].recoveryWrappedPrivateKey").value(recoveryWrap));
+
+        // bob 的请求只作用于 bob 自己（他没有密钥）。
+        rewrapWithPassword(bobBearer, clientHash("bob-old"), randomBase64(60))
+                .andExpect(status().isBadRequest());
+        assertEquals(newWrap, keyRepository.findByUserIdAndKeyVersion(alice.getId(), 1)
+                .orElseThrow().getWrappedPrivateKey());
+    }
+
+    @Test
     @DisplayName("encrypted DM over WebSocket: server stores only ciphertext, push body is a placeholder")
     void encrypted_ws_message_stores_ciphertext_only() throws Exception {
         byte[] envelope = randomBytes(180);
@@ -456,6 +597,40 @@ class E2eeIntegrationTest extends IntegrationTestSupport {
         request.put("wrapParams", ARGON2);
         request.put("expectedActiveKeyVersion", expectedActive);
         return mockMvc.perform(post("/api/v1/e2ee/keys")
+                .header("Authorization", bearer)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions setRecovery(
+            String bearer, Integer expectedActive, List<Map<String, Object>> wraps) throws Exception {
+        Map<String, Object> request = new HashMap<>();
+        request.put("wraps", wraps);
+        request.put("expectedActiveKeyVersion", expectedActive);
+        return mockMvc.perform(put("/api/v1/e2ee/recovery")
+                .header("Authorization", bearer)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)));
+    }
+
+    private static Map<String, Object> recoveryWrap(int version, String wrapped, String salt) {
+        return Map.of(
+                "version", version,
+                "wrappedPrivateKey", wrapped,
+                "wrapSalt", salt,
+                "wrapParams", E2eeKeyService.RECOVERY_WRAP_PARAMS);
+    }
+
+    private org.springframework.test.web.servlet.ResultActions rewrapWithPassword(
+            String bearer, String currentClientHash, String wrapped) throws Exception {
+        Map<String, Object> request = new HashMap<>();
+        request.put("clientHash", currentClientHash);
+        request.put("wraps", List.of(Map.of(
+                "version", 1,
+                "wrappedPrivateKey", wrapped,
+                "wrapSalt", randomBase64(16),
+                "wrapParams", ARGON2)));
+        return mockMvc.perform(put("/api/v1/e2ee/keys/password-wraps")
                 .header("Authorization", bearer)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)));

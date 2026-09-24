@@ -61,6 +61,8 @@ public class E2eeKeyService {
 
     private static final Pattern WRAP_PARAMS = Pattern.compile(
             "^m=(\\d+),t=(\\d+),p=(\\d+),v=(\\d+),hashLen=(\\d+)$");
+    /** 恢复码包装的派生参数（客户端 e2ee_recovery.dart 的 kE2eeRecoveryWrapParams）。 */
+    public static final String RECOVERY_WRAP_PARAMS = "hkdf-sha256,v=1";
     /** 私钥 32 字节 + GCM 标签 16 字节，前面 12 字节 IV。 */
     private static final int WRAPPED_PRIVATE_KEY_BYTES = 12 + 32 + 16;
 
@@ -71,23 +73,32 @@ public class E2eeKeyService {
     private final ChatRoomBotRepository chatRoomBotRepository;
     private final BotConfigRepository botConfigRepository;
 
+    /** 本人的全部密钥，含密码包装和恢复码包装。只给本人（接口按登录身份取，不接受别人的 id）。 */
     @Transactional(readOnly = true)
     public E2eeDto.OwnKeys ownKeys(Long userId) {
         User user = requireUser(userId);
         E2eeUserState state = stateRepository.findById(userId).orElse(null);
-        List<E2eeDto.OwnKey> keys = keyRepository.findByUserIdOrderByKeyVersionAsc(userId).stream()
+        Integer active = state != null ? state.getActiveKeyVersion() : null;
+        List<E2eeIdentityKey> rows = keyRepository.findByUserIdOrderByKeyVersionAsc(userId);
+        List<E2eeDto.OwnKey> keys = rows.stream()
                 .map(key -> new E2eeDto.OwnKey(
                         key.getKeyVersion(),
                         key.getPublicKey(),
                         key.getWrappedPrivateKey(),
                         key.getWrapSalt(),
-                        key.getWrapParams()))
+                        key.getWrapParams(),
+                        key.getRecoveryWrappedPrivateKey(),
+                        key.getRecoveryWrapSalt(),
+                        key.getRecoveryWrapParams()))
                 .toList();
+        boolean recoveryConfigured = active != null && rows.stream()
+                .anyMatch(key -> active.equals(key.getKeyVersion()) && key.getRecoveryWrappedPrivateKey() != null);
         return new E2eeDto.OwnKeys(
                 isEnabled(state, keys.size()),
-                state != null ? state.getActiveKeyVersion() : null,
+                active,
                 UserService.SCHEME_CLIENT.equals(user.getPasswordScheme()),
-                keys);
+                keys,
+                recoveryConfigured);
     }
 
     /** 公钥目录：公钥本来就是公开的，登录用户都能查。 */
@@ -214,6 +225,91 @@ public class E2eeKeyService {
         log.info("用户 {} 改密码时重新包装了 {} 把加密密钥", userId, wraps.size());
     }
 
+    /**
+     * 设置或重新生成恢复码：换上用新恢复码包装的私钥。必须包含当前版本；
+     * 请求里没有的版本（这台设备解不开的旧版本）清掉恢复码包装——旧恢复码从此一个版本也解不开，
+     * 不会出现"新旧两个恢复码各管几个版本"的情况。密码包装不动。
+     */
+    @Transactional
+    public E2eeDto.OwnKeys setRecoveryWraps(Long userId, E2eeDto.SetRecoveryRequest request) {
+        requireUser(userId);
+        List<E2eeIdentityKey> keys = keyRepository.findByUserIdOrderByKeyVersionAsc(userId);
+        if (keys.isEmpty()) {
+            throw new IllegalArgumentException("还没有加密密钥，请先开启端到端加密");
+        }
+        if (request == null || request.getWraps() == null || request.getWraps().isEmpty()) {
+            throw new IllegalArgumentException("缺少恢复码包装");
+        }
+        Integer active = stateRepository.findById(userId)
+                .map(E2eeUserState::getActiveKeyVersion)
+                .orElse(null);
+        Integer expected = request.getExpectedActiveKeyVersion();
+        if (active == null ? expected != null : !active.equals(expected)) {
+            throw new IllegalStateException("加密密钥已在其他设备上更新，请刷新后重试");
+        }
+        Map<Integer, E2eeDto.KeyWrap> byVersion = wrapsByVersion(keys, request.getWraps());
+        if (active != null && !byVersion.containsKey(active)) {
+            throw new IllegalArgumentException("缺少当前加密密钥的恢复码包装");
+        }
+        byVersion.values().forEach(wrap -> requireRecoveryWrap(
+                wrap.getWrappedPrivateKey(), wrap.getWrapSalt(), wrap.getWrapParams()));
+        for (E2eeIdentityKey key : keys) {
+            E2eeDto.KeyWrap wrap = byVersion.get(key.getKeyVersion());
+            key.setRecoveryWrappedPrivateKey(wrap == null ? null : wrap.getWrappedPrivateKey());
+            key.setRecoveryWrapSalt(wrap == null ? null : wrap.getWrapSalt());
+            key.setRecoveryWrapParams(wrap == null ? null : wrap.getWrapParams());
+        }
+        keyRepository.saveAll(keys);
+        log.info("用户 {} 设置了端到端加密恢复码（{} 个版本）", userId, byVersion.size());
+        return ownKeys(userId);
+    }
+
+    /**
+     * 换掉若干版本的密码包装（用恢复码找回后，用现在的登录密码重新包装）。
+     * 调用方负责先确认当前登录密码（见 UserService）。恢复码包装不动：之后恢复码照样能用。
+     */
+    @Transactional
+    public E2eeDto.OwnKeys replacePasswordWraps(Long userId, List<E2eeDto.KeyWrap> wraps) {
+        List<E2eeIdentityKey> keys = keyRepository.findByUserIdOrderByKeyVersionAsc(userId);
+        if (keys.isEmpty()) {
+            throw new IllegalArgumentException("还没有加密密钥，请先开启端到端加密");
+        }
+        if (wraps == null || wraps.isEmpty()) {
+            throw new IllegalArgumentException("缺少新的密钥包装");
+        }
+        Map<Integer, E2eeDto.KeyWrap> byVersion = wrapsByVersion(keys, wraps);
+        byVersion.values().forEach(wrap -> requireWrap(
+                wrap.getWrappedPrivateKey(), wrap.getWrapSalt(), wrap.getWrapParams()));
+        for (E2eeIdentityKey key : keys) {
+            E2eeDto.KeyWrap wrap = byVersion.get(key.getKeyVersion());
+            if (wrap == null) {
+                continue;
+            }
+            key.setWrappedPrivateKey(wrap.getWrappedPrivateKey());
+            key.setWrapSalt(wrap.getWrapSalt());
+            key.setWrapParams(wrap.getWrapParams());
+        }
+        keyRepository.saveAll(keys);
+        log.info("用户 {} 用当前密码重新包装了 {} 把加密密钥", userId, byVersion.size());
+        return ownKeys(userId);
+    }
+
+    /** 按版本号整理客户端给的包装：版本必须存在、不能重复。 */
+    private Map<Integer, E2eeDto.KeyWrap> wrapsByVersion(List<E2eeIdentityKey> keys, List<E2eeDto.KeyWrap> wraps) {
+        Map<Integer, E2eeDto.KeyWrap> byVersion = new HashMap<>();
+        for (E2eeDto.KeyWrap wrap : wraps) {
+            Integer version = wrap == null ? null : wrap.getVersion();
+            boolean exists = version != null && keys.stream().anyMatch(key -> version.equals(key.getKeyVersion()));
+            if (!exists) {
+                throw new IllegalArgumentException("加密密钥版本不存在");
+            }
+            if (byVersion.put(version, wrap) != null) {
+                throw new IllegalArgumentException("加密密钥版本重复");
+            }
+        }
+        return byVersion;
+    }
+
     /** 会话能否加密 + 双方的公钥目录。只有成员能查。 */
     @Transactional(readOnly = true)
     public E2eeDto.RoomStatus roomStatus(Long roomId, Long viewerId) {
@@ -330,6 +426,19 @@ public class E2eeKeyService {
         long hashLen = Long.parseLong(matcher.group(5));
         if (memoryKb < 19_456 || memoryKb > 1_048_576 || iterations < 2 || iterations > 10 || hashLen != 32) {
             throw new IllegalArgumentException("密钥派生参数强度不符合要求");
+        }
+    }
+
+    /**
+     * 恢复码包装：密文长度和密码包装一样；恢复码本身有 130 位随机性，客户端用 HKDF-SHA256
+     * 直接派生（不需要 Argon2 这种慢哈希来抵抗猜测），参数只认这一种。
+     */
+    private void requireRecoveryWrap(String wrappedPrivateKey, String wrapSalt, String wrapParams) {
+        requireBase64Length(wrappedPrivateKey, WRAPPED_PRIVATE_KEY_BYTES, WRAPPED_PRIVATE_KEY_BYTES,
+                "恢复码包装格式不正确");
+        requireBase64Length(wrapSalt, 16, 48, "恢复码盐格式不正确");
+        if (!RECOVERY_WRAP_PARAMS.equals(wrapParams)) {
+            throw new IllegalArgumentException("恢复码派生参数不支持");
         }
     }
 

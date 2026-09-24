@@ -16,6 +16,8 @@ import java.time.LocalDateTime;
  * 包装密钥，再用 AES-256-GCM 把私钥包起来上传。服务器拿不到密码，也就解不开私钥——
  * 只是替用户保管，让手机、网页、电脑登录后都能取回同一把私钥读同一份历史。</p>
  *
+ * <p>另外可以有一份"恢复码包装"（见 {@link #recoveryWrappedPrivateKey}），忘记密码时用。</p>
+ *
  * <p>旧版本的密钥不删：对方要靠它的公钥校验以前的消息，自己也要靠它的私钥读以前的消息。
  * 当前用哪个版本由 {@link E2eeUserState#getActiveKeyVersion()} 决定。</p>
  */
@@ -52,6 +54,23 @@ public class E2eeIdentityKey {
     /** Argon2id 参数，格式同登录：m=...,t=...,p=...,v=...,hashLen=... */
     @Column(name = "wrap_params", nullable = false, length = 100)
     private String wrapParams;
+
+    /**
+     * 同一把私钥的第二份包装：用恢复码经 HKDF-SHA256 派生的密钥做 AES-256-GCM，
+     * base64(iv || 密文)。恢复码只在客户端生成、显示给用户一次，服务器从来拿不到。
+     * 忘记密码（或被管理员重置）后，用户输入恢复码在本机解开，再用新密码重新包装。
+     * 没设置过恢复码时为空。
+     */
+    @Column(name = "recovery_wrapped_private_key", length = 255)
+    private String recoveryWrappedPrivateKey;
+
+    /** 恢复码派生用的盐，base64。同一个恢复码包装的各个版本共用一个盐。 */
+    @Column(name = "recovery_wrap_salt", length = 64)
+    private String recoveryWrapSalt;
+
+    /** 恢复码派生参数，目前固定为 hkdf-sha256,v=1。 */
+    @Column(name = "recovery_wrap_params", length = 100)
+    private String recoveryWrapParams;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
