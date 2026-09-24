@@ -2,6 +2,8 @@ package com.chatapp.controller;
 
 import com.chatapp.entity.Friendship;
 import com.chatapp.entity.User;
+import com.chatapp.entity.UserSettings;
+import com.chatapp.repository.UserSettingsRepository;
 import com.chatapp.service.FriendshipService;
 import com.chatapp.service.UserService;
 import lombok.RequiredArgsConstructor;
@@ -10,9 +12,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * 好友管理控制器
@@ -25,6 +31,7 @@ public class FriendshipController {
 
     private final FriendshipService friendshipService;
     private final UserService userService;
+    private final UserSettingsRepository userSettingsRepository;
 
     /**
      * 发送好友请求
@@ -311,24 +318,34 @@ public class FriendshipController {
     }
 
     private List<Map<String, Object>> toUserSummaries(List<User> users) {
+        Map<Long, String> avatarFrames = avatarFramesFor(users);
         return users.stream()
-                .map(this::toUserSummary)
+                .map(user -> toUserSummary(user, avatarFrames))
                 .toList();
     }
 
     private List<Map<String, Object>> toFriendshipSummaries(List<Friendship> friendships) {
+        Map<Long, String> avatarFrames = avatarFramesFor(friendships.stream()
+                .flatMap(friendship -> Stream.of(friendship.getUser(), friendship.getFriend()))
+                .toList());
         return friendships.stream()
-                .map(this::toFriendshipSummary)
+                .map(friendship -> toFriendshipSummary(friendship, avatarFrames))
                 .toList();
     }
 
     private Map<String, Object> toFriendshipSummary(Friendship friendship) {
+        return toFriendshipSummary(
+                friendship,
+                avatarFramesFor(List.of(friendship.getUser(), friendship.getFriend())));
+    }
+
+    private Map<String, Object> toFriendshipSummary(Friendship friendship, Map<Long, String> avatarFrames) {
         Map<String, Object> summary = new HashMap<>();
         summary.put("id", friendship.getId());
         summary.put("status", friendship.getStatus().name());
         summary.put("statusDescription", friendship.getStatus().getDescription());
-        summary.put("user", toUserSummary(friendship.getUser()));
-        summary.put("friend", toUserSummary(friendship.getFriend()));
+        summary.put("user", toUserSummary(friendship.getUser(), avatarFrames));
+        summary.put("friend", toUserSummary(friendship.getFriend(), avatarFrames));
         summary.put("friendAlias", friendship.getFriendAlias());
         summary.put("isBlocked", friendship.getIsBlocked());
         summary.put("isPinned", friendship.getIsPinned());
@@ -338,7 +355,28 @@ public class FriendshipController {
         return summary;
     }
 
-    private Map<String, Object> toUserSummary(User user) {
+    /**
+     * 一次查询解析一批用户的头像框，列表接口不再逐个用户查 user_settings。
+     */
+    private Map<Long, String> avatarFramesFor(Collection<User> users) {
+        List<Long> userIds = users.stream()
+                .filter(Objects::nonNull)
+                .map(User::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (userIds.isEmpty()) {
+            return Map.of();
+        }
+        return userSettingsRepository.findByUserIdIn(userIds).stream()
+                .filter(settings -> settings.getUser() != null && settings.getAvatarFramePreset() != null)
+                .collect(Collectors.toMap(
+                        settings -> settings.getUser().getId(),
+                        UserSettings::getAvatarFramePreset,
+                        (first, second) -> first));
+    }
+
+    private Map<String, Object> toUserSummary(User user, Map<Long, String> avatarFrames) {
         Map<String, Object> summary = new HashMap<>();
         summary.put("id", user.getId());
         summary.put("username", user.getUsername());
@@ -347,6 +385,10 @@ public class FriendshipController {
         summary.put("displayName", user.getDisplayName());
         summary.put("avatarUrl", user.getAvatarUrl());
         summary.put("bio", user.getBio());
+        summary.put("title", user.getTitle());
+        summary.put("titleColor", user.getTitleColor());
+        summary.put("titleEffect", user.getTitleEffect());
+        summary.put("avatarFramePreset", avatarFrames.getOrDefault(user.getId(), "none"));
         summary.put("onlineStatus", user.getOnlineStatus());
         summary.put("lastSeen", user.getLastSeen());
         summary.put("isActive", user.getIsActive());

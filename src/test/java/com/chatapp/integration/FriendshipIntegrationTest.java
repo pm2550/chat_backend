@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -198,6 +199,66 @@ public class FriendshipIntegrationTest {
                 .andExpect(jsonPath("$.friendship.status").value("ACCEPTED"))
                 .andExpect(jsonPath("$.friendship.user.id").value(bobId.intValue()))
                 .andExpect(jsonPath("$.friendship.friend.id").value(aliceId.intValue()));
+    }
+
+    @Test
+    @DisplayName("Friend list and requests carry title and avatar frame of each user")
+    void friendSummariesIncludeTitleAndAvatarFrame() throws Exception {
+        Object[] alice = createUserAndLogin("framealice");
+        String aliceToken = (String) alice[0];
+        Long aliceId = (Long) alice[1];
+
+        Object[] bob = createUserAndLogin("framebob");
+        String bobToken = (String) bob[0];
+        Long bobId = (Long) bob[1];
+
+        mockMvc.perform(put("/api/v1/users/me/title")
+                .header("Authorization", "Bearer " + bobToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(Map.of(
+                        "title", "摸鱼大师",
+                        "titleColor", "#3366FF",
+                        "titleEffect", "rainbow"))))
+                .andExpect(status().isOk());
+        mockMvc.perform(put("/api/profile/settings")
+                .header("Authorization", "Bearer " + bobToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(Map.of("avatarFramePreset", "starry_night"))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/friends/request/" + aliceId)
+                .header("Authorization", "Bearer " + bobToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.friendship.user.title").value("摸鱼大师"))
+                .andExpect(jsonPath("$.friendship.user.avatarFramePreset").value("starry_night"))
+                .andExpect(jsonPath("$.friendship.friend.avatarFramePreset").value("none"));
+
+        mockMvc.perform(get("/api/v1/friends/requests/received")
+                .header("Authorization", "Bearer " + aliceToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requests[0].user.id").value(bobId.intValue()))
+                .andExpect(jsonPath("$.requests[0].user.titleColor").value("#3366FF"))
+                .andExpect(jsonPath("$.requests[0].user.avatarFramePreset").value("starry_night"));
+
+        mockMvc.perform(post("/api/v1/friends/accept/" + bobId)
+                .header("Authorization", "Bearer " + aliceToken))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/friends")
+                .header("Authorization", "Bearer " + aliceToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.friends[0].id").value(bobId.intValue()))
+                .andExpect(jsonPath("$.friends[0].title").value("摸鱼大师"))
+                .andExpect(jsonPath("$.friends[0].titleColor").value("#3366FF"))
+                .andExpect(jsonPath("$.friends[0].titleEffect").value("rainbow"))
+                .andExpect(jsonPath("$.friends[0].avatarFramePreset").value("starry_night"));
+
+        mockMvc.perform(get("/api/v1/friends")
+                .header("Authorization", "Bearer " + bobToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.friends[0].id").value(aliceId.intValue()))
+                .andExpect(jsonPath("$.friends[0].titleEffect").value("none"))
+                .andExpect(jsonPath("$.friends[0].avatarFramePreset").value("none"));
     }
 
     private Object[] createUserAndLogin(String userPrefix) throws Exception {
