@@ -561,6 +561,9 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (version.getFileSize() != null) {
             envelope.put("fileSize", version.getFileSize());
         }
+        if (version.getSha256() != null) {
+            envelope.put("sha256", version.getSha256());
+        }
 
         userSessions.forEach((userId, sessions) ->
                 sessions.forEach(session -> sendJson(session, envelope)));
