@@ -909,6 +909,109 @@ public class MessageIntegrationTest {
     }
 
     @Test
+    @DisplayName("Normal send endpoint persists replyToId (the field the app sends) as a reply")
+    void testSendMessageWithReplyToIdPersistsReply() throws Exception {
+        Object[] user1 = createUserAndLogin("quoted1");
+        String token1 = (String) user1[0];
+        Object[] user2 = createUserAndLogin("quoted2");
+        Long userId2 = (Long) user2[1];
+        String token2 = (String) user2[0];
+        Long roomId = createGroupChat(token1, "Quote Room " + uniqueSuffix, List.of(userId2));
+        Long originalMessageId = sendMessage(token1, roomId, "Original message");
+
+        Map<String, Object> request = new HashMap<>();
+        request.put("chatRoomId", roomId);
+        request.put("content", "quoted reply");
+        request.put("replyToId", originalMessageId);
+        mockMvc.perform(post("/api/v1/messages")
+                .header("Authorization", "Bearer " + token2)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.replyToMessageId").value(originalMessageId.intValue()))
+                .andExpect(jsonPath("$.data.replyToMessage.content").value("Original message"));
+
+        // 重新拉历史也要带着引用（确认真的存进了 reply_to_message_id）。
+        mockMvc.perform(get("/api/v1/messages/chat-room/" + roomId)
+                .header("Authorization", "Bearer " + token1))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages[?(@.content == 'quoted reply')].replyToMessageId",
+                        hasItem(originalMessageId.intValue())))
+                .andExpect(jsonPath("$.messages[?(@.content == 'quoted reply')].replyToMessage.content",
+                        hasItem("Original message")));
+    }
+
+    @Test
+    @DisplayName("Replying to a message from another room or a deleted message is rejected")
+    void testSendMessageRejectsInvalidReplyTarget() throws Exception {
+        Object[] user1 = createUserAndLogin("badquote1");
+        String token1 = (String) user1[0];
+        Long roomA = createGroupChat(token1, "Quote Room A " + uniqueSuffix, List.of());
+        Long roomB = createGroupChat(token1, "Quote Room B " + uniqueSuffix, List.of());
+        Long otherRoomMessage = sendMessage(token1, roomB, "elsewhere");
+        Long deletedMessage = sendMessage(token1, roomA, "soon gone");
+        mockMvc.perform(delete("/api/v1/messages/" + deletedMessage)
+                .header("Authorization", "Bearer " + token1))
+                .andExpect(status().isOk());
+
+        for (Long target : List.of(otherRoomMessage, deletedMessage)) {
+            Map<String, Object> request = new HashMap<>();
+            request.put("chatRoomId", roomA);
+            request.put("content", "bad quote");
+            request.put("replyToId", target);
+            mockMvc.perform(post("/api/v1/messages")
+                    .header("Authorization", "Bearer " + token1)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Test
+    @DisplayName("History with a reply to a bot message loads outside a transaction")
+    void testReplyToBotMessageListsWithoutLazyLoadingFailure() throws Exception {
+        Object[] user1 = createUserAndLogin("botquote1");
+        String token1 = (String) user1[0];
+        Long roomId = createGroupChat(token1, "Bot Quote Room " + uniqueSuffix, List.of());
+        Long botId = createBot(token1, "QuoteBot");
+        addBotToRoom(token1, roomId, botId);
+        when(llmService.chat(any(), any()))
+                .thenReturn(new BotDto.LLMResponse("bot said this", 3, "test-model"));
+        sendMessage(token1, roomId, "@QuoteBot hello");
+
+        MvcResult history = mockMvc.perform(get("/api/v1/messages/chat-room/" + roomId)
+                .header("Authorization", "Bearer " + token1))
+                .andExpect(status().isOk())
+                .andReturn();
+        Map<String, Object> historyMap = objectMapper.readValue(
+                history.getResponse().getContentAsString(), Map.class);
+        Long botMessageId = ((List<Map<String, Object>>) historyMap.get("messages")).stream()
+                .filter(message -> "bot said this".equals(message.get("content")))
+                .map(message -> ((Number) message.get("id")).longValue())
+                .findFirst()
+                .orElseThrow();
+
+        Map<String, Object> request = new HashMap<>();
+        request.put("chatRoomId", roomId);
+        request.put("content", "replying to the bot");
+        request.put("replyToId", botMessageId);
+        mockMvc.perform(post("/api/v1/messages")
+                .header("Authorization", "Bearer " + token1)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
+
+        // size=1：只取最新这条回复，被引用的机器人消息不在本页里，
+        // 它的 botConfig 只能靠查询的 entity graph 带出来（事务外序列化）。
+        mockMvc.perform(get("/api/v1/messages/chat-room/" + roomId)
+                .header("Authorization", "Bearer " + token1)
+                .param("size", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages[0].content").value("replying to the bot"))
+                .andExpect(jsonPath("$.messages[0].replyToMessage.botName").value("QuoteBot"));
+    }
+
+    @Test
     @DisplayName("Recall a message within time limit")
     void testRecallMessage() throws Exception {
         Object[] user1 = createUserAndLogin("recaller");

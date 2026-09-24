@@ -16,6 +16,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -30,6 +31,8 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -68,13 +71,17 @@ class ImageGenerationServiceTest {
                 transactionTemplate,
                 directExecutor);
 
-        doAnswer(invocation -> {
+        lenient().doAnswer(invocation -> {
             Consumer<?> callback = invocation.getArgument(0);
             @SuppressWarnings("unchecked")
             Consumer<Object> typed = (Consumer<Object>) callback;
             typed.accept(null);
             return null;
         }).when(transactionTemplate).executeWithoutResult(any());
+        lenient().doAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        }).when(transactionTemplate).execute(any());
 
         when(messageRepository.save(any(Message.class))).thenAnswer(invocation -> {
             Message message = invocation.getArgument(0);
@@ -113,7 +120,11 @@ class ImageGenerationServiceTest {
         assertThat(persistedMessage.getImageGenStatus()).isEqualTo(Message.ImageGenerationStatus.DONE);
         assertThat(persistedMessage.getMessageStatus()).isEqualTo(Message.MessageStatus.SENT);
         assertThat(persistedMessage.getFileUrl()).isEqualTo("/api/files/image-gen/generated.png");
-        verify(rawWebSocketHandler, atLeastOnce()).broadcastMessage(persistedMessage);
+        // 排队时作为新消息推送但不发离线通知；进度只算更新；生成好了只通知一次。
+        verify(rawWebSocketHandler).broadcastMessageWithoutOfflineNotification(persistedMessage);
+        verify(rawWebSocketHandler, atLeastOnce()).broadcastMessageUpdated(persistedMessage);
+        verify(rawWebSocketHandler, times(1)).notifyOfflineMembers(persistedMessage);
+        verify(rawWebSocketHandler, never()).broadcastMessage(any());
     }
 
     @Test
@@ -131,6 +142,8 @@ class ImageGenerationServiceTest {
         assertThat(persistedMessage.getImageGenStatus()).isEqualTo(Message.ImageGenerationStatus.FAILED);
         assertThat(persistedMessage.getMessageStatus()).isEqualTo(Message.MessageStatus.FAILED);
         verify(pointsService).refund(1L, "image_generation", "image_generation:77", "图片生成失败自动退还");
+        verify(rawWebSocketHandler, never()).notifyOfflineMembers(any());
+        verify(rawWebSocketHandler, never()).broadcastMessage(any());
     }
 
     @Test

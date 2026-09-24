@@ -9,6 +9,7 @@ import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.service.BotService;
 import com.chatapp.service.BotReplyDeliveryService;
+import com.chatapp.service.MessageReactionService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.PushNotificationService;
 import com.chatapp.service.RoomTypingAggregator;
@@ -26,7 +27,6 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -35,12 +35,15 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Raw WebSocket handler that speaks the Flutter client's JSON-framed protocol:
- *   ← {"type":"message","chatRoomId":1,"content":"hi","messageType":"TEXT"}
+ *   ← {"type":"message","chatRoomId":1,"content":"hi","messageType":"TEXT",
+ *      "replyToId":7,"clientMessageId":"local-..."}
  *   ← {"type":"typing","chatRoomId":1,"isTyping":true}
  *   ← {"type":"call","action":"invite|accept|reject|offer|answer|ice|hangup",...}
  *   ← {"type":"agent_tool_result","callId":"...","result":{...}}
  *   ← {"type":"ping"}
- *   → {"type":"message","message":{...MessageDto...}}
+ *   → {"type":"message","event":"created|updated","clientMessageId":"local-...",
+ *      "message":{...MessageDto...}}
+ *   → {"type":"error","message":"原因","clientMessageId":"local-..."}
  *   → {"type":"typing","chatRoomId":1,"userId":2,"isTyping":true}
  *   → {"type":"call","action":"offer|answer|ice|hangup",...}
  *   → {"type":"agent_tool_request","callId":"...","toolName":"...","params":{...}}
@@ -75,6 +78,25 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     private final RoomTypingAggregator roomTypingAggregator;
     private final CallRoomRegistry callRoomRegistry;
     private final PendingClientCallRegistry pendingClientCallRegistry;
+    private final MessageReactionService messageReactionService;
+
+    /** 客户端自带的消息临时 id 最长多少字符，超出的不回显。 */
+    private static final int MAX_CLIENT_MESSAGE_ID_LENGTH = 64;
+
+    /**
+     * 消息推送事件：created 是新消息（计未读、弹提醒、离线推送），updated 是已有消息
+     * 被编辑/撤回/删除/状态变化（只替换内容）。老客户端不认识 event，照旧按 type=message 处理。
+     */
+    enum MessageEvent {
+        CREATED("created"),
+        UPDATED("updated");
+
+        private final String wireName;
+
+        MessageEvent(String wireName) {
+            this.wireName = wireName;
+        }
+    }
 
     // userId -> sessions (a user may have multiple devices connected)
     private final Map<Long, Set<WebSocketSession>> userSessions = new ConcurrentHashMap<>();
@@ -202,8 +224,9 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         markInbound(session);
+        JsonNode root = null;
         try {
-            JsonNode root = objectMapper.readTree(textMessage.getPayload());
+            root = objectMapper.readTree(textMessage.getPayload());
             String type = root.path("type").asText("");
             if (isBackground(session)) {
                 // 后台连接只保活，不参与聊天、输入状态和通话信令。
@@ -221,7 +244,17 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
             }
         } catch (Exception e) {
             log.warn("Failed to handle ws message: {}", e.getMessage());
-            sendJson(session, Map.of("type", "error", "message", e.getMessage()));
+            // 带回客户端的临时 id，前端才能把那条"发送中"的消息标成失败并显示原因。
+            ObjectNode error = objectMapper.createObjectNode();
+            error.put("type", "error");
+            error.put("message", e.getMessage() != null && !e.getMessage().isBlank()
+                    ? e.getMessage()
+                    : "消息处理失败");
+            String clientMessageId = clientMessageId(root);
+            if (clientMessageId != null) {
+                error.put("clientMessageId", clientMessageId);
+            }
+            sendJson(session, error);
         }
     }
 
@@ -251,13 +284,17 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         }
         if (chatRoomId == null) {
             log.warn("ws message missing chatRoomId from user {}", user.getId());
-            return;
+            throw new IllegalArgumentException("缺少聊天室 id");
         }
         String encryptedContent = payload.path("encryptedContent").asText(null);
         Integer encryptionVersion = payload.has("encryptionVersion")
                 ? payload.path("encryptionVersion").asInt(1)
                 : null;
         boolean anonymous = payload.path("isAnonymous").asBoolean(false);
+        Long replyToMessageId = parseLong(payload.get("replyToId"));
+        if (replyToMessageId == null) {
+            replyToMessageId = parseLong(payload.get("replyToMessageId"));
+        }
         Message saved = anonymous
                 ? messageService.sendAnonymousEncryptedMessage(
                         user.getId(),
@@ -265,15 +302,17 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
                         content,
                         encryptedContent,
                         encryptionVersion,
-                        messageType)
+                        messageType,
+                        replyToMessageId)
                 : messageService.sendEncryptedMessage(
                         user.getId(),
                         chatRoomId,
                         content,
                         encryptedContent,
                         encryptionVersion,
-                        messageType);
-        broadcastMessage(saved);
+                        messageType,
+                        replyToMessageId);
+        broadcastMessage(saved, null, MessageEvent.CREATED, clientMessageId(root), true);
         if (messageType == Message.MessageType.TEXT
                 && (encryptedContent == null || encryptedContent.isBlank())) {
             botReplyDeliveryService.deliver(
@@ -485,12 +524,35 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         sendToUser(userId, rejected);
     }
 
+    /** 新消息：推给房间所有人，并给不在线的成员发离线通知。 */
     public void broadcastMessage(Message saved) {
-        broadcastMessage(saved, null);
+        broadcastMessage(saved, null, MessageEvent.CREATED, null, true);
     }
 
     public void broadcastMessageExcept(Message saved, Long exceptUserId) {
-        broadcastMessage(saved, exceptUserId);
+        broadcastMessage(saved, exceptUserId, MessageEvent.CREATED, null, true);
+    }
+
+    /**
+     * 新消息，但先不发离线通知——内容还没准备好（例如 AI 图片刚排队），
+     * 等真正可看时再调 {@link #notifyOfflineMembers(Message)}。
+     */
+    public void broadcastMessageWithoutOfflineNotification(Message saved) {
+        broadcastMessage(saved, null, MessageEvent.CREATED, null, false);
+    }
+
+    /** 已有消息变了（编辑、撤回、删除、生成进度）：只让客户端替换内容，不计未读、不推送。 */
+    public void broadcastMessageUpdated(Message saved) {
+        broadcastMessage(saved, null, MessageEvent.UPDATED, null, false);
+    }
+
+    public void broadcastMessageUpdatedExcept(Message saved, Long exceptUserId) {
+        broadcastMessage(saved, exceptUserId, MessageEvent.UPDATED, null, false);
+    }
+
+    /** 给不在线的房间成员发这条消息的通知（系统推送 + Android 后台连接）。 */
+    public void notifyOfflineMembers(Message message) {
+        pushOfflineMessageNotification(message);
     }
 
     public void broadcastReadReceipt(Long chatRoomId, Long userId, Long lastReadMessageId) {
@@ -659,16 +721,41 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         return sendToUser(userId, envelope);
     }
 
-    private void broadcastMessage(Message saved, Long exceptUserId) {
+    private void broadcastMessage(Message saved,
+                                  Long exceptUserId,
+                                  MessageEvent event,
+                                  String clientMessageId,
+                                  boolean notifyOffline) {
         ObjectNode envelope = objectMapper.createObjectNode();
         envelope.put("type", "message");
+        envelope.put("event", event.wireName);
+        if (clientMessageId != null) {
+            envelope.put("clientMessageId", clientMessageId);
+        }
         envelope.set("message", toMessageJson(saved));
         if (exceptUserId == null) {
             broadcastToRoom(saved.getChatRoom().getId(), envelope);
         } else {
             broadcastToRoomExcept(saved.getChatRoom().getId(), exceptUserId, envelope);
         }
-        pushOfflineMessageNotification(saved);
+        if (notifyOffline) {
+            pushOfflineMessageNotification(saved);
+        }
+    }
+
+    private String clientMessageId(JsonNode root) {
+        if (root == null) {
+            return null;
+        }
+        JsonNode node = root.get("clientMessageId");
+        if ((node == null || node.isNull()) && root.get("message") != null) {
+            node = root.get("message").get("clientMessageId");
+        }
+        if (node == null || !node.isValueNode()) {
+            return null;
+        }
+        String value = node.asText().trim();
+        return value.isEmpty() || value.length() > MAX_CLIENT_MESSAGE_ID_LENGTH ? null : value;
     }
 
     private void broadcastStatus(Long userId, String status) {
@@ -809,6 +896,9 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (type == Message.MessageType.FILE) {
             return "[文件] " + fallback(message.getFileName(), message.getContent());
         }
+        if (type == Message.MessageType.IMAGE_GENERATION) {
+            return "[AI图片] " + fallback(message.getImageGenPrompt(), "");
+        }
         return fallback(message.getContent(), "[新消息]");
     }
 
@@ -836,75 +926,21 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    private ObjectNode toMessageJson(Message m) {
-        ObjectNode json = objectMapper.createObjectNode();
-        json.put("id", m.getId());
-        json.put("content", m.getContent());
-        json.put("chatRoomId", m.getChatRoom().getId());
-        json.put("senderId", m.getSender().getId());
-        json.put("senderName", m.getSender().getDisplayName() != null
-                ? m.getSender().getDisplayName()
-                : m.getSender().getUsername());
-        if (m.getSender().getAvatarUrl() != null) {
-            json.put("senderAvatar", m.getSender().getAvatarUrl());
-        }
-        if (m.getBotConfig() != null) {
-            json.put("botConfigId", m.getBotConfig().getId());
-            json.put("botSenderId", m.getBotConfig().getId());
-            json.put("botName", fallback(m.getBotDisplayName(), m.getBotConfig().getBotName()));
-            if (m.getBotConfig().getBotAvatar() != null) {
-                json.put("botAvatar", m.getBotConfig().getBotAvatar());
-            }
-        }
-        boolean anonymous = Boolean.TRUE.equals(m.getIsAnonymous());
-        json.put("isAnonymous", anonymous);
-        if (anonymous && m.getAnonymousIdentity() != null) {
-            json.put("anonymousIdentityId", m.getAnonymousIdentity().getId());
-            json.put("anonymousName", m.getAnonymousIdentity().getAnonymousName());
-            if (m.getAnonymousIdentity().getAnonymousAvatar() != null) {
-                json.put("anonymousAvatar", m.getAnonymousIdentity().getAnonymousAvatar());
-            }
-            json.put("senderName", m.getAnonymousIdentity().getAnonymousName());
-            if (m.getAnonymousIdentity().getAnonymousAvatar() != null) {
-                json.put("senderAvatar", m.getAnonymousIdentity().getAnonymousAvatar());
-            }
-        }
+    /**
+     * WS 推送的消息体和 REST 接口同源：同一个 MessageDto、同一个 ObjectMapper，
+     * 字段不会再两边各写一份而漂移（以前 WS 少了引用、表情回应、链接预览等，
+     * 客户端按 id 整条替换后这些就"消失"了）。只额外补上老客户端读的几个别名。
+     * 表情回应的 currentUserReacted 是按查看者算的，广播里统一为 false，客户端用 userIds 判断。
+     */
+    ObjectNode toMessageJson(Message m) {
+        MessageDto dto = MessageDto.fromEntity(m);
+        messageReactionService.attachAggregates(List.of(dto), null);
+        ObjectNode json = objectMapper.valueToTree(dto);
         json.put("type", m.getMessageType() != null ? m.getMessageType().name() : "TEXT");
-        if (m.getContentFormat() != null) {
-            json.put("contentFormat", m.getContentFormat().name());
-        }
         json.put("status", m.getMessageStatus() != null ? m.getMessageStatus().name() : "SENT");
-        if (m.getCreatedAt() != null) {
-            json.put("timestamp", m.getCreatedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-            json.put("createdAt", m.getCreatedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        if (json.hasNonNull("createdAt")) {
+            json.set("timestamp", json.get("createdAt"));
         }
-        if (m.getUpdatedAt() != null) {
-            json.put("updatedAt", m.getUpdatedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-        }
-        if (m.getReplyToMessage() != null) {
-            json.put("replyToMessageId", m.getReplyToMessage().getId());
-        }
-        if (m.getMentionedUserIds() != null && !m.getMentionedUserIds().isEmpty()) {
-            json.set("mentionedUserIds", objectMapper.valueToTree(m.getMentionedUserIds()));
-        }
-        if (m.getFileUrl() != null) json.put("fileUrl", m.getFileUrl());
-        if (m.getFileName() != null) json.put("fileName", m.getFileName());
-        if (m.getFileSize() != null) json.put("fileSize", m.getFileSize());
-        if (m.getFileType() != null) json.put("fileType", m.getFileType());
-        if (m.getImageGenPrompt() != null) json.put("imageGenPrompt", m.getImageGenPrompt());
-        if (m.getImageGenStatus() != null) json.put("imageGenStatus", m.getImageGenStatus().name());
-        if (m.getImageGenUrl() != null) json.put("imageGenUrl", m.getImageGenUrl());
-        if (m.getImageGenProviderTaskId() != null) {
-            json.put("imageGenProviderTaskId", m.getImageGenProviderTaskId());
-        }
-        if (m.getEncryptedContent() != null && m.getEncryptedContent().length > 0) {
-            json.put("encryptedContent", java.util.Base64.getEncoder().encodeToString(m.getEncryptedContent()));
-        }
-        if (m.getEncryptionVersion() != null) {
-            json.put("encryptionVersion", m.getEncryptionVersion());
-        }
-        json.put("isDeleted", Boolean.TRUE.equals(m.getIsDeleted()));
-        json.put("isEdited", Boolean.TRUE.equals(m.getIsEdited()));
         return json;
     }
 

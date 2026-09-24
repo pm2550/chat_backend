@@ -69,6 +69,11 @@ public class MessageService {
     }
 
     public Message sendStickerMessage(Long senderId, Long chatRoomId, Long stickerId, boolean anonymous) {
+        return sendStickerMessage(senderId, chatRoomId, stickerId, anonymous, null);
+    }
+
+    public Message sendStickerMessage(Long senderId, Long chatRoomId, Long stickerId, boolean anonymous,
+                                      Long replyToMessageId) {
         if (stickerRepository == null) {
             throw new IllegalStateException("贴纸服务未启用");
         }
@@ -79,8 +84,10 @@ public class MessageService {
             throw new IllegalArgumentException("无权使用这个贴纸");
         }
         Message message = anonymous
-                ? sendAnonymousEncryptedMessage(senderId, chatRoomId, "[贴纸]", null, null, Message.MessageType.STICKER)
-                : sendEncryptedMessage(senderId, chatRoomId, "[贴纸]", null, null, Message.MessageType.STICKER);
+                ? sendAnonymousEncryptedMessage(senderId, chatRoomId, "[贴纸]", null, null,
+                        Message.MessageType.STICKER, replyToMessageId)
+                : sendEncryptedMessage(senderId, chatRoomId, "[贴纸]", null, null,
+                        Message.MessageType.STICKER, replyToMessageId);
         message.setStickerId(sticker.getId());
         message.setFileUrl(sticker.getUrl());
         message.setFileName(sticker.getKeyword());
@@ -97,11 +104,27 @@ public class MessageService {
                                         String encryptedContentBase64,
                                         Integer encryptionVersion,
                                         Message.MessageType messageType) {
+        return sendEncryptedMessage(senderId, chatRoomId, content, encryptedContentBase64,
+                encryptionVersion, messageType, null);
+    }
+
+    /**
+     * 同上，可带被回复消息 id。回复和普通发送走同一条路径（REST / WebSocket 都是），
+     * 被回复的消息在保存前校验，不合法就整条拒绝，而不是悄悄丢掉引用。
+     */
+    public Message sendEncryptedMessage(Long senderId,
+                                        Long chatRoomId,
+                                        String content,
+                                        String encryptedContentBase64,
+                                        Integer encryptionVersion,
+                                        Message.MessageType messageType,
+                                        Long replyToMessageId) {
         User sender = userRepository.findById(senderId)
                 .orElseThrow(() -> new RuntimeException("发送者不存在"));
         ChatRoom chatRoom = chatRoomRepository.findById(chatRoomId)
                 .orElseThrow(() -> new RuntimeException("聊天室不存在"));
         validateCanSendMessage(senderId, chatRoomId);
+        Message replyTo = resolveReplyTarget(chatRoomId, replyToMessageId);
 
         // 创建消息
         Message message = new Message();
@@ -112,6 +135,7 @@ public class MessageService {
         message.setChatRoom(chatRoom);
         message.setCreatedAt(LocalDateTime.now());
         message.setMessageStatus(Message.MessageStatus.SENT);
+        message.setReplyToMessage(replyTo);
         if (!encrypted && messageType == Message.MessageType.TEXT) {
             message.setMentionedUserIds(resolveMentionedUserIds(content, chatRoom));
         }
@@ -140,6 +164,17 @@ public class MessageService {
                                                  String encryptedContentBase64,
                                                  Integer encryptionVersion,
                                                  Message.MessageType messageType) {
+        return sendAnonymousEncryptedMessage(senderId, chatRoomId, content, encryptedContentBase64,
+                encryptionVersion, messageType, null);
+    }
+
+    public Message sendAnonymousEncryptedMessage(Long senderId,
+                                                 Long chatRoomId,
+                                                 String content,
+                                                 String encryptedContentBase64,
+                                                 Integer encryptionVersion,
+                                                 Message.MessageType messageType,
+                                                 Long replyToMessageId) {
         AnonymousIdentity identity = anonymousService.getOrCreateIdentityEntity(senderId, chatRoomId);
         Message message = sendEncryptedMessage(
                 senderId,
@@ -147,7 +182,8 @@ public class MessageService {
                 content,
                 encryptedContentBase64,
                 encryptionVersion,
-                messageType);
+                messageType,
+                replyToMessageId);
         message.setIsAnonymous(true);
         message.setAnonymousIdentity(identity);
         return messageRepository.save(message);
@@ -269,20 +305,37 @@ public class MessageService {
      */
     public Message replyToMessage(Long senderId, Long chatRoomId, Long replyToMessageId, 
                                 String content, Message.MessageType messageType) {
-        // 验证原消息
-        Message replyToMessage = messageRepository.findWithSenderById(replyToMessageId)
-                .orElseThrow(() -> new RuntimeException("回复的消息不存在"));
+        if (replyToMessageId == null) {
+            throw new IllegalArgumentException("缺少被回复的消息");
+        }
+        return sendEncryptedMessage(senderId, chatRoomId, content, null, null, messageType, replyToMessageId);
+    }
 
-        // 确保回复的消息在同一个聊天室
-        if (!replyToMessage.getChatRoom().getId().equals(chatRoomId)) {
+    /**
+     * 被回复的消息必须存在、在同一个聊天室、且没有被删除/撤回。
+     */
+    private Message resolveReplyTarget(Long chatRoomId, Long replyToMessageId) {
+        if (replyToMessageId == null) {
+            return null;
+        }
+        Message target = messageRepository.findWithSenderById(replyToMessageId)
+                .orElseThrow(() -> new IllegalArgumentException("回复的消息不存在"));
+        if (target.getChatRoom() == null || !chatRoomId.equals(target.getChatRoom().getId())) {
             throw new IllegalArgumentException("只能回复同一聊天室的消息");
         }
+        if (Boolean.TRUE.equals(target.getIsDeleted())) {
+            throw new IllegalArgumentException("回复的消息已被删除");
+        }
+        return target;
+    }
 
-        // 发送回复消息
-        Message message = sendMessage(senderId, chatRoomId, content, messageType);
-        message.setReplyToMessage(replyToMessage);
-        
-        return messageRepository.save(message);
+    /**
+     * 按 id 取一条消息用于推送（带上发送者、引用等关联，事务外序列化也不会懒加载失败）。
+     */
+    @Transactional(readOnly = true)
+    public Message getMessageForBroadcast(Long messageId) {
+        return messageRepository.findWithSenderById(messageId)
+                .orElseThrow(() -> new IllegalArgumentException("消息不存在"));
     }
 
     private void enqueueLinkPreview(Message message) {

@@ -124,7 +124,8 @@ public class ImageGenerationService {
         String refId = refId(message.getId());
         var debit = pointsService.debit(chargedUserId, FEATURE_KEY, refId);
         chatRoomRepository.incrementUnreadForRoomMembersExcept(chatRoom.getId(), chargedUserId);
-        rawWebSocketHandler.broadcastMessage(message);
+        // 离线通知等图片真正生成好再发一次（见 complete），排队/处理中的进度只算更新。
+        rawWebSocketHandler.broadcastMessageWithoutOfflineNotification(message);
 
         Long messageId = message.getId();
         String size = request.getSize();
@@ -221,12 +222,12 @@ public class ImageGenerationService {
                 "图片生成超时");
     }
 
-    private void updateStatus(Long messageId,
-                              Message.ImageGenerationStatus status,
-                              Message.MessageStatus messageStatus,
-                              String fileUrl,
-                              Long fileSize) {
-        transactionTemplate.executeWithoutResult(statusTx -> {
+    private Message updateStatus(Long messageId,
+                                 Message.ImageGenerationStatus status,
+                                 Message.MessageStatus messageStatus,
+                                 String fileUrl,
+                                 Long fileSize) {
+        return transactionTemplate.execute(statusTx -> {
             Message message = messageRepository.findWithSenderById(messageId)
                     .orElseThrow(() -> new IllegalArgumentException("消息不存在"));
             message.setImageGenStatus(status);
@@ -239,7 +240,8 @@ public class ImageGenerationService {
                 message.setFileSize(fileSize);
             }
             message = messageRepository.save(message);
-            rawWebSocketHandler.broadcastMessage(message);
+            rawWebSocketHandler.broadcastMessageUpdated(message);
+            return message;
         });
     }
 
@@ -249,12 +251,16 @@ public class ImageGenerationService {
                     .orElseThrow(() -> new IllegalArgumentException("消息不存在"));
             message.setImageGenProviderTaskId(taskId);
             message = messageRepository.save(message);
-            rawWebSocketHandler.broadcastMessage(message);
+            rawWebSocketHandler.broadcastMessageUpdated(message);
         });
     }
 
     private void complete(Long messageId, String fileUrl, long fileSize) {
-        updateStatus(messageId, Message.ImageGenerationStatus.DONE, Message.MessageStatus.SENT, fileUrl, fileSize);
+        Message done = updateStatus(
+                messageId, Message.ImageGenerationStatus.DONE, Message.MessageStatus.SENT, fileUrl, fileSize);
+        if (done != null) {
+            rawWebSocketHandler.notifyOfflineMembers(done);
+        }
     }
 
     private void fail(Long messageId, String reason) {
@@ -267,7 +273,7 @@ public class ImageGenerationService {
                 message.setContent(message.getImageGenPrompt() + "\n\n" + reason);
             }
             message = messageRepository.save(message);
-            rawWebSocketHandler.broadcastMessage(message);
+            rawWebSocketHandler.broadcastMessageUpdated(message);
         });
     }
 

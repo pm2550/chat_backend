@@ -1,5 +1,8 @@
 package com.chatapp.integration;
 
+import com.chatapp.controller.PollController;
+import com.chatapp.dto.MessageDto;
+import com.chatapp.dto.PollDto;
 import com.chatapp.dto.UserDto;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.dto.AppVersionDto;
@@ -10,6 +13,7 @@ import com.chatapp.repository.UserRepository;
 import com.chatapp.service.ChatRoomService;
 import com.chatapp.service.CloudStorageService;
 import com.chatapp.service.LLMService;
+import com.chatapp.service.MessageReactionService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.AnonymousService;
 import com.chatapp.service.AppVersionService;
@@ -35,6 +39,8 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.server.ServerHttpAsyncRequestControl;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.socket.CloseStatus;
@@ -63,10 +69,13 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -96,6 +105,8 @@ class RawWebSocketIntegrationTest {
     @Autowired private RawWebSocketHandler rawWebSocketHandler;
     @Autowired private CallRoomRegistry callRoomRegistry;
     @Autowired private JwtHandshakeInterceptor jwtHandshakeInterceptor;
+    @Autowired private MessageReactionService messageReactionService;
+    @Autowired private PollController pollController;
 
     @MockBean private TokenBlacklistService tokenBlacklistService;
     @MockBean private PushNotificationService pushNotificationService;
@@ -662,6 +673,158 @@ class RawWebSocketIntegrationTest {
         assertEquals("1.1.0-test", aliceUpdate.path("versionName").asText());
         assertEquals(versionCode, aliceUpdate.path("versionCode").asInt());
         assertEquals("ws update broadcast test", bobUpdate.path("releaseNotes").asText());
+    }
+
+    @Test
+    @DisplayName("WebSocket reply is persisted and delivered to everyone with the quoted message")
+    void ws_reply_persisted_and_broadcast_with_quote() throws Exception {
+        Message original = messageService.sendMessage(bob.getId(), room.getId(), "original words", Message.MessageType.TEXT);
+        TestWebSocketSession aliceSession = connect(alice);
+        TestWebSocketSession bobSession = connect(bob);
+        drainStatus(aliceSession, bobSession);
+
+        rawWebSocketHandler.handleMessage(aliceSession, new TextMessage(objectMapper.writeValueAsString(Map.of(
+                "type", "message",
+                "chatRoomId", room.getId(),
+                "content", "quoting you",
+                "messageType", "TEXT",
+                "replyToId", original.getId(),
+                "clientMessageId", "local-abc-1"
+        ))));
+
+        JsonNode bobMsg = awaitMessage(bobSession, "message");
+        assertNotNull(bobMsg, "bob missed the reply");
+        assertEquals("created", bobMsg.path("event").asText());
+        assertEquals(original.getId().longValue(), bobMsg.path("message").path("replyToMessageId").asLong());
+        assertEquals("original words", bobMsg.path("message").path("replyToMessage").path("content").asText());
+        assertEquals("Bob", bobMsg.path("message").path("replyToMessage").path("senderName").asText());
+
+        JsonNode aliceEcho = awaitMessage(aliceSession, "message");
+        assertNotNull(aliceEcho, "sender should get its own message back to settle the pending bubble");
+        assertEquals("local-abc-1", aliceEcho.path("clientMessageId").asText());
+
+        Message stored = messageService.getMessageForBroadcast(bobMsg.path("message").path("id").asLong());
+        assertNotNull(stored.getReplyToMessage(), "reply_to_message_id must be stored");
+        assertEquals(original.getId(), stored.getReplyToMessage().getId());
+    }
+
+    @Test
+    @DisplayName("WebSocket message JSON carries every field of the REST MessageDto JSON")
+    void ws_message_payload_matches_rest_dto_fields() throws Exception {
+        Message original = messageService.sendMessage(bob.getId(), room.getId(), "quoted", Message.MessageType.TEXT);
+        Message reply = messageService.sendEncryptedMessage(
+                alice.getId(), room.getId(), "reply body", null, null, Message.MessageType.TEXT, original.getId());
+        messageReactionService.addReaction(reply.getId(), bob.getId(), "👍");
+        TestWebSocketSession bobSession = connect(bob);
+        drainStatus(bobSession);
+
+        Message edited = messageService.editMessage(reply.getId(), alice.getId(), "reply body (edited)");
+        rawWebSocketHandler.broadcastMessageUpdated(edited);
+
+        JsonNode envelope = awaitMessage(bobSession, "message");
+        assertNotNull(envelope, "bob missed the edit");
+        assertEquals("updated", envelope.path("event").asText());
+        JsonNode ws = envelope.path("message");
+
+        JsonNode rest = objectMapper.valueToTree(
+                MessageDto.fromEntity(messageService.getMessageForBroadcast(reply.getId())));
+        List<String> missing = new ArrayList<>();
+        rest.fieldNames().forEachRemaining(field -> {
+            if (!ws.has(field)) missing.add(field);
+        });
+        assertTrue(missing.isEmpty(), "WS message JSON is missing REST fields: " + missing);
+
+        // 编辑后整条替换也不能丢掉引用、表情回应和"已编辑"标记。
+        assertEquals("quoted", ws.path("replyToMessage").path("content").asText());
+        assertEquals("👍", ws.path("reactions").get(0).path("emoji").asText());
+        assertEquals(bob.getId().longValue(), ws.path("reactions").get(0).path("userIds").get(0).asLong());
+        assertFalse(ws.path("editedAt").isNull());
+        assertEquals(rest.path("createdAt"), ws.path("createdAt"), "dates must serialize the same way");
+    }
+
+    @Test
+    @DisplayName("Edits are pushed as updates and never re-notify offline members")
+    void edit_broadcast_is_update_without_offline_push() throws Exception {
+        TestWebSocketSession aliceSession = connect(alice);
+        drainStatus(aliceSession);
+
+        rawWebSocketHandler.handleMessage(aliceSession, new TextMessage(objectMapper.writeValueAsString(Map.of(
+                "type", "message",
+                "chatRoomId", room.getId(),
+                "content", "first draft",
+                "messageType", "TEXT"
+        ))));
+        JsonNode created = awaitMessage(aliceSession, "message");
+        assertNotNull(created);
+        verify(pushNotificationService).sendPushNotification(eq(bob.getId()), anyString(), eq("first draft"), anyString());
+        clearInvocations(pushNotificationService);
+
+        Message edited = messageService.editMessage(
+                created.path("message").path("id").asLong(), alice.getId(), "second draft");
+        rawWebSocketHandler.broadcastMessageUpdated(edited);
+
+        JsonNode update = awaitMessage(aliceSession, "message");
+        assertNotNull(update);
+        assertEquals("updated", update.path("event").asText());
+        verify(pushNotificationService, never()).sendPushNotification(any(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("Rejected WebSocket send echoes the client message id with the reason")
+    void ws_send_error_echoes_client_message_id() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        ChatRoom otherRoom = chatRoomService.createGroupChat(
+                alice.getId(), "other-" + suffix, "other", List.of(bob.getId()));
+        Message elsewhere = messageService.sendMessage(alice.getId(), otherRoom.getId(), "elsewhere", Message.MessageType.TEXT);
+        TestWebSocketSession bobSession = connect(bob);
+        drainStatus(bobSession);
+
+        rawWebSocketHandler.handleMessage(bobSession, new TextMessage(objectMapper.writeValueAsString(Map.of(
+                "type", "message",
+                "chatRoomId", room.getId(),
+                "content", "cross-room quote",
+                "messageType", "TEXT",
+                "replyToId", elsewhere.getId(),
+                "clientMessageId", "local-err-1"
+        ))));
+
+        JsonNode err = awaitMessage(bobSession, "error");
+        assertNotNull(err, "the sender must be told why the message was rejected");
+        assertEquals("local-err-1", err.path("clientMessageId").asText());
+        assertEquals("只能回复同一聊天室的消息", err.path("message").asText());
+    }
+
+    @Test
+    @DisplayName("Creating a poll broadcasts the poll message; removing a vote broadcasts poll_voted")
+    void poll_create_and_vote_removal_are_broadcast() throws Exception {
+        TestWebSocketSession aliceSession = connect(alice);
+        TestWebSocketSession bobSession = connect(bob);
+        drainStatus(aliceSession, bobSession);
+        Authentication aliceAuth = new UsernamePasswordAuthenticationToken(alice.getUsername(), null, List.of());
+
+        PollDto.CreateRequest create = new PollDto.CreateRequest();
+        create.setChatRoomId(room.getId());
+        create.setQuestion("lunch?");
+        create.setOptions(List.of("noodles", "rice"));
+        PollDto poll = pollController.create(create, aliceAuth).getBody().getData();
+
+        JsonNode bobMsg = awaitMessage(bobSession, "message");
+        assertNotNull(bobMsg, "bob should see the new poll without re-entering the room");
+        assertEquals("created", bobMsg.path("event").asText());
+        assertEquals("POLL", bobMsg.path("message").path("messageType").asText());
+        assertEquals(poll.getId().longValue(), bobMsg.path("message").path("pollId").asLong());
+        verify(pushNotificationService, never()).sendPushNotification(eq(alice.getId()), anyString(), anyString(), anyString());
+        drainStatus(aliceSession, bobSession);
+
+        PollDto.VoteRequest vote = new PollDto.VoteRequest();
+        vote.setOptionIndexes(List.of(0));
+        pollController.vote(poll.getId(), vote, aliceAuth);
+        assertNotNull(awaitMessage(bobSession, "poll_voted"));
+
+        pollController.deleteVote(poll.getId(), aliceAuth);
+        JsonNode removed = awaitMessage(bobSession, "poll_voted");
+        assertNotNull(removed, "removing a vote must refresh everyone's poll card");
+        assertEquals(0, removed.path("poll").path("totalVotes").asInt());
     }
 
     private TestWebSocketSession connect(User user) {

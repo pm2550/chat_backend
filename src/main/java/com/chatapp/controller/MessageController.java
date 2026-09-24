@@ -13,6 +13,7 @@ import com.chatapp.service.RemoteImageFetchService;
 import com.chatapp.service.VoiceTranscoder;
 import com.chatapp.service.UserService;
 import com.chatapp.websocket.RawWebSocketHandler;
+import com.fasterxml.jackson.annotation.JsonAlias;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -65,7 +66,8 @@ public class MessageController {
                         currentUser.getId(),
                         request.getChatRoomId(),
                         request.getStickerId(),
-                        Boolean.TRUE.equals(request.getIsAnonymous()))
+                        Boolean.TRUE.equals(request.getIsAnonymous()),
+                        request.getReplyToMessageId())
                     : Boolean.TRUE.equals(request.getIsAnonymous())
                     ? messageService.sendAnonymousEncryptedMessage(
                         currentUser.getId(),
@@ -73,14 +75,16 @@ public class MessageController {
                         request.getContent(),
                         request.getEncryptedContent(),
                         request.getEncryptionVersion(),
-                        messageType)
+                        messageType,
+                        request.getReplyToMessageId())
                     : messageService.sendEncryptedMessage(
                         currentUser.getId(),
                         request.getChatRoomId(),
                         request.getContent(),
                         request.getEncryptedContent(),
                         request.getEncryptionVersion(),
-                        messageType);
+                        messageType,
+                        request.getReplyToMessageId());
             
             Map<String, Object> response = new HashMap<>();
             response.put("message", "消息发送成功");
@@ -473,7 +477,7 @@ public class MessageController {
             User currentUser = userService.findUserByUsername(auth.getName());
             Message message = messageService.recallMessage(messageId, currentUser.getId());
 
-            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            rawWebSocketHandler.broadcastMessageUpdatedExcept(message, currentUser.getId());
             auditLogService.record(
                     currentUser,
                     "MESSAGE_RECALL",
@@ -500,7 +504,7 @@ public class MessageController {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
             Message message = messageService.editMessage(messageId, currentUser.getId(), request.getContent());
-            rawWebSocketHandler.broadcastMessage(message);
+            rawWebSocketHandler.broadcastMessageUpdated(message);
             auditLogService.record(
                     currentUser,
                     "MESSAGE_EDIT",
@@ -612,7 +616,7 @@ public class MessageController {
             User currentUser = userService.findUserByUsername(auth.getName());
             Message message = messageService.deleteMessage(messageId, currentUser.getId());
 
-            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            rawWebSocketHandler.broadcastMessageUpdatedExcept(message, currentUser.getId());
             auditLogService.record(
                     currentUser,
                     "MESSAGE_DELETE",
@@ -722,6 +726,9 @@ public class MessageController {
         private Integer encryptionVersion;
         private Boolean isAnonymous;
         private Long stickerId;
+        /** 前端一直用 replyToId 这个名字发，两种都认。 */
+        @JsonAlias("replyToId")
+        private Long replyToMessageId;
         
         // Getters and Setters
         public Long getChatRoomId() { return chatRoomId; }
@@ -738,6 +745,8 @@ public class MessageController {
         public void setIsAnonymous(Boolean isAnonymous) { this.isAnonymous = isAnonymous; }
         public Long getStickerId() { return stickerId; }
         public void setStickerId(Long stickerId) { this.stickerId = stickerId; }
+        public Long getReplyToMessageId() { return replyToMessageId; }
+        public void setReplyToMessageId(Long replyToMessageId) { this.replyToMessageId = replyToMessageId; }
     }
 
     public static class SendFileFromUrlRequest {
