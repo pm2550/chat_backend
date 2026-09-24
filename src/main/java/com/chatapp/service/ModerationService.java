@@ -5,6 +5,7 @@ import com.chatapp.repository.ChatRoomBotRepository;
 import com.chatapp.repository.ChatRoomRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +24,7 @@ public class ModerationService {
 
     private final ChatRoomBotRepository chatRoomBotRepository;
     private final ChatRoomRepository chatRoomRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     /** A room OWNER sets a bot's moderation grant in their room. */
     public void setBotModerationGrant(Long roomId, Long ownerId, Long botConfigId,
@@ -50,6 +52,8 @@ public class ModerationService {
         requireGrantedBot(botConfigId, roomId, ChatRoomBot.ModerationGrant.KICK);
         requireModeratableTarget(roomId, targetUserId);
         chatRoomRepository.removeMember(roomId, targetUserId);
+        eventPublisher.publishEvent(new RoomRealtimeEvents.MembersRemoved(
+                roomId, java.util.List.of(targetUserId), RoomRealtimeEvents.Reason.KICKED));
         log.info("机器人 {} 在聊天室 {} 移除了成员 {}", botConfigId, roomId, targetUserId);
     }
 

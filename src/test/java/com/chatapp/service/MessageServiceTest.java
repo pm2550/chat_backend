@@ -363,7 +363,8 @@ class MessageServiceTest {
         when(messageRepository.findById(50L)).thenReturn(Optional.of(msg));
         when(chatRoomRepository.isMember(10L, 2L)).thenReturn(true);
 
-        messageService.markMessageAsRead(50L, 2L);
+        // 返回被读的消息，控制器据此推送已读回执。
+        assertSame(msg, messageService.markMessageAsRead(50L, 2L));
 
         verify(messageRepository).markAsRead(50L, 2L);
         verify(chatRoomRepository).markMessageReadForMember(10L, 2L, 50L);
@@ -378,7 +379,7 @@ class MessageServiceTest {
         when(messageRepository.findById(50L)).thenReturn(Optional.of(msg));
         when(chatRoomRepository.isMember(10L, 1L)).thenReturn(true);
 
-        messageService.markMessageAsRead(50L, 1L);
+        assertNull(messageService.markMessageAsRead(50L, 1L));
 
         verify(messageRepository, never()).markAsRead(anyLong(), anyLong());
     }

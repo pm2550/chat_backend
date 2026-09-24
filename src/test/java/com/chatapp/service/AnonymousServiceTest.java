@@ -15,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.LocalDate;
 import java.util.Optional;
@@ -37,6 +38,9 @@ class AnonymousServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private AnonymousService anonymousService;
@@ -170,6 +174,8 @@ class AnonymousServiceTest {
 
         assertTrue(testRoom.getAnonymousEnabled());
         verify(chatRoomRepository).save(testRoom);
+        // 其他成员的输入框要立刻出现/隐藏匿名开关。
+        verify(eventPublisher).publishEvent(new RoomRealtimeEvents.RoomUpdated(10L));
     }
 
     @Test

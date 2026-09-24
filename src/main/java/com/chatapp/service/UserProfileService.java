@@ -71,6 +71,7 @@ public class UserProfileService {
             try {
                 User.OnlineStatus status = User.OnlineStatus.valueOf(request.getOnlineStatus().toUpperCase());
                 user.setOnlineStatus(status);
+                user.setPresenceStatus(status);
             } catch (IllegalArgumentException e) {
                 throw new RuntimeException("无效的在线状态: " + request.getOnlineStatus());
             }
@@ -140,6 +141,8 @@ public class UserProfileService {
                 .orElseThrow(() -> new RuntimeException("用户不存在"));
 
         user.setOnlineStatus(status);
+        // 记住用户的选择，下次登录按它恢复。
+        user.setPresenceStatus(status);
         if (status == User.OnlineStatus.OFFLINE) {
             user.setLastSeen(LocalDateTime.now());
         }

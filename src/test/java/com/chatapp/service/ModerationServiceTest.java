@@ -8,6 +8,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.access.AccessDeniedException;
 
 import java.util.Optional;
@@ -26,6 +27,7 @@ class ModerationServiceTest {
 
     @Mock private ChatRoomBotRepository chatRoomBotRepository;
     @Mock private ChatRoomRepository chatRoomRepository;
+    @Mock private ApplicationEventPublisher eventPublisher;
     @InjectMocks private ModerationService service;
 
     private static ChatRoomBot binding(ChatRoomBot.ModerationGrant grant, boolean active) {
@@ -101,6 +103,9 @@ class ModerationServiceTest {
         targetIsPlainMember();
         service.kickByBot(5L, 100L, 9L);
         verify(chatRoomRepository).removeMember(100L, 9L);
+        // 被机器人移出的人也要实时收到通知。
+        verify(eventPublisher).publishEvent(new RoomRealtimeEvents.MembersRemoved(
+                100L, java.util.List.of(9L), RoomRealtimeEvents.Reason.KICKED));
     }
 
     @Test

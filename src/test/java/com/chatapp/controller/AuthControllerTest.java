@@ -81,6 +81,28 @@ class AuthControllerTest {
     }
 
     @Test
+    void loginKeepsTheStatusTheUserChoseInsteadOfResettingToOnline() throws Exception {
+        UserDto.LoginRequest loginRequest = new UserDto.LoginRequest("testuser", "password123");
+        User authenticated = new User();
+        authenticated.setId(1L);
+        authenticated.setUsername("testuser");
+        authenticated.setPresenceStatus(User.OnlineStatus.BUSY);
+
+        when(userService.authenticate(any(UserDto.LoginRequest.class))).thenReturn(authenticated);
+        when(jwtUtils.generateAccessToken("testuser")).thenReturn("access-token-123");
+        when(jwtUtils.generateRefreshToken("testuser")).thenReturn("refresh-token-456");
+        when(userService.findByUsername("testuser")).thenReturn(testUser);
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(loginRequest)))
+                .andExpect(status().isOk());
+
+        verify(userService).updateOnlineStatus(eq(1L), eq(User.OnlineStatus.BUSY));
+        verify(userService, never()).updateOnlineStatus(eq(1L), eq(User.OnlineStatus.ONLINE));
+    }
+
+    @Test
     void refreshIssuesANewRefreshTokenSoTheSessionSlides() throws Exception {
         when(jwtUtils.validateJwtToken("old-refresh")).thenReturn(true);
         when(jwtUtils.getTokenId("old-refresh")).thenReturn("jti-1");

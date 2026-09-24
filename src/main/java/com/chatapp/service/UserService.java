@@ -199,6 +199,7 @@ public class UserService implements UserDetailsService {
         }
         if (request.getOnlineStatus() != null) {
             user.setOnlineStatus(request.getOnlineStatus());
+            user.setPresenceStatus(request.getOnlineStatus());
         }
 
         User savedUser = userRepository.save(user);

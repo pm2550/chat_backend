@@ -84,6 +84,15 @@ public class User {
     @Column(name = "online_status")
     private OnlineStatus onlineStatus = OnlineStatus.OFFLINE;
 
+    /**
+     * 用户在"我的"页面手动选的状态（在线/离开/忙碌/隐身）。和连接带来的在线/离线分开存：
+     * 登录、重新连接时按它恢复，而不是一律重置成在线。null 表示从没选过，按在线处理。
+     */
+    @JsonIgnore
+    @Enumerated(EnumType.STRING)
+    @Column(name = "presence_status")
+    private OnlineStatus presenceStatus;
+
     @Column(name = "last_seen")
     private LocalDateTime lastSeen;
 
@@ -124,6 +133,11 @@ public class User {
         public String getDescription() {
             return description;
         }
+    }
+
+    /** 连上线时应该对外显示的状态：用户选过就用选的，没选过就是在线。 */
+    public OnlineStatus chosenPresence() {
+        return presenceStatus != null ? presenceStatus : OnlineStatus.ONLINE;
     }
 
     /**

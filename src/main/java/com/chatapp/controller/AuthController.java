@@ -37,7 +37,8 @@ public class AuthController {
             String accessToken = jwtUtils.generateAccessToken(authenticated.getUsername());
             String refreshToken = jwtUtils.generateRefreshToken(authenticated.getUsername());
 
-            userService.updateOnlineStatus(authenticated.getId(), User.OnlineStatus.ONLINE);
+            // 恢复用户自己选的状态（离开/忙碌/隐身），不要每次登录都改回在线。
+            userService.updateOnlineStatus(authenticated.getId(), authenticated.chosenPresence());
             UserDto user = userService.findByUsername(authenticated.getUsername());
 
             UserDto.JwtResponse jwtResponse = new UserDto.JwtResponse(accessToken, refreshToken, user);

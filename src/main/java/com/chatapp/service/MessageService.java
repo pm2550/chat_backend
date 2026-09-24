@@ -370,8 +370,11 @@ public class MessageService {
 
     /**
      * 标记消息为已读
+     *
+     * @return 这次调用新记下已读时返回该消息（调用方据此推送已读回执）；
+     *         自己发的、或之前已经读过的返回 null
      */
-    public void markMessageAsRead(Long messageId, Long userId) {
+    public Message markMessageAsRead(Long messageId, Long userId) {
         Message message = messageRepository.findById(messageId)
                 .orElseThrow(() -> new RuntimeException("消息不存在"));
 
@@ -382,7 +385,7 @@ public class MessageService {
 
         // 不能标记自己的消息为已读
         if (message.getSender().getId().equals(userId)) {
-            return;
+            return null;
         }
 
         if (readReceiptRepository != null &&
@@ -395,10 +398,14 @@ public class MessageService {
             messageRepository.markAsRead(messageId, userId);
         } else if (readReceiptRepository == null) {
             messageRepository.markAsRead(messageId, userId);
+        } else {
+            // 已经读过：再减一次未读数就把别的未读消息也"吞"掉了。
+            return null;
         }
         chatRoomRepository.markMessageReadForMember(message.getChatRoom().getId(), userId, messageId);
         
         log.debug("用户 {} 标记消息 {} 为已读", userId, messageId);
+        return message;
     }
 
     /**
