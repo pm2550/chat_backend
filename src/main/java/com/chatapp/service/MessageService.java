@@ -17,6 +17,7 @@ import com.chatapp.repository.StickerRepository;
 import com.chatapp.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.hibernate.Hibernate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -557,7 +558,27 @@ public class MessageService {
     @Transactional(readOnly = true)
     public Page<Message> getStarredMessages(Long userId, Pageable pageable) {
         return messageStarRepository.findByUserIdOrderByCreatedAtDesc(userId, pageable)
-                .map(MessageStar::getMessage);
+                .map(star -> initializeForDto(star.getMessage()));
+    }
+
+    /**
+     * 收藏列表里的消息是经由 MessageStar 关联加载的，@提及集合和被回复消息不会随实体图一起取回；
+     * open-in-view 关闭后控制器转 DTO 时会抛 LazyInitializationException，所以在事务内先初始化。
+     */
+    private Message initializeForDto(Message message) {
+        if (message == null) {
+            return null;
+        }
+        Hibernate.initialize(message.getMentionedUserIds());
+        Message reply = message.getReplyToMessage();
+        if (reply != null) {
+            Hibernate.initialize(reply);
+            Hibernate.initialize(reply.getSender());
+            Hibernate.initialize(reply.getAnonymousIdentity());
+            Hibernate.initialize(reply.getBotConfig());
+            Hibernate.initialize(reply.getMentionedUserIds());
+        }
+        return message;
     }
 
     private void requireRoomAdminOrPrivateMember(Long roomId, Long userId) {

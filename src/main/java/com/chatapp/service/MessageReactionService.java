@@ -7,15 +7,18 @@ import com.chatapp.entity.User;
 import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.repository.MessageReactionRepository;
 import com.chatapp.repository.MessageRepository;
+import com.chatapp.repository.MessageStarRepository;
 import com.chatapp.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -25,6 +28,7 @@ public class MessageReactionService {
     private final MessageRepository messageRepository;
     private final UserRepository userRepository;
     private final ChatRoomRepository chatRoomRepository;
+    private final MessageStarRepository messageStarRepository;
 
     @Transactional
     public List<MessageDto.ReactionInfo> addReaction(Long messageId, Long userId, String emoji) {
@@ -96,8 +100,14 @@ public class MessageReactionService {
                     .computeIfAbsent(reaction.getEmoji(), ignored -> new ArrayList<>())
                     .add(reaction.getUser().getId());
         }
+        Set<Long> starredIds = currentUserId == null
+                ? Set.of()
+                : new HashSet<>(messageStarRepository.findStarredMessageIds(currentUserId, messageIds));
 
         for (MessageDto message : messages) {
+            if (currentUserId != null) {
+                message.setStarredByMe(starredIds.contains(message.getId()));
+            }
             Map<String, List<Long>> grouped = groupedByMessage.get(message.getId());
             if (grouped == null || grouped.isEmpty()) {
                 message.setReactions(List.of());
