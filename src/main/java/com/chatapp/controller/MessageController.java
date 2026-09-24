@@ -123,6 +123,7 @@ public class MessageController {
             @RequestParam(value = "messageType", required = false) Message.MessageType requestedMessageType,
             @RequestParam(value = "encryptedContent", required = false) String encryptedContent,
             @RequestParam(value = "encryptionVersion", required = false) Integer encryptionVersion,
+            @RequestParam(value = "clientMessageId", required = false) String clientMessageId,
             Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
@@ -175,7 +176,7 @@ public class MessageController {
             response.put("message", "文件消息发送成功");
             response.put("data", MessageDto.fromEntity(message, currentUser.getId()));
 
-            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            broadcastRestAttachment(message, currentUser.getId(), clientMessageId);
             auditLogService.record(
                     currentUser,
                     "FILE_SEND",
@@ -227,7 +228,7 @@ public class MessageController {
             response.put("message", "图片消息发送成功");
             response.put("data", MessageDto.fromEntity(message, currentUser.getId()));
 
-            rawWebSocketHandler.broadcastMessageExcept(message, currentUser.getId());
+            broadcastRestAttachment(message, currentUser.getId(), request.getClientMessageId());
             auditLogService.record(
                     currentUser,
                     "FILE_SEND",
@@ -241,6 +242,15 @@ public class MessageController {
         } catch (Exception e) {
             log.error("按地址发送图片失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /** REST 发的附件：带 clientMessageId 的新客户端连自己也推（换掉上传气泡），老客户端照旧不推给自己。 */
+    private void broadcastRestAttachment(Message message, Long senderId, String clientMessageId) {
+        if (clientMessageId == null || clientMessageId.isBlank()) {
+            rawWebSocketHandler.broadcastMessageExcept(message, senderId);
+        } else {
+            rawWebSocketHandler.broadcastMessageEchoingSender(message, clientMessageId);
         }
     }
 
@@ -769,11 +779,14 @@ public class MessageController {
     public static class SendFileFromUrlRequest {
         private Long chatRoomId;
         private String url;
+        private String clientMessageId;
 
         public Long getChatRoomId() { return chatRoomId; }
         public void setChatRoomId(Long chatRoomId) { this.chatRoomId = chatRoomId; }
         public String getUrl() { return url; }
         public void setUrl(String url) { this.url = url; }
+        public String getClientMessageId() { return clientMessageId; }
+        public void setClientMessageId(String clientMessageId) { this.clientMessageId = clientMessageId; }
     }
 
     public static class FetchRemoteImageRequest {
