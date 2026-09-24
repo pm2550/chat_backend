@@ -594,6 +594,22 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     }
 
     /**
+     * 走 REST 发的附件，客户端带了 clientMessageId：连发送者自己的各端也推，并带上它。
+     * 发送端据此把本地的上传气泡换成正式消息——慢网下 REST 响应迟迟不回（甚至丢了）时也不会误判失败。
+     * 不带 clientMessageId 的老客户端仍走 {@link #broadcastMessageExcept}。
+     */
+    public void broadcastMessageEchoingSender(Message saved, String clientMessageId) {
+        String normalized = clientMessageId == null ? null : clientMessageId.trim();
+        if (normalized == null || normalized.isEmpty()
+                || normalized.length() > MAX_CLIENT_MESSAGE_ID_LENGTH) {
+            Long senderId = saved.getSender() != null ? saved.getSender().getId() : null;
+            broadcastMessage(saved, senderId, MessageEvent.CREATED, null, true);
+            return;
+        }
+        broadcastMessage(saved, null, MessageEvent.CREATED, normalized, true);
+    }
+
+    /**
      * 新消息，但先不发离线通知——内容还没准备好（例如 AI 图片刚排队），
      * 等真正可看时再调 {@link #notifyOfflineMembers(Message)}。
      */

@@ -1,5 +1,6 @@
 package com.chatapp.integration;
 
+import com.chatapp.controller.MessageController;
 import com.chatapp.controller.PollController;
 import com.chatapp.dto.MessageDto;
 import com.chatapp.dto.PollDto;
@@ -40,6 +41,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.server.ServerHttpAsyncRequestControl;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.test.annotation.DirtiesContext;
@@ -86,7 +88,8 @@ import static org.mockito.Mockito.when;
                 "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.amqp.RabbitAutoConfiguration,org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration,org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration",
                 "spring.main.allow-circular-references=true",
                 "spring.main.allow-bean-definition-overriding=true",
-                "server.servlet.context-path="
+                "server.servlet.context-path=",
+                "file.storage.upload-dir=target/test-uploads/raw-websocket"
         }
 )
 @ActiveProfiles("test")
@@ -108,6 +111,7 @@ class RawWebSocketIntegrationTest {
     @Autowired private JwtHandshakeInterceptor jwtHandshakeInterceptor;
     @Autowired private MessageReactionService messageReactionService;
     @Autowired private PollController pollController;
+    @Autowired private MessageController messageController;
 
     @MockBean private TokenBlacklistService tokenBlacklistService;
     @MockBean private PushNotificationService pushNotificationService;
@@ -775,6 +779,50 @@ class RawWebSocketIntegrationTest {
         assertEquals("doc.pdf", received.path("message").path("fileName").asText());
         assertEquals("FILE", received.path("message").path("type").asText());
         assertTrue(aliceSession.messages.isEmpty(), "sender should not receive REST echo");
+    }
+
+    @Test
+    @DisplayName("REST file upload with clientMessageId echoes to the sender with that id")
+    void rest_file_upload_with_client_message_id_echoes_to_sender() throws Exception {
+        TestWebSocketSession aliceSession = connect(alice);
+        TestWebSocketSession bobSession = connect(bob);
+        drainStatus(aliceSession, bobSession);
+        Authentication aliceAuth = new UsernamePasswordAuthenticationToken(alice.getUsername(), null, List.of());
+
+        var response = messageController.sendFileMessage(
+                room.getId(),
+                new MockMultipartFile("file", "doc.pdf", "application/pdf", new byte[]{1, 2, 3}),
+                null, null, null,
+                "local-upload-1",
+                aliceAuth);
+        assertEquals(200, response.getStatusCode().value());
+
+        JsonNode echo = awaitMessage(aliceSession, "message");
+        assertNotNull(echo, "sender must get the echo to settle its upload bubble");
+        assertEquals("local-upload-1", echo.path("clientMessageId").asText());
+        assertEquals("doc.pdf", echo.path("message").path("fileName").asText());
+        JsonNode peer = awaitMessage(bobSession, "message");
+        assertNotNull(peer, "bob did not receive file broadcast");
+        assertEquals("doc.pdf", peer.path("message").path("fileName").asText());
+    }
+
+    @Test
+    @DisplayName("REST file upload without clientMessageId (old clients) still skips the sender")
+    void rest_file_upload_without_client_message_id_skips_sender() throws Exception {
+        TestWebSocketSession aliceSession = connect(alice);
+        TestWebSocketSession bobSession = connect(bob);
+        drainStatus(aliceSession, bobSession);
+        Authentication aliceAuth = new UsernamePasswordAuthenticationToken(alice.getUsername(), null, List.of());
+
+        messageController.sendFileMessage(
+                room.getId(),
+                new MockMultipartFile("file", "old.pdf", "application/pdf", new byte[]{1, 2, 3}),
+                null, null, null,
+                null,
+                aliceAuth);
+
+        assertNotNull(awaitMessage(bobSession, "message"), "bob did not receive file broadcast");
+        assertTrue(aliceSession.messages.isEmpty(), "old clients would show the echo twice");
     }
 
     @Test
