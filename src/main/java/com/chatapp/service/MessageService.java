@@ -65,6 +65,20 @@ public class MessageService {
     @Autowired(required = false)
     private UserPrivacyService userPrivacyService;
 
+    @Autowired(required = false)
+    private MessageReadStateService readStateService;
+
+    /**
+     * 一次已读推进了读者的已读位置多少：(previousLastReadMessageId, lastReadMessageId] 这段里
+     * 别人发的消息各多了一个读者。没推进时两者相等（或都为 null）。
+     */
+    public record ReadProgress(Long chatRoomId, Long previousLastReadMessageId, Long lastReadMessageId) {
+        public boolean advanced() {
+            return lastReadMessageId != null
+                    && (previousLastReadMessageId == null || lastReadMessageId > previousLastReadMessageId);
+        }
+    }
+
     /**
      * 发送消息
      */
@@ -430,12 +444,13 @@ public class MessageService {
     }
 
     /**
-     * 标记消息为已读
+     * 标记消息为已读（滚动到可见区域时逐条调用）。读到这一条也就推进了自己的已读位置，
+     * 已读数按已读位置算（见 {@link MessageReadStateService}），这里不再给消息累加计数。
      *
-     * @return 这次调用新记下已读时返回该消息（调用方据此推送已读回执）；
-     *         自己发的、或之前已经读过的返回 null
+     * @return 这次调用新记下已读时返回已读位置的变化（调用方据此推送已读回执）；
+     *         自己发的、或之前已经读过这一条的返回 null
      */
-    public Message markMessageAsRead(Long messageId, Long userId) {
+    public ReadProgress markMessageAsRead(Long messageId, Long userId) {
         Message message = messageRepository.findById(messageId)
                 .orElseThrow(() -> new RuntimeException("消息不存在"));
 
@@ -449,11 +464,12 @@ public class MessageService {
             return null;
         }
 
-        boolean sharesReceipts = sharesReadReceipts(userId);
+        Long chatRoomId = message.getChatRoom().getId();
+        Long previous = lockedLastReadMessageId(chatRoomId, userId);
         if (readReceiptRepository != null) {
-            // 回执行也是"这条我读过了"的唯一记录：已经读过就别再减一次未读数，
+            // 回执行也是"这条我读过了"的记录：已经读过就别再减一次未读数，
             // 否则会把别的未读消息也"吞"掉。关了已读回执的人同样要记，只是不对外公开
-            // （已读名单会过滤掉他们，消息的已读状态/已读数也不变）。
+            // （已读数和已读名单在读取时过滤掉他们）。回执行还记下了读到这条的时间。
             if (readReceiptRepository.findByMessageIdAndUserId(messageId, userId).isPresent()) {
                 return null;
             }
@@ -463,13 +479,21 @@ public class MessageService {
                     .orElseThrow(() -> new IllegalArgumentException("用户不存在")));
             readReceiptRepository.save(receipt);
         }
-        if (sharesReceipts) {
-            messageRepository.markAsRead(messageId, userId);
-        }
-        chatRoomRepository.markMessageReadForMember(message.getChatRoom().getId(), userId, messageId);
-        
+        chatRoomRepository.markMessageReadForMember(chatRoomId, userId, messageId);
+
         log.debug("用户 {} 标记消息 {} 为已读", userId, messageId);
-        return message;
+        Long current = previous == null || previous < messageId ? messageId : previous;
+        return new ReadProgress(chatRoomId, previous, current);
+    }
+
+    /**
+     * 锁住成员行再读已读位置：同一个人几台设备/几个请求同时标已读时，每次推进的区间互不重叠，
+     * 推送出去的"从哪读到哪"才不会让客户端重复加已读数。
+     */
+    private Long lockedLastReadMessageId(Long chatRoomId, Long userId) {
+        return chatRoomRepository.findMemberForUpdate(chatRoomId, userId)
+                .map(ChatRoomMember::getLastReadMessageId)
+                .orElse(null);
     }
 
     /**
@@ -791,42 +815,31 @@ public class MessageService {
             throw new IllegalArgumentException("您无权限查看此消息");
         }
         // 关了已读回执的人也看不到别人的已读（互惠）。
-        if (readReceiptRepository == null || !sharesReadReceipts(requesterId)) {
+        if (readStateService == null || !sharesReadReceipts(requesterId)) {
             return List.of();
         }
-        var receipts = readReceiptRepository.findByMessageIdOrderByReadAtAsc(messageId);
-        // 之后才关掉回执的人，旧的已读记录也不再展示。
-        java.util.Set<Long> hidden = userPrivacyService == null
-                ? java.util.Set.of()
-                : userPrivacyService.usersWithReadReceiptsDisabled(
-                        receipts.stream().map(receipt -> receipt.getUser().getId()).toList());
-        return receipts.stream()
-                .filter(receipt -> !hidden.contains(receipt.getUser().getId()))
-                .map(com.chatapp.dto.ReadReceiptDto::fromEntity)
-                .toList();
+        // 与消息上的已读数同一个定义、同一批人（关了回执的读者不列出）。
+        return readStateService.readers(message);
     }
 
     /**
-     * 标记聊天室所有消息为已读
+     * 标记聊天室所有消息为已读：未读清零，已读位置推进到最后一条可见消息（只进不退）。
+     * 关了"已读回执"的人同样推进——别人看到的已读数在读取时把他过滤掉。
      */
-    public Message markAllMessagesAsRead(Long chatRoomId, Long userId) {
+    public ReadProgress markAllMessagesAsRead(Long chatRoomId, Long userId) {
         // 验证用户权限
         if (!chatRoomRepository.isMember(chatRoomId, userId)) {
             throw new IllegalArgumentException("您不是该聊天室的成员");
         }
 
-        // 关了"已读回执"只清自己的未读，不把消息标成对方可见的"已读"。
-        if (sharesReadReceipts(userId)) {
-            messageRepository.markAllAsReadInChatRoom(chatRoomId, userId);
-        }
+        Long previous = lockedLastReadMessageId(chatRoomId, userId);
         Message lastMessage = findVisibleLastMessage(chatRoomId, userId);
-        chatRoomRepository.markRoomReadForMember(
-                chatRoomId,
-                userId,
-                lastMessage != null ? lastMessage.getId() : null);
-        
+        Long target = lastMessage != null ? lastMessage.getId() : null;
+        chatRoomRepository.markRoomReadForMember(chatRoomId, userId, target);
+
         log.info("用户 {} 标记聊天室 {} 所有消息为已读", userId, chatRoomId);
-        return lastMessage;
+        Long current = target != null && (previous == null || target > previous) ? target : previous;
+        return new ReadProgress(chatRoomId, previous, current);
     }
 
     /**

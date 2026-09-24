@@ -97,19 +97,9 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
         return findRecentMessagesList(chatRoomId, PageRequest.of(0, limit));
     }
 
-    @Modifying
-    @Query("UPDATE Message m SET m.readCount = m.readCount + 1, m.messageStatus = 'READ' WHERE m.id = :messageId AND m.sender.id <> :userId")
-    void markAsRead(@Param("messageId") Long messageId, @Param("userId") Long userId);
-
     @Query("SELECT COALESCE(SUM(crm.unreadCount), 0) FROM ChatRoomMember crm WHERE crm.user.id = :userId " +
            "AND COALESCE(crm.isBlocked, false) = false")
     Long countTotalUnreadMessages(@Param("userId") Long userId);
-
-    @Modifying
-    @Query("UPDATE Message m SET m.readCount = m.readCount + 1, m.messageStatus = 'READ' " +
-           "WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false AND m.messageStatus <> 'READ' " +
-           "AND m.sender.id <> :userId")
-    void markAllAsReadInChatRoom(@Param("chatRoomId") Long chatRoomId, @Param("userId") Long userId);
 
     @Query("SELECT COUNT(m) FROM Message m WHERE m.chatRoom.id = :chatRoomId AND m.isDeleted = false")
     Long countByChatRoomId(@Param("chatRoomId") Long chatRoomId);

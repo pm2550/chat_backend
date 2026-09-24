@@ -6,11 +6,14 @@ import com.chatapp.entity.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import jakarta.persistence.LockModeType;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -158,7 +161,10 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
                                  @Param("messageId") Long messageId);
 
     @Modifying
-    @Query("UPDATE ChatRoomMember crm SET crm.unreadCount = 0, crm.lastReadMessageId = :lastReadMessageId " +
+    @Query("UPDATE ChatRoomMember crm SET crm.unreadCount = 0, " +
+           // 已读位置只前进不后退：它同时决定别人消息上的已读数，最新一条被撤回时不能把已经读过的算成没读。
+           "crm.lastReadMessageId = CASE WHEN crm.lastReadMessageId IS NULL OR crm.lastReadMessageId < :lastReadMessageId " +
+           "THEN :lastReadMessageId ELSE crm.lastReadMessageId END " +
            "WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
     int markRoomReadForMember(@Param("roomId") Long roomId,
                               @Param("userId") Long userId,
@@ -202,6 +208,22 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
 
     @Query("SELECT crm FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
     Optional<ChatRoomMember> findMember(@Param("roomId") Long roomId, @Param("userId") Long userId);
+
+    /** 推进已读位置前锁住这一行：读出"之前读到哪"和写入新位置必须是一步，否则并发的两次已读会各自推送重叠的区间。 */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT crm FROM ChatRoomMember crm WHERE crm.chatRoom.id = :roomId AND crm.user.id = :userId")
+    Optional<ChatRoomMember> findMemberForUpdate(@Param("roomId") Long roomId, @Param("userId") Long userId);
+
+    interface MemberReadMarkProjection {
+        Long getRoomId();
+        Long getUserId();
+        Long getLastReadMessageId();
+    }
+
+    /** 这些房间里每个成员读到了哪条（没读过的不返回）。一页消息的已读数全靠它算，一次查完。 */
+    @Query("SELECT crm.chatRoom.id AS roomId, crm.user.id AS userId, crm.lastReadMessageId AS lastReadMessageId " +
+           "FROM ChatRoomMember crm WHERE crm.chatRoom.id IN :roomIds AND crm.lastReadMessageId IS NOT NULL")
+    List<MemberReadMarkProjection> findReadMarksByRoomIds(@Param("roomIds") Collection<Long> roomIds);
 
     // Item 5: a user muting their OWN notifications writes only is_notification_muted.
     // It must NOT touch is_muted/is_bot_muted (that was the send-block bug).

@@ -10,6 +10,7 @@ import com.chatapp.service.MessageService;
 import com.chatapp.service.PushNotificationService;
 import com.chatapp.service.RoomTypingAggregator;
 import com.chatapp.service.MessageReactionService;
+import com.chatapp.service.MessageReadStateService;
 import com.chatapp.service.UserPresenceService;
 import com.chatapp.service.UserPrivacyService;
 import com.chatapp.service.tool.PendingClientCallRegistry;
@@ -63,7 +64,8 @@ class RawWebSocketHandlerPrivacyTest {
                 new PendingClientCallRegistry(),
                 mock(MessageReactionService.class),
                 userPrivacyService,
-                userPresenceService);
+                userPresenceService,
+                mock(MessageReadStateService.class));
         when(chatRoomRepository.findMember(anyLong(), anyLong())).thenReturn(Optional.empty());
         when(userPresenceService.markConnected(anyLong())).thenReturn(User.OnlineStatus.ONLINE);
         when(userPresenceService.chosenPresence(anyLong())).thenReturn(User.OnlineStatus.ONLINE);
@@ -100,7 +102,7 @@ class RawWebSocketHandlerPrivacyTest {
         when(chatRoomRepository.findMemberUserIdsByRoomId(5L)).thenReturn(List.of(1L, 2L));
         when(userPrivacyService.readReceiptsDisabled(1L)).thenReturn(true);
 
-        handler.broadcastReadReceipt(5L, 1L, 99L);
+        handler.broadcastReadReceipt(1L, new MessageService.ReadProgress(5L, null, 99L));
 
         assertTrue(received.get(2L).isEmpty());
     }
@@ -113,7 +115,7 @@ class RawWebSocketHandlerPrivacyTest {
         when(chatRoomRepository.findMemberUserIdsByRoomId(5L)).thenReturn(List.of(1L, 2L, 3L));
         when(userPrivacyService.usersWithReadReceiptsDisabled(List.of(1L, 2L, 3L))).thenReturn(Set.of(3L));
 
-        handler.broadcastReadReceipt(5L, 1L, 99L);
+        handler.broadcastReadReceipt(1L, new MessageService.ReadProgress(5L, null, 99L));
 
         assertEquals(1, received.get(2L).size());
         assertTrue(received.get(2L).get(0).contains("\"read_receipt\""));

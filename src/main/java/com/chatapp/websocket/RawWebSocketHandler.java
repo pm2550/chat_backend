@@ -10,6 +10,7 @@ import com.chatapp.repository.ChatRoomRepository;
 import com.chatapp.service.BotService;
 import com.chatapp.service.BotReplyDeliveryService;
 import com.chatapp.service.MessageReactionService;
+import com.chatapp.service.MessageReadStateService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.PushNotificationService;
 import com.chatapp.service.RoomTypingAggregator;
@@ -86,6 +87,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
     private final MessageReactionService messageReactionService;
     private final UserPrivacyService userPrivacyService;
     private final UserPresenceService userPresenceService;
+    private final MessageReadStateService messageReadStateService;
 
     /** 客户端自带的消息临时 id 最长多少字符，超出的不回显。 */
     private static final int MAX_CLIENT_MESSAGE_ID_LENGTH = 64;
@@ -419,11 +421,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (chatRoomId == null) {
             return;
         }
-        Message lastMessage = messageService.markAllMessagesAsRead(chatRoomId, user.getId());
-        broadcastReadReceipt(
-                chatRoomId,
-                user.getId(),
-                lastMessage != null ? lastMessage.getId() : null);
+        broadcastReadReceipt(user.getId(), messageService.markAllMessagesAsRead(chatRoomId, user.getId()));
     }
 
     private void handleCallSignal(User user, JsonNode root) {
@@ -616,27 +614,44 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         pushOfflineMessageNotification(message);
     }
 
-    public void broadcastReadReceipt(Long chatRoomId, Long userId, Long lastReadMessageId) {
-        ObjectNode envelope = objectMapper.createObjectNode();
-        envelope.put("type", "read_receipt");
-        envelope.put("chatRoomId", chatRoomId);
-        envelope.put("userId", userId);
-        if (lastReadMessageId != null) {
-            envelope.put("lastReadMessageId", lastReadMessageId);
-        }
-        sendReadStateToOwnSessions(chatRoomId, userId, envelope);
-        sendReadReceiptToOthers(chatRoomId, userId, envelope);
+    /**
+     * 整房间已读。已读数按"读到哪条"算，所以回执带上这次推进的区间：
+     * (previousLastReadMessageId, lastReadMessageId] 之间别人发的消息各多一个读者，客户端照此加一，
+     * 和刷新后服务器算出来的一致；没推进就不通知别人（本人其他设备照样同步未读数）。
+     */
+    public void broadcastReadReceipt(Long userId, MessageService.ReadProgress progress) {
+        broadcastReadProgress(userId, null, progress);
     }
 
-    /** 单条消息被读（滚动到可见区域时标记）：其他成员据此给这一条加已读数。 */
-    public void broadcastMessageRead(Long chatRoomId, Long userId, Long messageId) {
+    /** 逐条已读（滚动到可见区域时标记）。messageId 只为老客户端保留，新客户端按区间处理。 */
+    public void broadcastMessageRead(Long userId, Long messageId, MessageService.ReadProgress progress) {
+        broadcastReadProgress(userId, messageId, progress);
+    }
+
+    private void broadcastReadProgress(Long userId, Long messageId, MessageService.ReadProgress progress) {
+        if (progress == null || progress.chatRoomId() == null) {
+            return;
+        }
+        Long chatRoomId = progress.chatRoomId();
         ObjectNode envelope = objectMapper.createObjectNode();
         envelope.put("type", "read_receipt");
         envelope.put("chatRoomId", chatRoomId);
         envelope.put("userId", userId);
-        envelope.put("messageId", messageId);
+        if (messageId != null) {
+            envelope.put("messageId", messageId);
+        }
+        if (progress.lastReadMessageId() != null) {
+            envelope.put("lastReadMessageId", progress.lastReadMessageId());
+        }
+        if (progress.previousLastReadMessageId() != null) {
+            envelope.put("previousLastReadMessageId", progress.previousLastReadMessageId());
+        } else {
+            envelope.putNull("previousLastReadMessageId");
+        }
         sendReadStateToOwnSessions(chatRoomId, userId, envelope);
-        sendReadReceiptToOthers(chatRoomId, userId, envelope);
+        if (progress.advanced()) {
+            sendReadReceiptToOthers(chatRoomId, userId, envelope);
+        }
     }
 
     /**
@@ -865,7 +880,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (clientMessageId != null) {
             envelope.put("clientMessageId", clientMessageId);
         }
-        envelope.set("message", toMessageJson(saved));
+        envelope.set("message", toMessageJson(saved, event == MessageEvent.UPDATED));
         if (exceptUserId == null) {
             broadcastToRoom(saved.getChatRoom().getId(), envelope);
         } else {
@@ -1089,12 +1104,19 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
      * 客户端按 id 整条替换后这些就"消失"了）。只额外补上老客户端读的几个别名。
      * 表情回应的 currentUserReacted 是按查看者算的，广播里统一为 false，客户端用 userIds 判断。
      */
-    ObjectNode toMessageJson(Message m) {
+    ObjectNode toMessageJson(Message m, boolean withReadState) {
         MessageDto dto = MessageDto.fromEntity(m);
         messageReactionService.attachAggregates(List.of(dto), null);
+        if (withReadState) {
+            // 已有消息被编辑/撤回：客户端会整条替换，已读数要和列表接口同一算法，否则会被冲回 0。
+            messageReadStateService.applyReadState(List.of(m), List.of(dto));
+            if (m.getSender() != null) {
+                userPrivacyService.maskReadStateForViewer(List.of(dto), m.getSender().getId());
+            }
+        }
         ObjectNode json = objectMapper.valueToTree(dto);
         json.put("type", m.getMessageType() != null ? m.getMessageType().name() : "TEXT");
-        json.put("status", m.getMessageStatus() != null ? m.getMessageStatus().name() : "SENT");
+        json.put("status", dto.getMessageStatus() != null ? dto.getMessageStatus().name() : "SENT");
         if (json.hasNonNull("createdAt")) {
             json.set("timestamp", json.get("createdAt"));
         }

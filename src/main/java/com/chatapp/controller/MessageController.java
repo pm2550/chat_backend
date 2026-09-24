@@ -7,6 +7,7 @@ import com.chatapp.service.AuditLogService;
 import com.chatapp.service.BotService;
 import com.chatapp.service.BotReplyDeliveryService;
 import com.chatapp.service.FileStorageService;
+import com.chatapp.service.MessageReadStateService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.MessageReactionService;
 import com.chatapp.service.RemoteImageFetchService;
@@ -52,6 +53,7 @@ public class MessageController {
     private final RemoteImageFetchService remoteImageFetchService;
     private final VoiceTranscoder voiceTranscoder;
     private final UserPrivacyService userPrivacyService;
+    private final MessageReadStateService messageReadStateService;
 
     /**
      * 发送文本消息
@@ -398,12 +400,9 @@ public class MessageController {
     public ResponseEntity<?> markMessageAsRead(@PathVariable Long messageId, Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
-            Message newlyRead = messageService.markMessageAsRead(messageId, currentUser.getId());
-            if (newlyRead != null) {
-                rawWebSocketHandler.broadcastMessageRead(
-                        newlyRead.getChatRoom().getId(),
-                        currentUser.getId(),
-                        messageId);
+            MessageService.ReadProgress progress = messageService.markMessageAsRead(messageId, currentUser.getId());
+            if (progress != null) {
+                rawWebSocketHandler.broadcastMessageRead(currentUser.getId(), messageId, progress);
             }
 
             return ResponseEntity.ok(Map.of("message", "消息已标记为已读"));
@@ -434,11 +433,8 @@ public class MessageController {
     public ResponseEntity<?> markAllMessagesAsRead(@PathVariable Long chatRoomId, Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
-            Message lastMessage = messageService.markAllMessagesAsRead(chatRoomId, currentUser.getId());
-            rawWebSocketHandler.broadcastReadReceipt(
-                    chatRoomId,
-                    currentUser.getId(),
-                    lastMessage != null ? lastMessage.getId() : null);
+            MessageService.ReadProgress progress = messageService.markAllMessagesAsRead(chatRoomId, currentUser.getId());
+            rawWebSocketHandler.broadcastReadReceipt(currentUser.getId(), progress);
             auditLogService.record(
                     currentUser,
                     "MESSAGE_READ_ALL",
@@ -522,7 +518,7 @@ public class MessageController {
                     null);
             return ResponseEntity.ok(Map.of(
                     "message", "消息已编辑",
-                    "data", MessageDto.fromEntity(message)
+                    "data", toMessageDto(message, currentUser.getId())
             ));
         } catch (Exception e) {
             log.error("编辑消息失败: {}", e.getMessage());
@@ -566,7 +562,7 @@ public class MessageController {
                     message.getChatRoom().getId(),
                     "star_added",
                     Map.of("messageId", messageId, "userId", currentUser.getId()));
-            MessageDto data = MessageDto.fromEntity(message);
+            MessageDto data = toMessageDto(message, currentUser.getId());
             data.setStarredByMe(true);
             return ResponseEntity.ok(Map.of(
                     "message", "消息已收藏",
@@ -588,7 +584,7 @@ public class MessageController {
                     message.getChatRoom().getId(),
                     "star_removed",
                     Map.of("messageId", messageId, "userId", currentUser.getId()));
-            MessageDto data = MessageDto.fromEntity(message);
+            MessageDto data = toMessageDto(message, currentUser.getId());
             data.setStarredByMe(false);
             return ResponseEntity.ok(Map.of(
                     "message", "消息已取消收藏",
@@ -879,9 +875,15 @@ public class MessageController {
     }
 
     private List<MessageDto> toMessageDtos(List<Message> messages, Long currentUserId) {
+        List<MessageDto> dtos = messageReadStateService.applyReadState(messages, toMessageDtos(messages));
         return userPrivacyService.maskReadStateForViewer(
-                messageReactionService.attachAggregates(toMessageDtos(messages), currentUserId),
+                messageReactionService.attachAggregates(dtos, currentUserId),
                 currentUserId);
+    }
+
+    /** 单条消息的回包（编辑、收藏）：已读数与列表同一算法，客户端拿它替换本地那条时不会丢掉已读状态。 */
+    private MessageDto toMessageDto(Message message, Long currentUserId) {
+        return toMessageDtos(List.of(message), currentUserId).get(0);
     }
 
     private void processBotsAndBroadcast(Message message, Long senderId) {
