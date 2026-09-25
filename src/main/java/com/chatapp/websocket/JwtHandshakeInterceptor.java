@@ -63,6 +63,11 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
         if ("background".equals(queryParam(request, "mode"))) {
             attributes.put(RawWebSocketHandler.ATTR_BACKGROUND, Boolean.TRUE);
         }
+        // Android 客户端报上自己的 CPU 架构（?abi=arm64-v8a），版本更新推送按它给对应的分包。
+        String abi = queryParam(request, "abi");
+        if (abi != null && !abi.isBlank()) {
+            attributes.put(RawWebSocketHandler.ATTR_CLIENT_ABI, abi.trim());
+        }
         return true;
     }
 

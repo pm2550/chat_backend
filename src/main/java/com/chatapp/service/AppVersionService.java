@@ -6,6 +6,7 @@ import com.chatapp.entity.DeviceToken;
 import com.chatapp.entity.User;
 import com.chatapp.repository.AppVersionRepository;
 import com.chatapp.repository.UserRepository;
+import com.chatapp.util.AndroidAbi;
 import com.chatapp.websocket.RawWebSocketHandler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +24,7 @@ import java.nio.file.StandardCopyOption;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -44,11 +46,25 @@ public class AppVersionService {
      * Check if an update is available for the given platform.
      */
     public AppVersionDto.CheckResponse checkVersion(DeviceToken.Platform platform, int currentVersionCode) {
-        Optional<AppVersion> latest = versionRepository
-                .findFirstByPlatformAndIsActiveTrueOrderByVersionCodeDesc(platform);
+        return checkVersion(platform, currentVersionCode, null);
+    }
+
+    /**
+     * Check if an update is available for the given platform (and, on Android, CPU architecture).
+     *
+     * <p>Android 按 ABI 拆包后，同一版本号有 arm64-v8a、armeabi-v7a 两个 APK。客户端带上
+     * {@code abi} 就给对应的包；旧客户端（≤1.1.51）不带，按 {@link AndroidAbi#LEGACY_DEFAULT}
+     * 给 64 位包。拆包前的整包（abi 为空串）哪个架构都能装，一并参与比较。
+     *
+     * @throws IllegalArgumentException abi 不是已发布的架构
+     */
+    public AppVersionDto.CheckResponse checkVersion(DeviceToken.Platform platform,
+                                                    int currentVersionCode,
+                                                    String abi) {
+        Optional<AppVersion> latest = findLatest(platform, abi);
 
         if (latest.isEmpty() || latest.get().getVersionCode() <= currentVersionCode) {
-            return new AppVersionDto.CheckResponse(false, false, null, null, null, null, null, null);
+            return new AppVersionDto.CheckResponse(false, false, null, null, null, null, null, null, null);
         }
 
         AppVersion v = latest.get();
@@ -60,8 +76,28 @@ public class AppVersionService {
                 v.getReleaseNotes(),
                 v.getDownloadUrl(),
                 v.getFileSize(),
-                v.getSha256()
+                v.getSha256(),
+                AndroidAbi.toApi(v.getAbi())
         );
+    }
+
+    private Optional<AppVersion> findLatest(DeviceToken.Platform platform, String abi) {
+        if (platform != DeviceToken.Platform.ANDROID) {
+            // 其他平台不分架构，传了 abi 也忽略。
+            return versionRepository.findByPlatformAndAbiInAndIsActiveTrueOrderByVersionCodeDesc(
+                    platform, List.of(AndroidAbi.UNIVERSAL)).stream().findFirst();
+        }
+        String wanted = AndroidAbi.normalize(abi);
+        if (wanted.isEmpty()) {
+            wanted = AndroidAbi.LEGACY_DEFAULT;
+        }
+        final String exact = wanted;
+        // 同一版本号既有整包又有分包时优先分包（更小）。
+        return versionRepository.findByPlatformAndAbiInAndIsActiveTrueOrderByVersionCodeDesc(
+                        platform, List.of(exact, AndroidAbi.UNIVERSAL))
+                .stream()
+                .min(Comparator.comparing(AppVersion::getVersionCode, Comparator.reverseOrder())
+                        .thenComparing(v -> exact.equals(v.getAbi()) ? 0 : 1));
     }
 
     /**
@@ -92,10 +128,16 @@ public class AppVersionService {
     private AppVersionDto publishVersionInternal(AppVersionDto.PublishRequest request,
                                                 MultipartFile artifact,
                                                 User publisher) throws IOException {
+        String abi = AndroidAbi.normalize(request.getAbi());
+        if (!abi.isEmpty() && request.getPlatform() != DeviceToken.Platform.ANDROID) {
+            throw new IllegalArgumentException("只有 Android 安装包区分 CPU 架构");
+        }
+        // 同平台 + 版本号 + 架构是一个发布：CI 重跑同一版本就是覆盖，不会插出重复行。
         AppVersion version = versionRepository
-                .findByPlatformAndVersionCode(request.getPlatform(), request.getVersionCode())
+                .findByPlatformAndVersionCodeAndAbi(request.getPlatform(), request.getVersionCode(), abi)
                 .orElseGet(AppVersion::new);
         version.setPlatform(request.getPlatform());
+        version.setAbi(abi);
         version.setVersionName(request.getVersionName());
         version.setVersionCode(request.getVersionCode());
         version.setForceUpdate(Boolean.TRUE.equals(request.getForceUpdate()));
@@ -110,7 +152,8 @@ public class AppVersionService {
 
             String filename = artifact.getOriginalFilename();
             if (filename == null || filename.isBlank()) {
-                filename = "app-" + request.getVersionName() + "-" + request.getPlatform().name().toLowerCase();
+                filename = "app-" + request.getVersionName() + "-" + request.getPlatform().name().toLowerCase()
+                        + (abi.isEmpty() ? "" : "-" + abi);
             }
             Path target = dir.resolve(filename);
             MessageDigest digest = sha256Digest();
@@ -124,10 +167,12 @@ public class AppVersionService {
             version.setDownloadUrl("/api/v1/app/download/" + platformDir + "/" + filename);
         }
 
-        // Deactivate older versions for this platform
+        // Deactivate older versions for this platform and architecture. 发布 64 位包不能把
+        // 32 位包下架（反之亦然）；拆包前的整包也保留，32 位包还没发上来时 32 位手机仍能从它更新。
         versionRepository.findByPlatformOrderByVersionCodeDesc(request.getPlatform())
                 .stream()
                 .filter(v -> !v.equals(version))
+                .filter(v -> abi.equals(v.getAbi()))
                 .filter(v -> Boolean.TRUE.equals(v.getIsActive()))
                 .forEach(v -> {
                     v.setIsActive(false);
@@ -136,8 +181,9 @@ public class AppVersionService {
 
         AppVersion savedVersion = versionRepository.save(version);
         String publisherName = publisher != null ? publisher.getUsername() : "ci";
-        log.info("发布版本: {} {} (code={}) by {}",
-                savedVersion.getPlatform(), savedVersion.getVersionName(), savedVersion.getVersionCode(), publisherName);
+        log.info("发布版本: {} {} (code={}, abi={}) by {}",
+                savedVersion.getPlatform(), savedVersion.getVersionName(), savedVersion.getVersionCode(),
+                savedVersion.getAbi().isEmpty() ? "universal" : savedVersion.getAbi(), publisherName);
 
         try {
             webSocketHandler.broadcastAppUpdate(savedVersion);
@@ -173,6 +219,7 @@ public class AppVersionService {
         AppVersionDto dto = new AppVersionDto();
         dto.setId(v.getId());
         dto.setPlatform(v.getPlatform() != null ? v.getPlatform().name() : null);
+        dto.setAbi(AndroidAbi.toApi(v.getAbi()));
         dto.setVersionName(v.getVersionName());
         dto.setVersionCode(v.getVersionCode());
         dto.setForceUpdate(v.getForceUpdate());

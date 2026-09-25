@@ -854,6 +854,52 @@ class RawWebSocketIntegrationTest {
     }
 
     @Test
+    @DisplayName("Android split APK updates are pushed only to connections of the matching ABI")
+    void app_version_publish_per_abi_pushes_matching_connections_only() throws Exception {
+        TestWebSocketSession legacy = connect(alice);          // ≤1.1.51 / web: no abi reported
+        TestWebSocketSession arm64 = connect(alice, "arm64-v8a");
+        TestWebSocketSession v7a = connect(bob, "armeabi-v7a");
+        drainStatus(legacy, arm64, v7a);
+
+        int versionCode = 21000 + (int) (System.nanoTime() % 1000);
+        appVersionService.publishVersion(new AppVersionDto.PublishRequest(
+                DeviceToken.Platform.ANDROID, "1.2.0-split", versionCode, false, "split", "arm64-v8a"),
+                null, alice.getId());
+        appVersionService.publishVersion(new AppVersionDto.PublishRequest(
+                DeviceToken.Platform.ANDROID, "1.2.0-split", versionCode, false, "split", "armeabi-v7a"),
+                null, alice.getId());
+
+        List<JsonNode> legacyUpdates = drainAppUpdates(legacy);
+        List<JsonNode> arm64Updates = drainAppUpdates(arm64);
+        List<JsonNode> v7aUpdates = drainAppUpdates(v7a);
+
+        // 旧客户端不报架构：只收 64 位包（和 GET /app/version 不带 abi 的默认一致），不会弹两次。
+        assertEquals(1, legacyUpdates.size(), "legacy client must get exactly one (arm64) push");
+        assertEquals("arm64-v8a", legacyUpdates.get(0).path("abi").asText());
+        assertEquals(versionCode, legacyUpdates.get(0).path("versionCode").asInt());
+        assertEquals(1, arm64Updates.size());
+        assertEquals("arm64-v8a", arm64Updates.get(0).path("abi").asText());
+        // 32 位手机绝不能收到 64 位包（装不上）。
+        assertEquals(1, v7aUpdates.size(), "32-bit client must get only its own push");
+        assertEquals("armeabi-v7a", v7aUpdates.get(0).path("abi").asText());
+    }
+
+    @Test
+    @DisplayName("Handshake records the client's Android ABI for update pushes")
+    void handshake_records_client_abi() {
+        Map<String, Object> attrs = new HashMap<>();
+        boolean accepted = jwtHandshakeInterceptor.beforeHandshake(
+                request("ws://localhost/api/ws?token=" + aliceToken + "&abi=armeabi-v7a"),
+                null,
+                rawWebSocketHandler,
+                attrs
+        );
+
+        assertTrue(accepted);
+        assertEquals("armeabi-v7a", attrs.get(RawWebSocketHandler.ATTR_CLIENT_ABI));
+    }
+
+    @Test
     @DisplayName("WebSocket reply is persisted and delivered to everyone with the quoted message")
     void ws_reply_persisted_and_broadcast_with_quote() throws Exception {
         Message original = messageService.sendMessage(bob.getId(), room.getId(), "original words", Message.MessageType.TEXT);
@@ -1006,8 +1052,15 @@ class RawWebSocketIntegrationTest {
     }
 
     private TestWebSocketSession connect(User user) {
+        return connect(user, null);
+    }
+
+    private TestWebSocketSession connect(User user, String abi) {
         TestWebSocketSession session = new TestWebSocketSession();
         session.getAttributes().put(RawWebSocketHandler.ATTR_USER, user);
+        if (abi != null) {
+            session.getAttributes().put(RawWebSocketHandler.ATTR_CLIENT_ABI, abi);
+        }
         rawWebSocketHandler.afterConnectionEstablished(session);
         openSessions.add(session);
         return session;
@@ -1040,6 +1093,19 @@ class RawWebSocketIntegrationTest {
                 if (msg == null) break;
             }
         }
+    }
+
+    /** 推送是同步发出的：直接把队列里已有的 app_update_available 全取出来。 */
+    private List<JsonNode> drainAppUpdates(TestWebSocketSession session) throws Exception {
+        List<JsonNode> updates = new ArrayList<>();
+        String msg;
+        while ((msg = session.messages.poll()) != null) {
+            JsonNode node = objectMapper.readTree(msg);
+            if ("app_update_available".equals(node.path("type").asText())) {
+                updates.add(node);
+            }
+        }
+        return updates;
     }
 
     private JsonNode awaitMessage(TestWebSocketSession session, String expectedType) throws Exception {

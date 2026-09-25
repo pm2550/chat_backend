@@ -18,6 +18,7 @@ import com.chatapp.service.RoomTypingAggregator;
 import com.chatapp.service.UserPresenceService;
 import com.chatapp.service.UserPrivacyService;
 import com.chatapp.service.tool.PendingClientCallRegistry;
+import com.chatapp.util.AndroidAbi;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -35,6 +36,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -68,6 +70,8 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
 
     public static final String ATTR_USER = "user";
     public static final String ATTR_BACKGROUND = "pmchat.background";
+    /** 握手时客户端报的 Android ABI（?abi=），app_update_available 按它只推对应架构的包。 */
+    public static final String ATTR_CLIENT_ABI = "pmchat.abi";
     private static final String ATTR_LAST_INBOUND_AT = "pmchat.lastInboundAt";
     /**
      * 客户端每 30 秒 ping 一次；超过 75 秒（连丢两次）没收到任何消息就当连接已断。
@@ -767,9 +771,32 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
         if (version.getSha256() != null) {
             envelope.put("sha256", version.getSha256());
         }
+        String abi = version.getAbi() == null ? AndroidAbi.UNIVERSAL : version.getAbi();
+        if (!abi.isEmpty()) {
+            envelope.put("abi", abi);
+        }
 
         userSessions.forEach((userId, sessions) ->
-                sessions.forEach(session -> sendJson(session, envelope)));
+                sessions.stream()
+                        .filter(session -> wantsAppUpdateForAbi(session, abi))
+                        .forEach(session -> sendJson(session, envelope)));
+    }
+
+    /**
+     * Android 按架构拆包后，每个 ABI 的包单独发布、单独推送：只推给报了同一 ABI 的连接。
+     * 没报 ABI 的连接（≤1.1.51 的旧客户端，以及网页/桌面端——它们按 platform 自己过滤）
+     * 只收 64 位包，和 GET /app/version 不带 abi 时的默认一致。整包（abi 为空）推给所有人。
+     */
+    private static boolean wantsAppUpdateForAbi(WebSocketSession session, String abi) {
+        if (abi.isEmpty()) {
+            return true;
+        }
+        Object reported = session.getAttributes().get(ATTR_CLIENT_ABI);
+        String sessionAbi = reported == null ? "" : reported.toString().trim().toLowerCase(Locale.ROOT);
+        if (sessionAbi.isEmpty()) {
+            return AndroidAbi.LEGACY_DEFAULT.equals(abi);
+        }
+        return sessionAbi.equals(abi);
     }
 
     public boolean sendAgentToolRequest(Long userId, UUID callId, String toolName, JsonNode params) {

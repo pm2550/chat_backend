@@ -16,6 +16,8 @@ public class AppVersionDto {
 
     private Long id;
     private String platform;
+    /** Android 分架构包的 ABI；整包（含所有非 Android 平台）为 null。 */
+    private String abi;
     private String versionName;
     private Integer versionCode;
     private Boolean forceUpdate;
@@ -37,6 +39,8 @@ public class AppVersionDto {
         private String downloadUrl;
         private Long fileSize;
         private String sha256;
+        /** 这个下载地址对应的 Android ABI；整包为 null。 */
+        private String abi;
     }
 
     @Data
@@ -54,5 +58,13 @@ public class AppVersionDto {
 
         private Boolean forceUpdate = false;
         private String releaseNotes;
+
+        /** Android 分架构包：arm64-v8a / armeabi-v7a；不填 = 整包（其他平台必须不填）。 */
+        private String abi;
+
+        public PublishRequest(DeviceToken.Platform platform, String versionName, Integer versionCode,
+                              Boolean forceUpdate, String releaseNotes) {
+            this(platform, versionName, versionCode, forceUpdate, releaseNotes, null);
+        }
     }
 }

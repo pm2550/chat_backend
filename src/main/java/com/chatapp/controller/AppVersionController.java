@@ -40,17 +40,26 @@ public class AppVersionController {
 
     /**
      * Public — called before login. Returns whether an update is available.
+     *
+     * <p>Android 客户端带 {@code abi}（arm64-v8a / armeabi-v7a）拿对应架构的 APK；
+     * 不带（≤1.1.51 的旧客户端、下载页的默认链接）给 64 位包。
      */
     @GetMapping("/version")
     public ResponseEntity<?> checkVersion(
             @RequestParam String platform,
-            @RequestParam(defaultValue = "0") int currentVersionCode) {
+            @RequestParam(defaultValue = "0") int currentVersionCode,
+            @RequestParam(required = false) String abi) {
+        DeviceToken.Platform p;
         try {
-            DeviceToken.Platform p = DeviceToken.Platform.valueOf(platform.toUpperCase());
-            AppVersionDto.CheckResponse resp = versionService.checkVersion(p, currentVersionCode);
-            return ResponseEntity.ok(resp);
+            p = DeviceToken.Platform.valueOf(platform.toUpperCase());
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", "不支持的平台: " + platform));
+        }
+        try {
+            AppVersionDto.CheckResponse resp = versionService.checkVersion(p, currentVersionCode, abi);
+            return ResponseEntity.ok(resp);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
 

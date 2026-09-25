@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "app_versions",
-       uniqueConstraints = @UniqueConstraint(columnNames = {"platform", "version_code"}))
+       uniqueConstraints = @UniqueConstraint(columnNames = {"platform", "version_code", "abi"}))
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -24,6 +24,13 @@ public class AppVersion {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private DeviceToken.Platform platform;
+
+    /**
+     * Android 分架构安装包的 ABI（arm64-v8a / armeabi-v7a）；空串 = 不分架构的整包
+     * （拆包前的 Android 发布和所有其他平台）。见 {@link com.chatapp.util.AndroidAbi}。
+     */
+    @Column(name = "abi", nullable = false, length = 32)
+    private String abi = "";
 
     @Column(name = "version_name", nullable = false, length = 50)
     private String versionName;
