@@ -114,6 +114,12 @@ file:
     message-path: ${FILE_UPLOAD_PATH:./uploads/}messages/
     max-size: 52428800  # 50MB
 
+# 图片消息的小预览图：启动后给历史明文图片补缩略图（幂等、每次最多看 backfill-max 条）
+chat:
+  thumbnails:
+    backfill-on-startup: ${CHAT_THUMBNAIL_BACKFILL:true}
+    backfill-max: ${CHAT_THUMBNAIL_BACKFILL_MAX:500}
+
 message:
   retention:
     enabled: ${MESSAGE_RETENTION_ENABLED:true}

@@ -50,6 +50,7 @@ class BotGatewayServiceTest {
     @Mock private BotService botService;
     @Mock private ModerationService moderationService;
     @Mock private FriendshipService friendshipService;
+    @Mock private ImageThumbnailService imageThumbnailService;
 
     @InjectMocks private BotGatewayService service;
 

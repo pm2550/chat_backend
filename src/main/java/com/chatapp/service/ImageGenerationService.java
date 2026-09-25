@@ -11,6 +11,7 @@ import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.UserRepository;
 import com.chatapp.websocket.RawWebSocketHandler;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +40,8 @@ public class ImageGenerationService {
     private final RawWebSocketHandler rawWebSocketHandler;
     private final TransactionTemplate transactionTemplate;
     private final Executor taskExecutor;
+    /** 可选：AI 画的图通常 1–3 MB，气泡先显示缩略图。没注入（单测手工构造）时不生成。 */
+    private ImageThumbnailService imageThumbnailService;
 
     public ImageGenerationService(
             MessageRepository messageRepository,
@@ -63,6 +66,17 @@ public class ImageGenerationService {
         this.rawWebSocketHandler = rawWebSocketHandler;
         this.transactionTemplate = transactionTemplate;
         this.taskExecutor = taskExecutor;
+    }
+
+    @Autowired(required = false)
+    void setImageThumbnailService(ImageThumbnailService imageThumbnailService) {
+        this.imageThumbnailService = imageThumbnailService;
+    }
+
+    private ImageThumbnailService.StoredThumbnail createThumbnail(byte[] bytes) {
+        return imageThumbnailService == null
+                ? null
+                : imageThumbnailService.createAndStore(bytes).orElse(null);
     }
 
     @Transactional
@@ -159,7 +173,8 @@ public class ImageGenerationService {
                          String refId,
                          BotImageGenerationClient.ProviderConfig providerConfig) {
         try {
-            updateStatus(messageId, Message.ImageGenerationStatus.PROCESSING, Message.MessageStatus.SENDING, null, null);
+            updateStatus(messageId, Message.ImageGenerationStatus.PROCESSING, Message.MessageStatus.SENDING,
+                    null, null, null);
             byte[] bytes;
             String mimeType;
             if (providerConfig == null
@@ -184,7 +199,7 @@ public class ImageGenerationService {
                     "image-generation-" + messageId + ".png",
                     mimeType,
                     bytes);
-            complete(messageId, fileUrl, bytes.length);
+            complete(messageId, fileUrl, bytes.length, createThumbnail(bytes));
         } catch (Exception e) {
             log.warn("Image generation failed for message {}: {}", messageId, e.getMessage());
             try {
@@ -228,7 +243,8 @@ public class ImageGenerationService {
                                  Message.ImageGenerationStatus status,
                                  Message.MessageStatus messageStatus,
                                  String fileUrl,
-                                 Long fileSize) {
+                                 Long fileSize,
+                                 ImageThumbnailService.StoredThumbnail thumbnail) {
         return transactionTemplate.execute(statusTx -> {
             Message message = messageRepository.findWithSenderById(messageId)
                     .orElseThrow(() -> new IllegalArgumentException("消息不存在"));
@@ -240,6 +256,11 @@ public class ImageGenerationService {
                 message.setFileName("AI image " + messageId + ".png");
                 message.setFileType("image/png");
                 message.setFileSize(fileSize);
+                if (thumbnail != null) {
+                    message.setThumbnailUrl(thumbnail.url());
+                    message.setWidth(thumbnail.sourceWidth());
+                    message.setHeight(thumbnail.sourceHeight());
+                }
             }
             message = messageRepository.save(message);
             rawWebSocketHandler.broadcastMessageUpdated(message);
@@ -257,9 +278,11 @@ public class ImageGenerationService {
         });
     }
 
-    private void complete(Long messageId, String fileUrl, long fileSize) {
+    private void complete(Long messageId, String fileUrl, long fileSize,
+                          ImageThumbnailService.StoredThumbnail thumbnail) {
         Message done = updateStatus(
-                messageId, Message.ImageGenerationStatus.DONE, Message.MessageStatus.SENT, fileUrl, fileSize);
+                messageId, Message.ImageGenerationStatus.DONE, Message.MessageStatus.SENT,
+                fileUrl, fileSize, thumbnail);
         if (done != null) {
             rawWebSocketHandler.notifyOfflineMembers(done);
         }

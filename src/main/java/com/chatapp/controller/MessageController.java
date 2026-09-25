@@ -7,6 +7,7 @@ import com.chatapp.service.AuditLogService;
 import com.chatapp.service.BotService;
 import com.chatapp.service.BotReplyDeliveryService;
 import com.chatapp.service.FileStorageService;
+import com.chatapp.service.ImageThumbnailService;
 import com.chatapp.service.MessageReadStateService;
 import com.chatapp.service.MessageService;
 import com.chatapp.service.MessageReactionService;
@@ -41,6 +42,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @Slf4j
 public class MessageController {
+    /** 加密缩略图的上限：客户端做的是长边 400px 的小图，正常几十 KB。 */
+    private static final long MAX_ENCRYPTED_THUMBNAIL_BYTES = 512 * 1024;
 
     private final MessageService messageService;
     private final UserService userService;
@@ -52,6 +55,7 @@ public class MessageController {
     private final MessageReactionService messageReactionService;
     private final RemoteImageFetchService remoteImageFetchService;
     private final VoiceTranscoder voiceTranscoder;
+    private final ImageThumbnailService imageThumbnailService;
     private final UserPrivacyService userPrivacyService;
     private final MessageReadStateService messageReadStateService;
 
@@ -124,6 +128,7 @@ public class MessageController {
             @RequestParam(value = "encryptedContent", required = false) String encryptedContent,
             @RequestParam(value = "encryptionVersion", required = false) Integer encryptionVersion,
             @RequestParam(value = "clientMessageId", required = false) String clientMessageId,
+            @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail,
             Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
@@ -159,6 +164,20 @@ public class MessageController {
             } else {
                 fileUrl = fileStorageService.uploadChatFile(file);
             }
+            // 小预览图：明文图片由服务器生成；加密附件服务器看不到图，用客户端加密好一并传来的那张。
+            String thumbnailUrl = null;
+            Integer width = null;
+            Integer height = null;
+            if (encryptedAttachment) {
+                thumbnailUrl = storeEncryptedThumbnail(thumbnail);
+            } else if (messageType == Message.MessageType.IMAGE) {
+                var stored = imageThumbnailService.createAndStore(file.getBytes());
+                if (stored.isPresent()) {
+                    thumbnailUrl = stored.get().url();
+                    width = stored.get().sourceWidth();
+                    height = stored.get().sourceHeight();
+                }
+            }
 
             Message message = messageService.sendFileMessage(
                 currentUser.getId(),
@@ -169,7 +188,10 @@ public class MessageController {
                 fileSize,
                 messageType,
                 encryptedContent,
-                encryptionVersion
+                encryptionVersion,
+                thumbnailUrl,
+                width,
+                height
             );
             
             Map<String, Object> response = new HashMap<>();
@@ -193,6 +215,34 @@ public class MessageController {
         }
     }
 
+    /** 不带缩略图的上传（老客户端的请求形状）。 */
+    public ResponseEntity<?> sendFileMessage(
+            Long chatRoomId,
+            MultipartFile file,
+            Message.MessageType requestedMessageType,
+            String encryptedContent,
+            Integer encryptionVersion,
+            String clientMessageId,
+            Authentication auth) {
+        return sendFileMessage(chatRoomId, file, requestedMessageType, encryptedContent,
+                encryptionVersion, clientMessageId, null, auth);
+    }
+
+    /**
+     * 加密附件的缩略图是客户端用单独的随机密钥加密的密文（密钥在消息信封里），
+     * 和附件本身一样存成 .bin；超过上限就不要了（客户端会退回加载原图），不拒绝整条消息。
+     */
+    private String storeEncryptedThumbnail(MultipartFile thumbnail) throws java.io.IOException {
+        if (thumbnail == null || thumbnail.isEmpty()) {
+            return null;
+        }
+        if (thumbnail.getSize() > MAX_ENCRYPTED_THUMBNAIL_BYTES) {
+            log.warn("加密缩略图过大，忽略: {} bytes", thumbnail.getSize());
+            return null;
+        }
+        return fileStorageService.uploadEncryptedChatFile(thumbnail);
+    }
+
     /**
      * 按图片地址发送图片消息。
      *
@@ -212,6 +262,7 @@ public class MessageController {
                     image.fileName(),
                     image.contentType(),
                     image.bytes());
+            var thumbnail = imageThumbnailService.createAndStore(image.bytes());
 
             Message message = messageService.sendFileMessage(
                     currentUser.getId(),
@@ -222,7 +273,10 @@ public class MessageController {
                     (long) image.bytes().length,
                     Message.MessageType.IMAGE,
                     null,
-                    null);
+                    null,
+                    thumbnail.map(ImageThumbnailService.StoredThumbnail::url).orElse(null),
+                    thumbnail.map(ImageThumbnailService.StoredThumbnail::sourceWidth).orElse(null),
+                    thumbnail.map(ImageThumbnailService.StoredThumbnail::sourceHeight).orElse(null));
 
             Map<String, Object> response = new HashMap<>();
             response.put("message", "图片消息发送成功");

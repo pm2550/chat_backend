@@ -57,6 +57,7 @@ public class BotGatewayService {
     private final BotService botService;
     private final ModerationService moderationService;
     private final FriendshipService friendshipService;
+    private final ImageThumbnailService imageThumbnailService;
 
     /** Room ids this bot is actively bound to (where it may post). */
     @Transactional(readOnly = true)
@@ -144,6 +145,14 @@ public class BotGatewayService {
         message.setFileName(fileName);
         message.setFileType(contentType);
         message.setFileSize(file.getSize());
+        if (messageType == Message.MessageType.IMAGE) {
+            var thumbnail = imageThumbnailService.createAndStore(file.getBytes());
+            if (thumbnail.isPresent()) {
+                message.setThumbnailUrl(thumbnail.get().url());
+                message.setWidth(thumbnail.get().sourceWidth());
+                message.setHeight(thumbnail.get().sourceHeight());
+            }
+        }
         message = messageRepository.save(message);
 
         broadcastBotMessage(message, chatRoomId, sender.getId());

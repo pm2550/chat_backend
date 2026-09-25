@@ -241,6 +241,18 @@ public class MessageService {
     public Message sendFileMessage(Long senderId, Long chatRoomId, String fileName, String fileUrl,
                                  String fileType, Long fileSize, Message.MessageType messageType,
                                  String encryptedContentBase64, Integer encryptionVersion) {
+        return sendFileMessage(senderId, chatRoomId, fileName, fileUrl, fileType, fileSize, messageType,
+                encryptedContentBase64, encryptionVersion, null, null, null);
+    }
+
+    /**
+     * 同上，另带图片的小预览图地址（和原图同样受保护）及原图宽高。
+     * 加密附件的缩略图是客户端加密好的密文，宽高不能透露给服务器，所以只存地址。
+     */
+    public Message sendFileMessage(Long senderId, Long chatRoomId, String fileName, String fileUrl,
+                                 String fileType, Long fileSize, Message.MessageType messageType,
+                                 String encryptedContentBase64, Integer encryptionVersion,
+                                 String thumbnailUrl, Integer width, Integer height) {
         // 验证发送者和聊天室
         User sender = userRepository.findById(senderId)
                 .orElseThrow(() -> new RuntimeException("发送者不存在"));
@@ -260,6 +272,7 @@ public class MessageService {
         message.setChatRoom(chatRoom);
         message.setFileUrl(fileUrl);
         message.setFileSize(fileSize);
+        message.setThumbnailUrl(thumbnailUrl);
         message.setCreatedAt(LocalDateTime.now());
         message.setMessageStatus(Message.MessageStatus.SENT);
         if (encrypted) {
@@ -275,6 +288,8 @@ public class MessageService {
             message.setContent(fileName); // 文件名作为内容
             message.setFileName(fileName);
             message.setFileType(fileType);
+            message.setWidth(width);
+            message.setHeight(height);
         }
 
         message = messageRepository.save(message);

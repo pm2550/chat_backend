@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -232,15 +233,37 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     Page<Message> findExpiredForRetention(@Param("cutoff") LocalDateTime cutoff, Pageable pageable);
 
     @Query("SELECT CASE WHEN COUNT(m) > 0 THEN true ELSE false END " +
-           "FROM Message m WHERE m.isDeleted = false AND (m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl)")
+           "FROM Message m WHERE m.isDeleted = false " +
+           "AND (m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl OR m.thumbnailUrl = :fileUrl)")
     boolean existsActiveMessageReferencingFileUrl(@Param("fileUrl") String fileUrl);
+
+    /**
+     * 回填缩略图的候选：明文、未删除、没有缩略图、不太小的图片消息（聊天图片、AI 画图），
+     * GIF 按动图不做缩略图直接排除。按 id 升序、从 afterId 之后取，一批一批往后走。
+     */
+    @Query("SELECT m FROM Message m WHERE m.isDeleted = false AND m.thumbnailUrl IS NULL " +
+           "AND m.encryptedContent IS NULL AND m.fileUrl IS NOT NULL " +
+           "AND m.messageType IN :types " +
+           "AND (m.fileSize IS NULL OR m.fileSize > :minBytes) " +
+           "AND (m.fileType IS NULL OR LOWER(m.fileType) <> 'image/gif') " +
+           "AND m.id > :afterId ORDER BY m.id ASC")
+    List<Message> findThumbnailBackfillCandidates(@Param("types") Collection<Message.MessageType> types,
+                                                  @Param("minBytes") Long minBytes,
+                                                  @Param("afterId") Long afterId,
+                                                  Pageable pageable);
+
+    /** 同一个原图（转发副本）共用一张缩略图：还没有缩略图的明文引用一起补上。 */
+    @Modifying
+    @Query("UPDATE Message m SET m.thumbnailUrl = :thumbnailUrl " +
+           "WHERE m.fileUrl = :fileUrl AND m.thumbnailUrl IS NULL AND m.encryptedContent IS NULL")
+    int setThumbnailForFileUrl(@Param("fileUrl") String fileUrl, @Param("thumbnailUrl") String thumbnailUrl);
 
     /**
      * 找出引用该文件、且 userId 所在聊天室里的未删除消息（按 id 升序）。转发和贴纸会让多条消息
      * 共用同一个 fileUrl，所以不能只看第一条消息所在的房间。调用方传 PageRequest.of(0, 1) 取一条用于审计。
      */
     @Query("SELECT m FROM Message m WHERE m.isDeleted = false " +
-           "AND (m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl) " +
+           "AND (m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl OR m.thumbnailUrl = :fileUrl) " +
            "AND EXISTS (SELECT 1 FROM ChatRoomMember crm " +
            "            WHERE crm.chatRoom.id = m.chatRoom.id AND crm.user.id = :userId) " +
            "ORDER BY m.id ASC")

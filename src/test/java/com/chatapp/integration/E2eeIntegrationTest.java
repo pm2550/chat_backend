@@ -39,6 +39,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -51,6 +52,7 @@ import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -491,6 +493,61 @@ class E2eeIntegrationTest extends IntegrationTestSupport {
                         .param("encryptionVersion", String.valueOf(E2eeKeyService.MESSAGE_ENCRYPTION_VERSION))
                         .header("Authorization", aliceBearer))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("encrypted image thumbnails: client-sealed .bin blob, visible to the two participants only")
+    void encrypted_thumbnail_is_stored_opaque_and_protected() throws Exception {
+        String envelope = randomBase64(200);
+        byte[] sealedThumbnail = randomBytes(3000);
+        org.springframework.mock.web.MockMultipartFile ciphertext = new org.springframework.mock.web.MockMultipartFile(
+                "file", "encrypted.bin", "application/octet-stream", randomBytes(4096));
+        org.springframework.mock.web.MockMultipartFile thumbnail = new org.springframework.mock.web.MockMultipartFile(
+                "thumbnail", "encrypted.bin", "application/octet-stream", sealedThumbnail);
+
+        String body = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .multipart("/api/v1/messages/file")
+                        .file(ciphertext)
+                        .file(thumbnail)
+                        .param("chatRoomId", dm.getId().toString())
+                        .param("messageType", "IMAGE")
+                        .param("encryptedContent", envelope)
+                        .param("encryptionVersion", String.valueOf(E2eeKeyService.MESSAGE_ENCRYPTION_VERSION))
+                        .header("Authorization", aliceBearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.messageType").value("FILE"))
+                .andExpect(jsonPath("$.data.thumbnailUrl").value(org.hamcrest.Matchers.endsWith(".bin")))
+                .andReturn().getResponse().getContentAsString();
+        JsonNode data = objectMapper.readTree(body).path("data");
+        String thumbnailUrl = data.path("thumbnailUrl").asText();
+        String fileUrl = data.path("fileUrl").asText();
+        assertNotEquals(fileUrl, thumbnailUrl);
+        // 服务器看不到图：不能从密文里读出尺寸，也不该存。
+        assertTrue(data.path("width").isNull() || data.path("width").isMissingNode());
+
+        mockMvc.perform(get(thumbnailUrl).header("Authorization", bobBearer))
+                .andExpect(status().isOk())
+                .andExpect(content().bytes(sealedThumbnail));
+        User carol = registerClientHashUser("e2ee_thumb_carol_" + uniqueSuffix, "Carol");
+        mockMvc.perform(get(thumbnailUrl)
+                        .header("Authorization", "Bearer " + jwtUtils.generateAccessToken(carol.getUsername())))
+                .andExpect(status().isForbidden());
+
+        // 过大的"缩略图"不收，但消息照常发出（客户端退回加载原图）。
+        org.springframework.mock.web.MockMultipartFile oversized = new org.springframework.mock.web.MockMultipartFile(
+                "thumbnail", "encrypted.bin", "application/octet-stream", randomBytes(600 * 1024));
+        String second = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .multipart("/api/v1/messages/file")
+                        .file(ciphertext)
+                        .file(oversized)
+                        .param("chatRoomId", dm.getId().toString())
+                        .param("encryptedContent", envelope)
+                        .param("encryptionVersion", String.valueOf(E2eeKeyService.MESSAGE_ENCRYPTION_VERSION))
+                        .header("Authorization", aliceBearer))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        JsonNode secondData = objectMapper.readTree(second).path("data");
+        assertTrue(secondData.path("thumbnailUrl").isNull() || secondData.path("thumbnailUrl").isMissingNode());
     }
 
     @Test

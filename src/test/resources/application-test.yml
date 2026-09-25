@@ -107,3 +107,8 @@ logging:
   level:
     com.chatapp: DEBUG
     org.springframework.security: WARN
+
+# 缩略图回填由 ThumbnailBackfillServiceTest 直接调用，别在每个测试上下文启动时在后台跑。
+chat:
+  thumbnails:
+    backfill-on-startup: false
