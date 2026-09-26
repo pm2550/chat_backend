@@ -28,6 +28,7 @@ public class ImageGenerationService {
     private static final String FEATURE_KEY = "image_generation";
     private static final int MAX_POLLS = 40;
     private static final long POLL_DELAY_MS = 3_000L;
+    static final String E2EE_ROOM_REJECTION = "端到端加密的私聊里不能用 AI 画图：描述和图片会以明文存在服务器上";
 
     private final MessageRepository messageRepository;
     private final ChatRoomRepository chatRoomRepository;
@@ -40,6 +41,7 @@ public class ImageGenerationService {
     private final RawWebSocketHandler rawWebSocketHandler;
     private final TransactionTemplate transactionTemplate;
     private final Executor taskExecutor;
+    private final E2eeKeyService e2eeKeyService;
     /** 可选：AI 画的图通常 1–3 MB，气泡先显示缩略图。没注入（单测手工构造）时不生成。 */
     private ImageThumbnailService imageThumbnailService;
 
@@ -54,7 +56,8 @@ public class ImageGenerationService {
             FileStorageService fileStorageService,
             RawWebSocketHandler rawWebSocketHandler,
             TransactionTemplate transactionTemplate,
-            @Qualifier("taskExecutor") Executor taskExecutor) {
+            @Qualifier("taskExecutor") Executor taskExecutor,
+            E2eeKeyService e2eeKeyService) {
         this.messageRepository = messageRepository;
         this.chatRoomRepository = chatRoomRepository;
         this.userRepository = userRepository;
@@ -66,6 +69,7 @@ public class ImageGenerationService {
         this.rawWebSocketHandler = rawWebSocketHandler;
         this.transactionTemplate = transactionTemplate;
         this.taskExecutor = taskExecutor;
+        this.e2eeKeyService = e2eeKeyService;
     }
 
     @Autowired(required = false)
@@ -117,6 +121,11 @@ public class ImageGenerationService {
         ChatRoom chatRoom = chatRoomRepository.findById(request.getRoomId())
                 .orElseThrow(() -> new IllegalArgumentException("聊天室不存在"));
         messageService.validateCanSendMessage(chargedUserId, chatRoom.getId());
+        // 端到端加密的私聊里服务器只有密文；用户直接画图时描述和生成的图却都是明文存在服务器上，
+        // 会悄悄破坏加密。在建消息、扣积分之前就拒绝。（机器人画图由明文消息触发，不走这里。）
+        if (botConfig == null && e2eeKeyService.isEncryptionActive(chatRoom)) {
+            throw new IllegalArgumentException(E2EE_ROOM_REJECTION);
+        }
 
         Message message = new Message();
         message.setContent(prompt);
