@@ -334,6 +334,25 @@ public class E2eeKeyService {
     }
 
     /**
+     * 这个会话现在是不是端到端加密的：能加密（两个真人的私聊、没有机器人），且双方都开着加密——
+     * 和 {@link #roomStatus} 给客户端的判断一致，客户端此时只发密文。
+     * 服务器替用户生成内容（如 AI 画图）会把描述和结果以明文留在服务器上，这种会话里要拒绝。
+     */
+    @Transactional(readOnly = true)
+    public boolean isEncryptionActive(ChatRoom room) {
+        if (room == null || room.getRoomType() != ChatRoom.RoomType.PRIVATE) {
+            return false;
+        }
+        List<Long> members = chatRoomRepository.findMemberUserIdsByRoomId(room.getId());
+        if (ineligibilityReason(room, members) != null) {
+            return false;
+        }
+        return members.stream().allMatch(memberId -> isEnabled(
+                stateRepository.findById(memberId).orElse(null),
+                keyRepository.findByUserIdOrderByKeyVersionAsc(memberId).size()));
+    }
+
+    /**
      * 发一条密文消息（或把消息编辑成密文）之前的检查，返回要存的密文字节。
      * 只允许两个真人的私聊、没有机器人：机器人读不了密文，群聊也不做加密。
      */

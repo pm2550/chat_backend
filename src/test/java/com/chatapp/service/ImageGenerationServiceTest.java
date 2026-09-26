@@ -25,9 +25,11 @@ import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -51,6 +53,7 @@ class ImageGenerationServiceTest {
     @Mock private FileStorageService fileStorageService;
     @Mock private RawWebSocketHandler rawWebSocketHandler;
     @Mock private TransactionTemplate transactionTemplate;
+    @Mock private E2eeKeyService e2eeKeyService;
 
     private ImageGenerationService service;
     private Message persistedMessage;
@@ -69,7 +72,8 @@ class ImageGenerationServiceTest {
                 fileStorageService,
                 rawWebSocketHandler,
                 transactionTemplate,
-                directExecutor);
+                directExecutor,
+                e2eeKeyService);
 
         lenient().doAnswer(invocation -> {
             Consumer<?> callback = invocation.getArgument(0);
@@ -83,7 +87,7 @@ class ImageGenerationServiceTest {
             return callback.doInTransaction(null);
         }).when(transactionTemplate).execute(any());
 
-        when(messageRepository.save(any(Message.class))).thenAnswer(invocation -> {
+        lenient().when(messageRepository.save(any(Message.class))).thenAnswer(invocation -> {
             Message message = invocation.getArgument(0);
             if (message.getId() == null) {
                 message.setId(77L);
@@ -91,7 +95,7 @@ class ImageGenerationServiceTest {
             }
             return message;
         });
-        when(messageRepository.findWithSenderById(77L)).thenAnswer(invocation -> Optional.of(persistedMessage));
+        lenient().when(messageRepository.findWithSenderById(77L)).thenAnswer(invocation -> Optional.of(persistedMessage));
     }
 
     @Test
@@ -273,6 +277,23 @@ class ImageGenerationServiceTest {
 
         verify(chatRoomRepository).clearHiddenForMember(10L, 1L);
         verify(chatRoomRepository).incrementUnreadForRoomMembersExcept(10L, 1L);
+    }
+
+    @Test
+    void submitRefusesEncryptedPrivateChatBeforeCreatingMessageOrDebiting() {
+        arrangeRoomAndUser();
+        when(e2eeKeyService.isEncryptionActive(any(ChatRoom.class))).thenReturn(true);
+
+        assertThatThrownBy(() -> service.submit(
+                1L,
+                new ImageGenerationDto.GenerateRequest(10L, "私聊里画图", 1, "1024*1024", true)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("端到端加密");
+
+        verify(messageRepository, never()).save(any(Message.class));
+        verify(pointsService, never()).debit(anyLong(), anyString(), anyString());
+        verify(rawWebSocketHandler, never()).broadcastMessageWithoutOfflineNotification(any());
+        verify(generationClient, never()).submit(anyString(), anyString(), anyInt(), anyString(), anyBoolean());
     }
 
     private void arrangeRoomAndUser() {

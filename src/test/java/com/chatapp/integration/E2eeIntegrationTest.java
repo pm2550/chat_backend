@@ -9,6 +9,7 @@ import com.chatapp.entity.Message;
 import com.chatapp.entity.User;
 import com.chatapp.repository.BotConfigRepository;
 import com.chatapp.repository.ChatRoomBotRepository;
+import com.chatapp.repository.DailyFeatureUsageRepository;
 import com.chatapp.repository.E2eeIdentityKeyRepository;
 import com.chatapp.repository.MessageRepository;
 import com.chatapp.repository.UserRepository;
@@ -76,6 +77,7 @@ class E2eeIntegrationTest extends IntegrationTestSupport {
     @Autowired private ChatRoomBotRepository chatRoomBotRepository;
     @Autowired private RawWebSocketHandler rawWebSocketHandler;
     @Autowired private JwtUtils jwtUtils;
+    @Autowired private DailyFeatureUsageRepository usageRepository;
 
     private final List<RawWebSocketIntegrationTest.TestWebSocketSession> openSessions = new ArrayList<>();
 
@@ -603,6 +605,31 @@ class E2eeIntegrationTest extends IntegrationTestSupport {
                 .andReturn().getResponse().getContentAsString();
         JsonNode secondData = objectMapper.readTree(second).path("data");
         assertTrue(secondData.path("previewUrl").isNull() || secondData.path("previewUrl").isMissingNode());
+    }
+
+    @Test
+    @DisplayName("AI image generation is refused in an encrypted DM: no message, no points")
+    void image_generation_refused_in_encrypted_private_chat() throws Exception {
+        createKey(aliceBearer, randomBase64(32), null).andExpect(status().isOk());
+        createKey(bobBearer, randomBase64(32), null).andExpect(status().isOk());
+        Map<String, Object> request = new HashMap<>();
+        request.put("roomId", dm.getId());
+        request.put("prompt", "画一只只有我们知道的猫");
+        request.put("n", 1);
+
+        mockMvc.perform(post("/api/v1/images/generate")
+                        .header("Authorization", aliceBearer)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("端到端加密")));
+
+        assertEquals(0, messageRepository.findAll().stream()
+                .filter(m -> m.getChatRoom().getId().equals(dm.getId()))
+                .count(), "the plaintext prompt must not be stored");
+        assertTrue(usageRepository.findAll().stream()
+                        .noneMatch(usage -> alice.getId().equals(usage.getUserId())),
+                "a refused request must not use the free quota or points");
     }
 
     @Test
