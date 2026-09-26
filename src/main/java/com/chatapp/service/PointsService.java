@@ -123,9 +123,12 @@ public class PointsService {
         }
 
         if (freeRestored > 0) {
+            // created_at 是 JVM 本地时间（线上容器是 UTC），先按本地时区还原成时刻再换算成业务日；
+            // 直接当成北京时间会让北京 0-8 点的退款落到"昨天"，免费次数不退。
             LocalDate originalDate = original.getCreatedAt() == null
                     ? LocalDate.now(BUSINESS_ZONE)
-                    : original.getCreatedAt().atZone(BUSINESS_ZONE).toLocalDate();
+                    : original.getCreatedAt().atZone(ZoneId.systemDefault())
+                            .withZoneSameInstant(BUSINESS_ZONE).toLocalDate();
             LocalDate today = LocalDate.now(BUSINESS_ZONE);
             if (today.equals(originalDate)) {
                 FeatureCost feature = requireEnabledFeature(featureKey);

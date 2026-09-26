@@ -19,11 +19,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.TimeZone;
 import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.List;
@@ -47,6 +50,7 @@ class PointsServiceTest {
     @Autowired private FeatureCostRepository featureCostRepository;
     @Autowired private DailyFeatureUsageRepository usageRepository;
     @Autowired private PointsLedgerRepository ledgerRepository;
+    @Autowired private JdbcTemplate jdbcTemplate;
 
     @MockBean private TokenBlacklistService tokenBlacklistService;
     @MockBean private PushNotificationService pushNotificationService;
@@ -153,6 +157,32 @@ class PointsServiceTest {
                 .filter(row -> row.getReason() == PointsLedgerEntry.LedgerReason.FEATURE_REFUND)
                 .count();
         assertEquals(1, refundRows);
+    }
+
+    @Test
+    @DisplayName("refund restores today's free use when the server clock is UTC and Beijing is already on the next day")
+    void refund_restoresFreeUse_acrossUtcBeijingDateBoundary() {
+        TimeZone previous = TimeZone.getDefault();
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+        try {
+            ZoneId beijing = ZoneId.of("Asia/Shanghai");
+            LocalDate today = LocalDate.now(beijing);
+            pointsService.debit(userId, "test_debit", "refund-free-boundary");
+            // 北京时间今天 01:00 = UTC 前一天 17:00，服务器按 UTC 本地时间记 created_at。
+            LocalDateTime utcLocal = today.atTime(1, 0).atZone(beijing)
+                    .withZoneSameInstant(ZoneId.of("UTC")).toLocalDateTime();
+            jdbcTemplate.update(
+                    "UPDATE points_ledger SET created_at = ? WHERE user_id = ? AND ref_id = ?",
+                    utcLocal, userId, "refund-free-boundary");
+
+            pointsService.refund(userId, "test_debit", "refund-free-boundary", "failed");
+
+            assertEquals(0, usageRepository
+                    .findByUserIdAndFeatureKeyAndUsageDate(userId, "test_debit", today)
+                    .orElseThrow().getCount());
+        } finally {
+            TimeZone.setDefault(previous);
+        }
     }
 
     @Test
