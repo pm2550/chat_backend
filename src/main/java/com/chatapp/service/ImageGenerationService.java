@@ -73,10 +73,10 @@ public class ImageGenerationService {
         this.imageThumbnailService = imageThumbnailService;
     }
 
-    private ImageThumbnailService.StoredThumbnail createThumbnail(byte[] bytes) {
+    private ImageThumbnailService.MessageRenditions createThumbnail(byte[] bytes) {
         return imageThumbnailService == null
                 ? null
-                : imageThumbnailService.createAndStore(bytes).orElse(null);
+                : ImageThumbnailService.MessageRenditions.serverGenerated(imageThumbnailService.createAndStore(bytes));
     }
 
     @Transactional
@@ -244,7 +244,7 @@ public class ImageGenerationService {
                                  Message.MessageStatus messageStatus,
                                  String fileUrl,
                                  Long fileSize,
-                                 ImageThumbnailService.StoredThumbnail thumbnail) {
+                                 ImageThumbnailService.MessageRenditions thumbnail) {
         return transactionTemplate.execute(statusTx -> {
             Message message = messageRepository.findWithSenderById(messageId)
                     .orElseThrow(() -> new IllegalArgumentException("消息不存在"));
@@ -257,9 +257,7 @@ public class ImageGenerationService {
                 message.setFileType("image/png");
                 message.setFileSize(fileSize);
                 if (thumbnail != null) {
-                    message.setThumbnailUrl(thumbnail.url());
-                    message.setWidth(thumbnail.sourceWidth());
-                    message.setHeight(thumbnail.sourceHeight());
+                    thumbnail.applyTo(message);
                 }
             }
             message = messageRepository.save(message);
@@ -279,7 +277,7 @@ public class ImageGenerationService {
     }
 
     private void complete(Long messageId, String fileUrl, long fileSize,
-                          ImageThumbnailService.StoredThumbnail thumbnail) {
+                          ImageThumbnailService.MessageRenditions thumbnail) {
         Message done = updateStatus(
                 messageId, Message.ImageGenerationStatus.DONE, Message.MessageStatus.SENT,
                 fileUrl, fileSize, thumbnail);

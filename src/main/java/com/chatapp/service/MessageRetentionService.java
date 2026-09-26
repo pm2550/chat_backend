@@ -95,7 +95,8 @@ public class MessageRetentionService {
 
     private void collectMessageScopedFiles(Message message, Set<String> batchFiles) {
         for (String fileUrl : new String[] {
-                message.getFileUrl(), message.getImageGenUrl(), message.getThumbnailUrl()}) {
+                message.getFileUrl(), message.getImageGenUrl(), message.getThumbnailUrl(),
+                message.getPreviewUrl()}) {
             if (isMessageScopedFile(fileUrl)) {
                 batchFiles.add(fileUrl);
             }
@@ -151,6 +152,7 @@ public class MessageRetentionService {
         message.setFileType(null);
         message.setFileSize(null);
         message.setThumbnailUrl(null);
+        message.setPreviewUrl(null);
         message.setImageGenUrl(null);
         message.setImageGenProviderTaskId(null);
         message.setEncryptedContent(null);

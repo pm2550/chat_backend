@@ -234,14 +234,23 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     @Query("SELECT CASE WHEN COUNT(m) > 0 THEN true ELSE false END " +
            "FROM Message m WHERE m.isDeleted = false " +
-           "AND (m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl OR m.thumbnailUrl = :fileUrl)")
+           "AND (m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl " +
+           "     OR m.thumbnailUrl = :fileUrl OR m.previewUrl = :fileUrl)")
     boolean existsActiveMessageReferencingFileUrl(@Param("fileUrl") String fileUrl);
 
+    /** 不论删没删，还有没有消息引用这个地址（回填换掉老缩略图后，据此决定能不能删文件）。 */
+    @Query("SELECT CASE WHEN COUNT(m) > 0 THEN true ELSE false END " +
+           "FROM Message m WHERE m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl " +
+           "OR m.thumbnailUrl = :fileUrl OR m.previewUrl = :fileUrl")
+    boolean existsAnyMessageReferencingFileUrl(@Param("fileUrl") String fileUrl);
+
     /**
-     * 回填缩略图的候选：明文、未删除、没有缩略图、不太小的图片消息（聊天图片、AI 画图），
-     * GIF 按动图不做缩略图直接排除。按 id 升序、从 afterId 之后取，一批一批往后走。
+     * 回填预览图的候选：明文、未删除、不太小的图片消息（聊天图片、AI 画图），服务器预览图版本低于 :version
+     * （NULL = 没有缩略图，或 1.1.51 的 400px 缩略图）。GIF 按动图不做缩略图直接排除。
+     * 按 id 升序、从 afterId 之后取，一批一批往后走。
      */
-    @Query("SELECT m FROM Message m WHERE m.isDeleted = false AND m.thumbnailUrl IS NULL " +
+    @Query("SELECT m FROM Message m WHERE m.isDeleted = false " +
+           "AND (m.renditionVersion IS NULL OR m.renditionVersion < :version) " +
            "AND m.encryptedContent IS NULL AND m.fileUrl IS NOT NULL " +
            "AND m.messageType IN :types " +
            "AND (m.fileSize IS NULL OR m.fileSize > :minBytes) " +
@@ -249,21 +258,42 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
            "AND m.id > :afterId ORDER BY m.id ASC")
     List<Message> findThumbnailBackfillCandidates(@Param("types") Collection<Message.MessageType> types,
                                                   @Param("minBytes") Long minBytes,
+                                                  @Param("version") Integer version,
                                                   @Param("afterId") Long afterId,
                                                   Pageable pageable);
 
-    /** 同一个原图（转发副本）共用一张缩略图：还没有缩略图的明文引用一起补上。 */
+    /** 同一个原图（含转发副本）的明文消息现在引用的缩略图/中图地址，回填换新后要删掉老文件。 */
+    @Query("SELECT DISTINCT m.thumbnailUrl FROM Message m WHERE m.fileUrl = :fileUrl " +
+           "AND m.encryptedContent IS NULL AND m.thumbnailUrl IS NOT NULL")
+    List<String> findThumbnailUrlsForFileUrl(@Param("fileUrl") String fileUrl);
+
+    @Query("SELECT DISTINCT m.previewUrl FROM Message m WHERE m.fileUrl = :fileUrl " +
+           "AND m.encryptedContent IS NULL AND m.previewUrl IS NOT NULL")
+    List<String> findPreviewUrlsForFileUrl(@Param("fileUrl") String fileUrl);
+
+    /** 同一个原图（转发副本）共用一套预览图：明文引用一起换成新生成的。 */
     @Modifying
-    @Query("UPDATE Message m SET m.thumbnailUrl = :thumbnailUrl " +
-           "WHERE m.fileUrl = :fileUrl AND m.thumbnailUrl IS NULL AND m.encryptedContent IS NULL")
-    int setThumbnailForFileUrl(@Param("fileUrl") String fileUrl, @Param("thumbnailUrl") String thumbnailUrl);
+    @Query("UPDATE Message m SET m.thumbnailUrl = :thumbnailUrl, m.previewUrl = :previewUrl, " +
+           "m.renditionVersion = :version " +
+           "WHERE m.fileUrl = :fileUrl AND m.encryptedContent IS NULL")
+    int setRenditionsForFileUrl(@Param("fileUrl") String fileUrl,
+                                @Param("thumbnailUrl") String thumbnailUrl,
+                                @Param("previewUrl") String previewUrl,
+                                @Param("version") Integer version);
+
+    /** 这张原图做不出新预览图：保留现有的（有的话），只记上版本，下次不再尝试。 */
+    @Modifying
+    @Query("UPDATE Message m SET m.renditionVersion = :version " +
+           "WHERE m.fileUrl = :fileUrl AND m.encryptedContent IS NULL")
+    int markRenditionVersionForFileUrl(@Param("fileUrl") String fileUrl, @Param("version") Integer version);
 
     /**
      * 找出引用该文件、且 userId 所在聊天室里的未删除消息（按 id 升序）。转发和贴纸会让多条消息
      * 共用同一个 fileUrl，所以不能只看第一条消息所在的房间。调用方传 PageRequest.of(0, 1) 取一条用于审计。
      */
     @Query("SELECT m FROM Message m WHERE m.isDeleted = false " +
-           "AND (m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl OR m.thumbnailUrl = :fileUrl) " +
+           "AND (m.fileUrl = :fileUrl OR m.imageGenUrl = :fileUrl " +
+           "     OR m.thumbnailUrl = :fileUrl OR m.previewUrl = :fileUrl) " +
            "AND EXISTS (SELECT 1 FROM ChatRoomMember crm " +
            "            WHERE crm.chatRoom.id = m.chatRoom.id AND crm.user.id = :userId) " +
            "ORDER BY m.id ASC")

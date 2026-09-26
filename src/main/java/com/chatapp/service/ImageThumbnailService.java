@@ -1,5 +1,6 @@
 package com.chatapp.service;
 
+import com.chatapp.entity.Message;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -29,24 +30,43 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 聊天图片的小预览图：长边 400px 的 JPEG（有透明区域的图用 PNG），通常二三十 KB。
+ * 聊天图片的预览图，两档：
+ * <ul>
+ *   <li>缩略图：长边 720px 的 JPEG（有透明区域的图用 PNG），通常四五十 KB。聊天气泡、文件中心先显示它，
+ *       首屏快；720px 在手机气泡里（约 300pt × 2–3 倍屏）只轻微放大，不再像 400px 时那样糊。</li>
+ *   <li>中图：只给大原图（超过 {@link #PREVIEW_MIN_SOURCE_BYTES}，即"原图"发送或老的多 MB 图片）做，
+ *       长边 1280px，一两百 KB。气泡真正出现在屏幕上以后，客户端在后台换上它；原图不大的直接换原图。</li>
+ * </ul>
+ * 两张都和原图一样存成受保护的聊天文件（/api/files/chat/），访问规则见 FileAccessService。
  *
- * 聊天气泡、文件中心先加载它，点开再下载原图——慢网下一屏图片从几 MB 变成几十 KB。
- * 缩略图和原图一样存成受保护的聊天文件（/api/files/chat/），访问规则见 FileAccessService。
- *
- * 做不了的情况一律返回空，调用方照常发原图、不带缩略图，客户端退回加载原图：
+ * 做不了的情况一律返回空，调用方照常发原图、不带预览图，客户端退回加载原图：
  * 不认识/损坏的文件、动图（GIF、动态 WebP、APNG——静态缩略图会让它不动了）、
  * 原图本来就很小（另做一张没意义）、超大图（防解压炸弹）。
  */
 @Service
 @Slf4j
 public class ImageThumbnailService {
-    public static final int LONG_EDGE = 400;
+    public static final int LONG_EDGE = 720;
+    /** 中图的长边：气泡最宽 460pt，2–3 倍屏上 1280px 已经够清楚。 */
+    public static final int PREVIEW_LONG_EDGE = 1280;
     /** 原图不超过这么大就不另做缩略图，客户端直接加载原图。回填历史消息也按它筛选。 */
     public static final long SMALL_ORIGINAL_BYTES = 100 * 1024;
-    private static final float JPEG_QUALITY = 0.78f;
+    /**
+     * 原图超过这么大才另做中图；不超过的（正常压缩后发的图，两三百 KB）客户端直接拿原图当清晰图。
+     * 客户端 Message.sharpOriginalMaxBytes 是同一个值。
+     */
+    public static final long PREVIEW_MIN_SOURCE_BYTES = 1536 * 1024;
+    /**
+     * 服务器生成的预览图版本，写进 messages.rendition_version。1.1.51 的 400px 缩略图没有标记（NULL），
+     * 回填据此把它们换成新尺寸；以后改尺寸/质量时加一，回填会再换一遍。
+     */
+    public static final int RENDITION_VERSION = 2;
+    private static final float JPEG_QUALITY = 0.82f;
+    private static final float PREVIEW_JPEG_QUALITY = 0.82f;
     /** 缩略图没比原图小多少（超过原图 70%）就不要了。 */
     private static final double MAX_THUMBNAIL_RATIO = 0.7;
+    /** 中图至少要比原图小一半，不然客户端直接下原图就好。 */
+    private static final double MAX_PREVIEW_RATIO = 0.5;
     private static final long MAX_SOURCE_PIXELS = 200_000_000L;
     private static final int MAX_SOURCE_BYTES = 60 * 1024 * 1024;
     private static final long FFMPEG_TIMEOUT_SECONDS = 20;
@@ -60,42 +80,96 @@ public class ImageThumbnailService {
         this.ffmpegPath = ffmpegPath;
     }
 
-    /** 生成好的缩略图；sourceWidth/sourceHeight 是原图按 EXIF 方向摆正后的尺寸。 */
+    /** 生成好的一张预览图；sourceWidth/sourceHeight 是原图按 EXIF 方向摆正后的尺寸。 */
     public record Thumbnail(byte[] bytes, String contentType, int sourceWidth, int sourceHeight) {
         public String extension() {
             return "image/png".equals(contentType) ? "png" : "jpg";
         }
     }
 
-    /** 已存好的缩略图：url 写进 messages.thumbnail_url。 */
-    public record StoredThumbnail(String url, int sourceWidth, int sourceHeight) {}
+    /** 一次解码做出的两档预览图；preview（中图）只有大原图才有。 */
+    public record Renditions(Thumbnail thumbnail, Thumbnail preview) {}
 
-    /** 生成并存盘；做不了（见类注释）或存盘失败都返回空，不影响发消息。 */
+    /** 已存好的预览图：url 写进 messages.thumbnail_url，previewUrl（可能为空）写进 messages.preview_url。 */
+    public record StoredThumbnail(String url, String previewUrl, int sourceWidth, int sourceHeight) {}
+
+    /**
+     * 写进一条消息的预览图字段。服务器生成的带版本号（回填据此判断要不要重做）；
+     * 端到端加密的是客户端加密好传来的，服务器不知道尺寸，也不参与回填。
+     */
+    public record MessageRenditions(String thumbnailUrl, String previewUrl,
+                                    Integer width, Integer height, Integer version) {
+        public static final MessageRenditions NONE = new MessageRenditions(null, null, null, null, null);
+
+        /** 服务器处理过的明文图片：做不出来也记上版本，回填不再反复尝试。 */
+        public static MessageRenditions serverGenerated(Optional<StoredThumbnail> stored) {
+            return stored
+                    .map(value -> new MessageRenditions(value.url(), value.previewUrl(),
+                            value.sourceWidth(), value.sourceHeight(), RENDITION_VERSION))
+                    .orElse(new MessageRenditions(null, null, null, null, RENDITION_VERSION));
+        }
+
+        public static MessageRenditions clientSealed(String thumbnailUrl, String previewUrl) {
+            return new MessageRenditions(thumbnailUrl, previewUrl, null, null, null);
+        }
+
+        /** 写到消息上；宽高只在知道时覆盖。 */
+        public void applyTo(Message message) {
+            message.setThumbnailUrl(thumbnailUrl);
+            message.setPreviewUrl(previewUrl);
+            message.setRenditionVersion(version);
+            if (width != null && height != null) {
+                message.setWidth(width);
+                message.setHeight(height);
+            }
+        }
+    }
+
+    /** 生成并存盘；做不了（见类注释）或存盘失败都返回空，不影响发消息。中图存不下来只是没有中图。 */
     public Optional<StoredThumbnail> createAndStore(byte[] original) {
-        Optional<Thumbnail> thumbnail = generate(original);
-        if (thumbnail.isEmpty()) {
+        Optional<Renditions> renditions = generateRenditions(original);
+        if (renditions.isEmpty()) {
             return Optional.empty();
         }
-        Thumbnail value = thumbnail.get();
+        Thumbnail thumbnail = renditions.get().thumbnail();
+        String url;
         try {
-            String url = fileStorageService.uploadChatFileBytes(
-                    "thumbnail." + value.extension(), value.contentType(), value.bytes());
-            return Optional.of(new StoredThumbnail(url, value.sourceWidth(), value.sourceHeight()));
+            url = fileStorageService.uploadChatFileBytes(
+                    "thumbnail." + thumbnail.extension(), thumbnail.contentType(), thumbnail.bytes());
         } catch (Exception e) {
             log.warn("缩略图保存失败，消息照常发送: {}", e.getMessage());
             return Optional.empty();
         }
+        String previewUrl = null;
+        Thumbnail preview = renditions.get().preview();
+        if (preview != null) {
+            try {
+                previewUrl = fileStorageService.uploadChatFileBytes(
+                        "preview." + preview.extension(), preview.contentType(), preview.bytes());
+            } catch (Exception e) {
+                log.warn("中图保存失败，只用缩略图: {}", e.getMessage());
+            }
+        }
+        return Optional.of(new StoredThumbnail(
+                url, previewUrl, thumbnail.sourceWidth(), thumbnail.sourceHeight()));
     }
 
+    /** 只要缩略图（测试和只关心小图的调用方用）。 */
     public Optional<Thumbnail> generate(byte[] original) {
+        return generateRenditions(original).map(Renditions::thumbnail);
+    }
+
+    public Optional<Renditions> generateRenditions(byte[] original) {
         if (original == null || original.length <= SMALL_ORIGINAL_BYTES || original.length > MAX_SOURCE_BYTES) {
             return Optional.empty();
         }
+        boolean wantPreview = original.length > PREVIEW_MIN_SOURCE_BYTES;
+        int decodeEdge = wantPreview ? PREVIEW_LONG_EDGE : LONG_EDGE;
         try {
             SourceKind kind = sniff(original);
             BufferedImage decoded = switch (kind) {
-                case JPEG, PNG, BMP -> decodeWithImageIo(original);
-                case WEBP -> decodeWithFfmpeg(original);
+                case JPEG, PNG, BMP -> decodeWithImageIo(original, decodeEdge);
+                case WEBP -> decodeWithFfmpeg(original, decodeEdge);
                 case ANIMATED, UNSUPPORTED -> null;
             };
             if (decoded == null) {
@@ -109,23 +183,44 @@ public class ImageThumbnailService {
             int sourceHeight = transposed ? sourceSize[0] : sourceSize[1];
 
             boolean alpha = decoded.getColorModel().hasAlpha();
-            int[] target = fitLongEdge(decoded.getWidth(), decoded.getHeight(), LONG_EDGE);
-            BufferedImage scaled = downscale(decoded, target[0], target[1], alpha);
+            // 中图先从原图缩出来，缩略图再从中图缩（省一遍大图缩放；1280→720 一步不到两倍，不起锯齿）。
+            BufferedImage previewScaled = null;
+            if (wantPreview && Math.max(decoded.getWidth(), decoded.getHeight()) > LONG_EDGE) {
+                int[] previewTarget = fitLongEdge(decoded.getWidth(), decoded.getHeight(), PREVIEW_LONG_EDGE);
+                previewScaled = downscale(decoded, previewTarget[0], previewTarget[1], alpha);
+            }
+            BufferedImage thumbSource = previewScaled != null ? previewScaled : decoded;
+            int[] target = fitLongEdge(thumbSource.getWidth(), thumbSource.getHeight(), LONG_EDGE);
+            BufferedImage scaled = downscale(thumbSource, target[0], target[1], alpha);
             boolean transparent = alpha && hasTransparentPixel(scaled);
             if (alpha && !transparent) {
                 scaled = flatten(scaled);
+                previewScaled = previewScaled == null ? null : flatten(previewScaled);
             }
-            BufferedImage oriented = applyOrientation(scaled, orientation);
-            byte[] bytes = transparent ? encodePng(oriented) : encodeJpeg(oriented);
+            byte[] bytes = encode(applyOrientation(scaled, orientation), transparent, JPEG_QUALITY);
             if (bytes.length == 0 || bytes.length > original.length * MAX_THUMBNAIL_RATIO) {
                 return Optional.empty();
             }
-            return Optional.of(new Thumbnail(
-                    bytes, transparent ? "image/png" : "image/jpeg", sourceWidth, sourceHeight));
+            String contentType = transparent ? "image/png" : "image/jpeg";
+            Thumbnail thumbnail = new Thumbnail(bytes, contentType, sourceWidth, sourceHeight);
+
+            Thumbnail preview = null;
+            if (previewScaled != null) {
+                byte[] previewBytes = encode(
+                        applyOrientation(previewScaled, orientation), transparent, PREVIEW_JPEG_QUALITY);
+                if (previewBytes.length > 0 && previewBytes.length <= original.length * MAX_PREVIEW_RATIO) {
+                    preview = new Thumbnail(previewBytes, contentType, sourceWidth, sourceHeight);
+                }
+            }
+            return Optional.of(new Renditions(thumbnail, preview));
         } catch (Exception | OutOfMemoryError e) {
             log.warn("缩略图生成失败，退回加载原图: {}", e.toString());
             return Optional.empty();
         }
+    }
+
+    private static byte[] encode(BufferedImage image, boolean png, float quality) throws IOException {
+        return png ? encodePng(image) : encodeJpeg(image, quality);
     }
 
     enum SourceKind { JPEG, PNG, BMP, WEBP, ANIMATED, UNSUPPORTED }
@@ -166,7 +261,7 @@ public class ImageThumbnailService {
         return false;
     }
 
-    private BufferedImage decodeWithImageIo(byte[] bytes) throws IOException {
+    private BufferedImage decodeWithImageIo(byte[] bytes, int targetEdge) throws IOException {
         try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
             if (input == null) {
                 return null;
@@ -185,7 +280,7 @@ public class ImageThumbnailService {
                 }
                 // 按整数倍降采样解码（解码器边读边丢行列），大图不用先整张解到内存里，
                 // 留出 2 倍余量再平滑缩小，缩略图不发虚。
-                int subsampling = Math.max(1, Math.max(width, height) / (LONG_EDGE * 2));
+                int subsampling = Math.max(1, Math.max(width, height) / (targetEdge * 2));
                 ImageReadParam param = reader.getDefaultReadParam();
                 if (subsampling > 1) {
                     param.setSourceSubsampling(subsampling, subsampling, 0, 0);
@@ -198,14 +293,14 @@ public class ImageThumbnailService {
     }
 
     /** ImageIO 不认 WebP，交给 ffmpeg 解出一张小 PNG 再走同样的流程。 */
-    private BufferedImage decodeWithFfmpeg(byte[] bytes) {
+    private BufferedImage decodeWithFfmpeg(byte[] bytes, int targetEdge) {
         Path source = null;
         Path target = null;
         try {
             source = Files.createTempFile("thumb-in-", ".bin");
             target = Files.createTempFile("thumb-out-", ".png");
             Files.write(source, bytes);
-            int bound = LONG_EDGE * 2;
+            int bound = targetEdge * 2;
             Process process = new ProcessBuilder(List.of(
                     ffmpegPath, "-hide_banner", "-loglevel", "error", "-y",
                     "-i", source.toString(),
@@ -338,7 +433,7 @@ public class ImageThumbnailService {
         return result;
     }
 
-    private static byte[] encodeJpeg(BufferedImage image) throws IOException {
+    private static byte[] encodeJpeg(BufferedImage image, float quality) throws IOException {
         Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpeg");
         if (!writers.hasNext()) {
             return new byte[0];
@@ -349,7 +444,7 @@ public class ImageThumbnailService {
             writer.setOutput(output);
             ImageWriteParam param = writer.getDefaultWriteParam();
             param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-            param.setCompressionQuality(JPEG_QUALITY);
+            param.setCompressionQuality(quality);
             writer.write(null, new IIOImage(image, null, null), param);
         } finally {
             writer.dispose();

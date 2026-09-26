@@ -551,6 +551,61 @@ class E2eeIntegrationTest extends IntegrationTestSupport {
     }
 
     @Test
+    @DisplayName("encrypted big-image preview: client-sealed .bin next to the thumbnail, same access rule")
+    void encrypted_preview_is_stored_opaque_and_protected() throws Exception {
+        String envelope = randomBase64(200);
+        byte[] sealedPreview = randomBytes(150 * 1024);
+        org.springframework.mock.web.MockMultipartFile ciphertext = new org.springframework.mock.web.MockMultipartFile(
+                "file", "encrypted.bin", "application/octet-stream", randomBytes(4096));
+        org.springframework.mock.web.MockMultipartFile thumbnail = new org.springframework.mock.web.MockMultipartFile(
+                "thumbnail", "encrypted.bin", "application/octet-stream", randomBytes(3000));
+        org.springframework.mock.web.MockMultipartFile preview = new org.springframework.mock.web.MockMultipartFile(
+                "preview", "encrypted.bin", "application/octet-stream", sealedPreview);
+
+        String body = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .multipart("/api/v1/messages/file")
+                        .file(ciphertext)
+                        .file(thumbnail)
+                        .file(preview)
+                        .param("chatRoomId", dm.getId().toString())
+                        .param("messageType", "IMAGE")
+                        .param("encryptedContent", envelope)
+                        .param("encryptionVersion", String.valueOf(E2eeKeyService.MESSAGE_ENCRYPTION_VERSION))
+                        .header("Authorization", aliceBearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.previewUrl").value(org.hamcrest.Matchers.endsWith(".bin")))
+                .andReturn().getResponse().getContentAsString();
+        JsonNode data = objectMapper.readTree(body).path("data");
+        String previewUrl = data.path("previewUrl").asText();
+        assertNotEquals(data.path("fileUrl").asText(), previewUrl);
+        assertNotEquals(data.path("thumbnailUrl").asText(), previewUrl);
+
+        mockMvc.perform(get(previewUrl).header("Authorization", bobBearer))
+                .andExpect(status().isOk())
+                .andExpect(content().bytes(sealedPreview));
+        User carol = registerClientHashUser("e2ee_prev_carol_" + uniqueSuffix, "Carol");
+        mockMvc.perform(get(previewUrl)
+                        .header("Authorization", "Bearer " + jwtUtils.generateAccessToken(carol.getUsername())))
+                .andExpect(status().isForbidden());
+
+        // 过大的"中图"不收，消息照常发出（客户端停在缩略图，点开再下原图）。
+        org.springframework.mock.web.MockMultipartFile oversized = new org.springframework.mock.web.MockMultipartFile(
+                "preview", "encrypted.bin", "application/octet-stream", randomBytes(3 * 1024 * 1024));
+        String second = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .multipart("/api/v1/messages/file")
+                        .file(ciphertext)
+                        .file(oversized)
+                        .param("chatRoomId", dm.getId().toString())
+                        .param("encryptedContent", envelope)
+                        .param("encryptionVersion", String.valueOf(E2eeKeyService.MESSAGE_ENCRYPTION_VERSION))
+                        .header("Authorization", aliceBearer))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        JsonNode secondData = objectMapper.readTree(second).path("data");
+        assertTrue(secondData.path("previewUrl").isNull() || secondData.path("previewUrl").isMissingNode());
+    }
+
+    @Test
     @DisplayName("the built-in mention-only Agent auto-attached to every chat does not block encryption")
     void passive_system_agent_does_not_block_encryption() throws Exception {
         BotConfig agent = botConfigRepository.findFirstByBotNameAndCreatedByIsNullOrderByIdAsc("Agent")

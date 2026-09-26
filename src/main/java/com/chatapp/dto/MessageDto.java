@@ -50,6 +50,7 @@ public class MessageDto {
     private Long fileSize;
     private String fileType;
     private String thumbnailUrl;
+    private String previewUrl;
     private UrlPreviewDto linkPreview;
     private Long stickerId;
     private Long pollId;
@@ -184,6 +185,7 @@ public class MessageDto {
         dto.setFileSize(message.getFileSize());
         dto.setFileType(message.getFileType());
         dto.setThumbnailUrl(message.getThumbnailUrl());
+        dto.setPreviewUrl(message.getPreviewUrl());
         dto.setLinkPreview(parseLinkPreview(message.getLinkPreviewJson()));
         dto.setStickerId(message.getStickerId());
         dto.setPollId(message.getPollId());

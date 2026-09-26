@@ -242,17 +242,17 @@ public class MessageService {
                                  String fileType, Long fileSize, Message.MessageType messageType,
                                  String encryptedContentBase64, Integer encryptionVersion) {
         return sendFileMessage(senderId, chatRoomId, fileName, fileUrl, fileType, fileSize, messageType,
-                encryptedContentBase64, encryptionVersion, null, null, null);
+                encryptedContentBase64, encryptionVersion, ImageThumbnailService.MessageRenditions.NONE);
     }
 
     /**
-     * 同上，另带图片的小预览图地址（和原图同样受保护）及原图宽高。
-     * 加密附件的缩略图是客户端加密好的密文，宽高不能透露给服务器，所以只存地址。
+     * 同上，另带图片的预览图（缩略图、大图的中图，和原图同样受保护）及原图宽高。
+     * 加密附件的预览图是客户端加密好的密文，宽高不能透露给服务器，所以只存地址。
      */
     public Message sendFileMessage(Long senderId, Long chatRoomId, String fileName, String fileUrl,
                                  String fileType, Long fileSize, Message.MessageType messageType,
                                  String encryptedContentBase64, Integer encryptionVersion,
-                                 String thumbnailUrl, Integer width, Integer height) {
+                                 ImageThumbnailService.MessageRenditions renditions) {
         // 验证发送者和聊天室
         User sender = userRepository.findById(senderId)
                 .orElseThrow(() -> new RuntimeException("发送者不存在"));
@@ -272,7 +272,11 @@ public class MessageService {
         message.setChatRoom(chatRoom);
         message.setFileUrl(fileUrl);
         message.setFileSize(fileSize);
-        message.setThumbnailUrl(thumbnailUrl);
+        ImageThumbnailService.MessageRenditions images =
+                renditions != null ? renditions : ImageThumbnailService.MessageRenditions.NONE;
+        message.setThumbnailUrl(images.thumbnailUrl());
+        message.setPreviewUrl(images.previewUrl());
+        message.setRenditionVersion(images.version());
         message.setCreatedAt(LocalDateTime.now());
         message.setMessageStatus(Message.MessageStatus.SENT);
         if (encrypted) {
@@ -288,8 +292,8 @@ public class MessageService {
             message.setContent(fileName); // 文件名作为内容
             message.setFileName(fileName);
             message.setFileType(fileType);
-            message.setWidth(width);
-            message.setHeight(height);
+            message.setWidth(images.width());
+            message.setHeight(images.height());
         }
 
         message = messageRepository.save(message);
@@ -651,6 +655,8 @@ public class MessageService {
         forwarded.setFileSize(source.getFileSize());
         forwarded.setFileType(source.getFileType());
         forwarded.setThumbnailUrl(source.getThumbnailUrl());
+        forwarded.setPreviewUrl(source.getPreviewUrl());
+        forwarded.setRenditionVersion(source.getRenditionVersion());
         forwarded.setStickerId(source.getStickerId());
         forwarded.setPollId(source.getPollId());
         forwarded.setImageGenPrompt(source.getImageGenPrompt());

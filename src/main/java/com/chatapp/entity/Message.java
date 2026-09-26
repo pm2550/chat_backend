@@ -91,6 +91,14 @@ public class Message {
     @Column(name = "thumbnail_url")
     private String thumbnailUrl;
 
+    /** 大原图的中图（长边约 1280px）：气泡上屏后在后台换上它，而不是下载几 MB 的原图。 */
+    @Column(name = "preview_url")
+    private String previewUrl;
+
+    /** 服务器生成缩略图/中图时的版本（ImageThumbnailService.RENDITION_VERSION）；NULL = 老的 400px 或客户端加密的。 */
+    @Column(name = "rendition_version")
+    private Integer renditionVersion;
+
     @Column(name = "link_preview_json", columnDefinition = "TEXT")
     private String linkPreviewJson;
 

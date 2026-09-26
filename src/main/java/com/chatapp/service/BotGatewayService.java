@@ -146,12 +146,9 @@ public class BotGatewayService {
         message.setFileType(contentType);
         message.setFileSize(file.getSize());
         if (messageType == Message.MessageType.IMAGE) {
-            var thumbnail = imageThumbnailService.createAndStore(file.getBytes());
-            if (thumbnail.isPresent()) {
-                message.setThumbnailUrl(thumbnail.get().url());
-                message.setWidth(thumbnail.get().sourceWidth());
-                message.setHeight(thumbnail.get().sourceHeight());
-            }
+            ImageThumbnailService.MessageRenditions
+                    .serverGenerated(imageThumbnailService.createAndStore(file.getBytes()))
+                    .applyTo(message);
         }
         message = messageRepository.save(message);
 
@@ -359,6 +356,8 @@ public class BotGatewayService {
         message.setFileType(source.getFileType());
         message.setFileSize(source.getFileSize());
         message.setThumbnailUrl(source.getThumbnailUrl());
+        message.setPreviewUrl(source.getPreviewUrl());
+        message.setRenditionVersion(source.getRenditionVersion());
         message = messageRepository.save(message);
 
         broadcastBotMessage(message, chatRoomId, sender.getId());

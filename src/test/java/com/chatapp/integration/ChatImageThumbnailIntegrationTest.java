@@ -9,6 +9,7 @@ import com.chatapp.repository.UserRepository;
 import com.chatapp.service.AgentGatewayService;
 import com.chatapp.service.CloudStorageService;
 import com.chatapp.service.FileStorageService;
+import com.chatapp.service.ImageThumbnailService;
 import com.chatapp.service.LLMService;
 import com.chatapp.service.PushNotificationService;
 import com.chatapp.service.SelfDestructService;
@@ -122,8 +123,24 @@ class ChatImageThumbnailIntegrationTest {
                 .andExpect(content().contentType("image/jpeg"))
                 .andReturn().getResponse().getContentAsByteArray();
         BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(thumbnail));
-        assertThat(Math.max(decoded.getWidth(), decoded.getHeight())).isEqualTo(400);
+        assertThat(Math.max(decoded.getWidth(), decoded.getHeight())).isEqualTo(720);
         assertThat(thumbnail.length).isLessThan(photo.length / 10);
+
+        // 多 MB 的原图另有长边 1280 的中图：气泡上屏后换它，不自动下载整张原图。
+        assertThat(photo.length).isGreaterThan((int) ImageThumbnailService.PREVIEW_MIN_SOURCE_BYTES);
+        String previewUrl = (String) sent.get("previewUrl");
+        assertThat(previewUrl).startsWith("/api/files/chat/").endsWith(".jpg")
+                .isNotEqualTo(fileUrl).isNotEqualTo(thumbnailUrl);
+        byte[] preview = getFile(bob.token, previewUrl)
+                .andExpect(status().isOk())
+                .andExpect(content().contentType("image/jpeg"))
+                .andReturn().getResponse().getContentAsByteArray();
+        BufferedImage previewImage = ImageIO.read(new ByteArrayInputStream(preview));
+        assertThat(previewImage.getWidth()).isEqualTo(1280);
+        assertThat(previewImage.getHeight()).isEqualTo(853);
+        assertThat(preview.length).isLessThan(photo.length / 2).isGreaterThan(thumbnail.length);
+        getFile(dave.token, previewUrl).andExpect(status().isForbidden());
+        getFile(carol.token, previewUrl).andExpect(status().isForbidden());
 
         // 老客户端（1.1.50）不认 thumbnailUrl，照旧按 fileUrl 取原图：原图原样不动。
         getFile(bob.token, fileUrl).andExpect(status().isOk()).andExpect(content().bytes(photo));
@@ -134,14 +151,88 @@ class ChatImageThumbnailIntegrationTest {
         Long sourceId = ((Number) sent.get("id")).longValue();
         Long forwardedId = forward(alice.token, sourceId, targetRoom);
         assertThat(messageRepository.findById(forwardedId).orElseThrow().getThumbnailUrl()).isEqualTo(thumbnailUrl);
+        assertThat(messageRepository.findById(forwardedId).orElseThrow().getPreviewUrl()).isEqualTo(previewUrl);
         getFile(carol.token, thumbnailUrl).andExpect(status().isOk());
+        getFile(carol.token, previewUrl).andExpect(status().isOk());
         getFile(dave.token, thumbnailUrl).andExpect(status().isForbidden());
 
         // 原消息删了：只在源房间的 bob 失去访问权，转发副本仍让 carol 能看。
         mockMvc.perform(delete("/api/v1/messages/" + sourceId).header("Authorization", "Bearer " + alice.token))
                 .andExpect(status().isOk());
         getFile(bob.token, thumbnailUrl).andExpect(status().isForbidden());
+        getFile(bob.token, previewUrl).andExpect(status().isForbidden());
         getFile(carol.token, thumbnailUrl).andExpect(status().isOk());
+        getFile(carol.token, previewUrl).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("正常压缩后发的图（不到 1.5MB）：有缩略图、没有中图（客户端直接拿原图当清晰图）")
+    void modestPhotoHasThumbnailButNoPreview() throws Exception {
+        TestUser alice = createUser("th_modest");
+        Long room = createGroupChat(alice.token, "中等图 " + uniqueSuffix, List.of());
+        byte[] photo = noisyJpeg(1200, 800);
+        assertThat(photo.length).isBetween(
+                (int) ImageThumbnailService.SMALL_ORIGINAL_BYTES, (int) ImageThumbnailService.PREVIEW_MIN_SOURCE_BYTES);
+
+        Map<String, Object> sent = sendFileMessage(alice.token, room,
+                new MockMultipartFile("file", "IMG_0002.jpg", "image/jpeg", photo));
+
+        assertThat(sent.get("thumbnailUrl")).isNotNull();
+        assertThat(sent.get("previewUrl")).isNull();
+        Message stored = messageRepository.findById(((Number) sent.get("id")).longValue()).orElseThrow();
+        assertThat(stored.getRenditionVersion()).isEqualTo(ImageThumbnailService.RENDITION_VERSION);
+    }
+
+    @Test
+    @DisplayName("回填：1.1.51 的 400px 老缩略图换成 720px（转发副本一起换）、大原图补中图、老文件删掉；再跑一次什么都不做")
+    void backfillUpgradesOld400pxThumbnailsIdempotently() throws Exception {
+        TestUser alice = createUser("th_upgrade");
+        Long roomId = createGroupChat(alice.token, "换缩略图 " + uniqueSuffix, List.of());
+        User sender = userRepository.findById(alice.id).orElseThrow();
+        ChatRoom room = chatRoomRepository.findById(roomId).orElseThrow();
+        byte[] photo = noisyJpeg(2400, 1600);
+        String fileUrl = fileStorageService.uploadChatFileBytes("big.jpg", "image/jpeg", photo);
+        String oldThumbnailUrl = fileStorageService.uploadChatFileBytes(
+                "thumbnail.jpg", "image/jpeg", noisyJpeg(400, 267));
+        Message original = legacyImage(sender, room, fileUrl, photo.length);
+        original.setThumbnailUrl(oldThumbnailUrl);
+        messageRepository.save(original);
+        Message copy = legacyImage(sender, room, fileUrl, photo.length);
+        copy.setThumbnailUrl(oldThumbnailUrl);
+        messageRepository.save(copy);
+        getFile(alice.token, oldThumbnailUrl).andExpect(status().isOk());
+
+        ThumbnailBackfillService.Result first = thumbnailBackfillService.backfill(500);
+
+        assertThat(first.created()).isGreaterThanOrEqualTo(1);
+        assertThat(first.replaced()).isGreaterThanOrEqualTo(1);
+        Message upgraded = messageRepository.findById(original.getId()).orElseThrow();
+        String thumbnailUrl = upgraded.getThumbnailUrl();
+        String previewUrl = upgraded.getPreviewUrl();
+        assertThat(thumbnailUrl).startsWith("/api/files/chat/").isNotEqualTo(oldThumbnailUrl);
+        assertThat(previewUrl).startsWith("/api/files/chat/");
+        assertThat(upgraded.getRenditionVersion()).isEqualTo(ImageThumbnailService.RENDITION_VERSION);
+        Message upgradedCopy = messageRepository.findById(copy.getId()).orElseThrow();
+        assertThat(upgradedCopy.getThumbnailUrl()).isEqualTo(thumbnailUrl);
+        assertThat(upgradedCopy.getPreviewUrl()).isEqualTo(previewUrl);
+
+        BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(getFile(alice.token, thumbnailUrl)
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray()));
+        assertThat(Math.max(decoded.getWidth(), decoded.getHeight())).isEqualTo(720);
+        getFile(alice.token, previewUrl).andExpect(status().isOk());
+        // 老缩略图没有消息再引用：文件删了，地址也不再认。
+        getFile(alice.token, oldThumbnailUrl).andExpect(status().isNotFound());
+        String oldName = oldThumbnailUrl.substring("/api/files/chat/".length());
+        org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
+                () -> fileStorageService.getFile("chat", oldName));
+
+        ThumbnailBackfillService.Result second = thumbnailBackfillService.backfill(500);
+        assertThat(second.examined()).isZero();
+        assertThat(second.created()).isZero();
+        assertThat(messageRepository.findById(original.getId()).orElseThrow().getThumbnailUrl())
+                .isEqualTo(thumbnailUrl);
+        assertThat(messageRepository.findById(original.getId()).orElseThrow().getPreviewUrl())
+                .isEqualTo(previewUrl);
     }
 
     @Test

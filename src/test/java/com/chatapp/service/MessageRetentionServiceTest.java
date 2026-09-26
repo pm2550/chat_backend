@@ -44,6 +44,7 @@ class MessageRetentionServiceTest {
         image.setContent("old image");
         image.setFileUrl("/api/files/chat/old.png");
         image.setThumbnailUrl("/api/files/chat/thumb.png");
+        image.setPreviewUrl("/api/files/chat/preview.jpg");
         image.setImageGenUrl("/api/files/image-gen/generated.png");
         image.setFileName("old.png");
         image.setFileType("image/png");
@@ -60,18 +61,20 @@ class MessageRetentionServiceTest {
                 .thenReturn(new PageImpl<>(List.of()));
         when(fileStorageService.deleteFile("/api/files/chat/old.png")).thenReturn(true);
         when(fileStorageService.deleteFile("/api/files/chat/thumb.png")).thenReturn(true);
+        when(fileStorageService.deleteFile("/api/files/chat/preview.jpg")).thenReturn(true);
         when(fileStorageService.deleteFile("/api/files/image-gen/generated.png")).thenReturn(true);
         when(fileStorageService.listExpiredImageGenFileUrls(any(LocalDateTime.class), anyInt())).thenReturn(List.of());
 
         MessageRetentionService.CleanupResult result = service.cleanupExpiredMessages();
 
         assertThat(result.expiredMessages()).isEqualTo(2);
-        assertThat(result.deletedFiles()).isEqualTo(3);
+        assertThat(result.deletedFiles()).isEqualTo(4);
         assertThat(image.getIsDeleted()).isTrue();
         assertThat(image.getContent()).isEqualTo("[消息已过期]");
         assertThat(image.getFileUrl()).isNull();
         assertThat(image.getImageGenUrl()).isNull();
         assertThat(image.getThumbnailUrl()).isNull();
+        assertThat(image.getPreviewUrl()).isNull();
         assertThat(image.getEncryptedContent()).isNull();
         assertThat(text.getIsDeleted()).isTrue();
         verify(messageRepository).saveAll(List.of(image, text));

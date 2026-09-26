@@ -42,9 +42,10 @@ class ImageThumbnailServiceTest {
 
         assertEquals("image/jpeg", thumbnail.contentType());
         BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(thumbnail.bytes()));
-        assertEquals(400, decoded.getWidth());
-        assertEquals(267, decoded.getHeight());
-        assertTrue(thumbnail.bytes().length < 80 * 1024, "缩略图应在几十 KB: " + thumbnail.bytes().length);
+        assertEquals(720, decoded.getWidth());
+        assertEquals(480, decoded.getHeight());
+        // 测试图是满屏噪点（最难压的内容），真实照片同尺寸只有四五十 KB。
+        assertTrue(thumbnail.bytes().length < 200 * 1024, "缩略图应在一两百 KB 以内: " + thumbnail.bytes().length);
         assertEquals(3000, thumbnail.sourceWidth());
         assertEquals(2000, thumbnail.sourceHeight());
     }
@@ -66,10 +67,10 @@ class ImageThumbnailServiceTest {
         ImageThumbnailService.Thumbnail thumbnail = service.generate(jpeg).orElseThrow();
 
         BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(thumbnail.bytes()));
-        assertEquals(200, decoded.getWidth());
-        assertEquals(400, decoded.getHeight());
-        assertTrue(isReddish(decoded.getRGB(100, 40)), "上方应是原图左半边（红）");
-        assertTrue(isBluish(decoded.getRGB(100, 360)), "下方应是原图右半边（蓝）");
+        assertEquals(360, decoded.getWidth());
+        assertEquals(720, decoded.getHeight());
+        assertTrue(isReddish(decoded.getRGB(180, 80)), "上方应是原图左半边（红）");
+        assertTrue(isBluish(decoded.getRGB(180, 640)), "下方应是原图右半边（蓝）");
         assertEquals(800, thumbnail.sourceWidth());
         assertEquals(1600, thumbnail.sourceHeight());
     }
@@ -110,7 +111,7 @@ class ImageThumbnailServiceTest {
 
         assertEquals("image/png", thumbnail.contentType());
         BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(thumbnail.bytes()));
-        assertEquals(400, decoded.getWidth());
+        assertEquals(720, decoded.getWidth());
         assertEquals(0, decoded.getRGB(2, 2) >>> 24, "角上仍是透明的");
     }
 
@@ -137,14 +138,69 @@ class ImageThumbnailServiceTest {
 
         assertTrue(thumbnail.isPresent());
         BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(thumbnail.get().bytes()));
-        assertEquals(400, decoded.getWidth());
-        assertEquals(300, decoded.getHeight());
+        assertEquals(720, decoded.getWidth());
+        assertEquals(540, decoded.getHeight());
+    }
+
+    @Test
+    void bigOriginalAlsoGetsA1280PreviewWithinBounds() throws Exception {
+        byte[] photo = encodeJpeg(photoLike(4000, 3000), 0.92f);
+        assertTrue(photo.length > ImageThumbnailService.PREVIEW_MIN_SOURCE_BYTES,
+                "测试图要像“原图”发送的照片那样大: " + photo.length);
+
+        ImageThumbnailService.Renditions renditions = service.generateRenditions(photo).orElseThrow();
+
+        BufferedImage thumbnail = ImageIO.read(new ByteArrayInputStream(renditions.thumbnail().bytes()));
+        assertEquals(720, thumbnail.getWidth());
+        assertEquals(540, thumbnail.getHeight());
+        ImageThumbnailService.Thumbnail preview = renditions.preview();
+        assertTrue(preview != null, "大原图要有中图");
+        assertEquals("image/jpeg", preview.contentType());
+        BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(preview.bytes()));
+        assertEquals(1280, decoded.getWidth());
+        assertEquals(960, decoded.getHeight());
+        assertTrue(preview.bytes().length < photo.length / 4,
+                "中图应远小于原图: " + preview.bytes().length + " vs " + photo.length);
+        assertTrue(preview.bytes().length > renditions.thumbnail().bytes().length);
+        assertEquals(4000, preview.sourceWidth());
+        assertEquals(3000, preview.sourceHeight());
+    }
+
+    @Test
+    void modestOriginalGetsThumbnailButNoPreview() throws Exception {
+        // 正常压缩后发的图（长边 2048、几百 KB）：客户端直接拿原图当清晰图，不另做中图。
+        byte[] photo = encodeJpeg(photoLike(2048, 1536), 0.82f);
+        assertTrue(photo.length > ImageThumbnailService.SMALL_ORIGINAL_BYTES
+                && photo.length <= ImageThumbnailService.PREVIEW_MIN_SOURCE_BYTES, "测试图大小: " + photo.length);
+
+        ImageThumbnailService.Renditions renditions = service.generateRenditions(photo).orElseThrow();
+
+        assertEquals(null, renditions.preview());
+        BufferedImage thumbnail = ImageIO.read(new ByteArrayInputStream(renditions.thumbnail().bytes()));
+        assertEquals(720, thumbnail.getWidth());
     }
 
     // ---------------------------------------------------------------- helpers
 
     static byte[] noisyJpeg(int width, int height, float quality) throws Exception {
         return encodeJpeg(noisy(width, height), quality);
+    }
+
+    /** 像照片的图：平滑的渐变和色块 + 少量噪点（满屏噪点比真实照片难压得多，量不出真实大小）。 */
+    static BufferedImage photoLike(int width, int height) {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Random random = new Random(5);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                double fx = (double) x / width;
+                double fy = (double) y / height;
+                int r = clamp((int) (120 + 90 * Math.sin(fx * 9 + fy * 3)) + random.nextInt(24) - 12);
+                int g = clamp((int) (110 + 80 * Math.cos(fy * 7 - fx * 2)) + random.nextInt(24) - 12);
+                int b = clamp((int) (100 + 70 * Math.sin((fx + fy) * 5)) + random.nextInt(24) - 12);
+                image.setRGB(x, y, (r << 16) | (g << 8) | b);
+            }
+        }
+        return image;
     }
 
     static BufferedImage noisy(int width, int height) {
