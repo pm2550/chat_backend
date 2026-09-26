@@ -140,6 +140,7 @@ public class ChatRoomController {
             @RequestParam(defaultValue = "false") boolean includeBlocked,
             @RequestParam(required = false) String roomType,
             @RequestParam(required = false) String type,
+            @RequestParam(required = false) String excludeRoomType,
             Authentication auth) {
         try {
             User currentUser = userService.findUserByUsername(auth.getName());
@@ -153,7 +154,8 @@ public class ChatRoomController {
                     pageable,
                     includeHidden,
                     includeBlocked,
-                    parseRoomType(roomType != null ? roomType : type));
+                    parseRoomType(roomType != null ? roomType : type),
+                    parseRoomType(excludeRoomType));
             
             Map<String, Object> response = new HashMap<>();
             response.put("chatRooms", chatRooms.getContent());
@@ -182,6 +184,7 @@ public class ChatRoomController {
             @RequestParam(defaultValue = "false") boolean includeBlocked,
             @RequestParam(required = false) String roomType,
             @RequestParam(required = false) String type,
+            @RequestParam(required = false) String excludeRoomType,
             Authentication auth) {
         User currentUser = userService.findUserByUsername(auth.getName());
         Pageable pageable = PageRequest.of(page, Math.min(Math.max(size, 1), 100));
@@ -190,7 +193,8 @@ public class ChatRoomController {
                 pageable,
                 includeHidden,
                 includeBlocked,
-                parseRoomType(roomType != null ? roomType : type));
+                parseRoomType(roomType != null ? roomType : type),
+                parseRoomType(excludeRoomType));
 
         Map<String, Object> response = new HashMap<>();
         response.put("chatRooms", summaries.getContent());

@@ -426,6 +426,40 @@ public class ChatRoomIntegrationTest {
     }
 
     @Test
+    @DisplayName("Room summaries can exclude private chats for the message tab")
+    void testGetUserChatRoomSummariesExcludingPrivateChats() throws Exception {
+        Object[] owner = createUserAndLogin("excludeowner");
+        String ownerToken = (String) owner[0];
+        Object[] peer = createUserAndLogin("excludepeer");
+        Long peerId = (Long) peer[1];
+        Long groupId = createGroupChat(
+                ownerToken, "Exclude Group " + uniqueSuffix, "group", List.of(peerId));
+        mockMvc.perform(post("/api/v1/chat-rooms/private/" + peerId)
+                .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/chat-rooms/summaries")
+                .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.chatRooms.length()").value(2));
+
+        mockMvc.perform(get("/api/v1/chat-rooms/summaries")
+                .header("Authorization", "Bearer " + ownerToken)
+                .param("excludeRoomType", "PRIVATE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.chatRooms.length()").value(1))
+                .andExpect(jsonPath("$.chatRooms[0].id").value(groupId));
+
+        mockMvc.perform(get("/api/v1/chat-rooms")
+                .header("Authorization", "Bearer " + ownerToken)
+                .param("excludeRoomType", "PRIVATE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.chatRooms.length()").value(1))
+                .andExpect(jsonPath("$.chatRooms[0].id").value(groupId));
+    }
+
+    @Test
     @DisplayName("Search public chat rooms")
     void testSearchPublicChatRooms() throws Exception {
         Object[] user = createUserAndLogin("searcher");

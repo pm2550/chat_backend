@@ -100,7 +100,7 @@ class ChatRoomServicePrivacyTest {
         ChatRoom privateRoom = new ChatRoom();
         privateRoom.setId(20L);
         privateRoom.setRoomType(ChatRoom.RoomType.PRIVATE);
-        when(chatRoomRepository.findByUserIdWithDisplayState(1L, false, false, null, pageable))
+        when(chatRoomRepository.findByUserIdWithDisplayState(1L, false, false, null, null, pageable))
                 .thenReturn(new PageImpl<>(List.of(privateRoom), pageable, 1));
         ChatRoomRepository.PrivateRoomParticipantProjection self =
                 mock(ChatRoomRepository.PrivateRoomParticipantProjection.class);

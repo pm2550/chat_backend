@@ -296,13 +296,13 @@ class ChatRoomServiceTest {
     void getUserChatRooms_defaultsToVisibleMessageStreamOnly() {
         Page<ChatRoom> page = new PageImpl<>(List.of(groupRoom));
         PageRequest pageable = PageRequest.of(0, 20);
-        when(chatRoomRepository.findByUserIdWithDisplayState(1L, false, false, null, pageable))
+        when(chatRoomRepository.findByUserIdWithDisplayState(1L, false, false, null, null, pageable))
                 .thenReturn(page);
 
         Page<ChatRoom> result = chatRoomService.getUserChatRooms(1L, pageable);
 
         assertSame(page, result);
-        verify(chatRoomRepository).findByUserIdWithDisplayState(1L, false, false, null, pageable);
+        verify(chatRoomRepository).findByUserIdWithDisplayState(1L, false, false, null, null, pageable);
     }
 
     @Test
@@ -314,6 +314,7 @@ class ChatRoomServiceTest {
                 true,
                 true,
                 ChatRoom.RoomType.GROUP,
+                null,
                 pageable)).thenReturn(page);
 
         Page<ChatRoom> result = chatRoomService.getUserChatRooms(
@@ -329,6 +330,7 @@ class ChatRoomServiceTest {
                 true,
                 true,
                 ChatRoom.RoomType.GROUP,
+                null,
                 pageable);
     }
 
@@ -379,7 +381,7 @@ class ChatRoomServiceTest {
         latest.setCreatedAt(LocalDateTime.of(2026, 7, 10, 10, 6));
 
         when(chatRoomRepository.findByUserIdWithDisplayState(
-                1L, false, false, null, pageable)).thenReturn(roomPage);
+                1L, false, false, null, null, pageable)).thenReturn(roomPage);
         when(chatRoomRepository.findMembershipsByUserIdAndRoomIds(1L, List.of(10L, 20L)))
                 .thenReturn(List.of(groupMembership, privateMembership));
         when(chatRoomRepository.countMembersByRoomIds(List.of(10L, 20L)))

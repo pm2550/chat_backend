@@ -86,11 +86,13 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
            "AND (:includeBlocked = true OR COALESCE(crm.isBlocked, false) = false) " +
            "AND (:includeHidden = true OR crm.hiddenAt IS NULL) " +
            "AND (:roomType IS NULL OR cr.roomType = :roomType) " +
+           "AND (:excludeRoomType IS NULL OR cr.roomType <> :excludeRoomType) " +
            "ORDER BY COALESCE(crm.isPinned, false) DESC, cr.updatedAt DESC")
     Page<ChatRoom> findByUserIdWithDisplayState(@Param("userId") Long userId,
                                                 @Param("includeHidden") boolean includeHidden,
                                                 @Param("includeBlocked") boolean includeBlocked,
                                                 @Param("roomType") ChatRoom.RoomType roomType,
+                                                @Param("excludeRoomType") ChatRoom.RoomType excludeRoomType,
                                                 Pageable pageable);
 
     @Query("SELECT crm FROM ChatRoomMember crm WHERE crm.user.id = :userId " +

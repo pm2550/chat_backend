@@ -263,12 +263,26 @@ public class ChatRoomService {
                                            boolean includeHidden,
                                            boolean includeBlocked,
                                            ChatRoom.RoomType roomType) {
+        return getUserChatRooms(userId, pageable, includeHidden, includeBlocked, roomType, null);
+    }
+
+    /**
+     * excludeRoomType 用来把某一类会话整个排除：消息 tab 只列群聊和频道，
+     * 私聊全部放在联系人里（excludeRoomType=PRIVATE）。
+     */
+    public Page<ChatRoom> getUserChatRooms(Long userId,
+                                           Pageable pageable,
+                                           boolean includeHidden,
+                                           boolean includeBlocked,
+                                           ChatRoom.RoomType roomType,
+                                           ChatRoom.RoomType excludeRoomType) {
         Pageable unsortedPageable = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());
         return chatRoomRepository.findByUserIdWithDisplayState(
                 userId,
                 includeHidden,
                 includeBlocked,
                 roomType,
+                excludeRoomType,
                 unsortedPageable);
     }
 
@@ -278,12 +292,23 @@ public class ChatRoomService {
                                                              boolean includeHidden,
                                                              boolean includeBlocked,
                                                              ChatRoom.RoomType roomType) {
+        return getUserChatRoomSummaries(userId, pageable, includeHidden, includeBlocked, roomType, null);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ChatRoomSummaryDto> getUserChatRoomSummaries(Long userId,
+                                                             Pageable pageable,
+                                                             boolean includeHidden,
+                                                             boolean includeBlocked,
+                                                             ChatRoom.RoomType roomType,
+                                                             ChatRoom.RoomType excludeRoomType) {
         Page<ChatRoom> rooms = getUserChatRooms(
                 userId,
                 pageable,
                 includeHidden,
                 includeBlocked,
-                roomType);
+                roomType,
+                excludeRoomType);
         if (rooms.isEmpty()) {
             return new PageImpl<>(List.of(), rooms.getPageable(), rooms.getTotalElements());
         }
