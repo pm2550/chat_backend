@@ -4,6 +4,7 @@ import com.chatapp.dto.BotDto;
 import com.chatapp.entity.BotConfig;
 import com.chatapp.entity.ChatRoom;
 import com.chatapp.entity.Message;
+import com.chatapp.entity.User;
 import com.chatapp.repository.MessageRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -127,6 +128,76 @@ class BotVisionAttachmentSelectorTest {
 
         assertTrue(selected.image().attachments().isEmpty());
         verify(messageRepository, never()).findFileMessagesInChatRoom(any(), any(), any());
+    }
+
+    @Test
+    void shortFollowUpRightAfterOwnImageLooksAtThatImage() {
+        // 发完两张图，过了几个小时 @阿雷 可爱吗：话里没有"图片"，问的就是刚发的图。
+        Message source = from(text(50L, 7L, "@阿雷 可爱吗"), 37L);
+        Message previous = from(image(49L, 7L, "paste.jpg"), 37L);
+        previous.setCreatedAt(LocalDateTime.now().minusHours(3));
+        when(visionService.isImageMessage(source)).thenReturn(false);
+        when(visionService.isImageMessage(previous)).thenReturn(true);
+        when(messageRepository.findByChatRoomIdBeforeMessage(eq(7L), eq(50L), any()))
+                .thenReturn(new PageImpl<>(List.of(previous)));
+        when(visionService.resolve(previous, true)).thenReturn(imageContext("paste.jpg"));
+
+        BotVisionAttachmentSelector.Selection selected = selector.select(bot, 7L, source, source.getContent());
+
+        assertEquals(49L, selected.messageId());
+        assertEquals("preceding_image", selected.reason());
+        assertFalse(selected.image().attachments().isEmpty());
+
+        // 只 @ 一下也一样。
+        Message bare = from(text(50L, 7L, "@阿雷"), 37L);
+        when(visionService.isImageMessage(bare)).thenReturn(false);
+        assertEquals(49L, selector.select(bot, 7L, bare, bare.getContent()).messageId());
+    }
+
+    @Test
+    void followUpDoesNotGrabSomeoneElsesOrOlderOrBotImage() {
+        Message source = from(text(50L, 7L, "@阿雷 可爱吗"), 37L);
+        when(visionService.isImageMessage(source)).thenReturn(false);
+
+        Message othersImage = from(image(49L, 7L, "other.jpg"), 38L);
+        when(visionService.isImageMessage(othersImage)).thenReturn(true);
+        when(messageRepository.findByChatRoomIdBeforeMessage(eq(7L), eq(50L), any()))
+                .thenReturn(new PageImpl<>(List.of(othersImage)));
+        assertTrue(selector.select(bot, 7L, source, source.getContent()).image().attachments().isEmpty());
+
+        Message stale = from(image(49L, 7L, "stale.jpg"), 37L);
+        stale.setCreatedAt(LocalDateTime.now().minusHours(30));
+        when(visionService.isImageMessage(stale)).thenReturn(true);
+        when(messageRepository.findByChatRoomIdBeforeMessage(eq(7L), eq(50L), any()))
+                .thenReturn(new PageImpl<>(List.of(stale)));
+        assertTrue(selector.select(bot, 7L, source, source.getContent()).image().attachments().isEmpty());
+
+        Message botImage = from(image(49L, 7L, "bot.jpg"), 37L);
+        botImage.setBotConfig(bot);
+        when(visionService.isImageMessage(botImage)).thenReturn(true);
+        when(messageRepository.findByChatRoomIdBeforeMessage(eq(7L), eq(50L), any()))
+                .thenReturn(new PageImpl<>(List.of(botImage)));
+        assertTrue(selector.select(bot, 7L, source, source.getContent()).image().attachments().isEmpty());
+        verify(visionService, never()).resolve(any(), eq(true));
+    }
+
+    @Test
+    void longQuestionAfterImageDoesNotAttachIt() {
+        Message source = from(text(50L, 7L,
+                "@阿雷 明天要不要带伞出门，我想去公园散步然后顺便买点菜回家做饭"), 37L);
+        when(visionService.isImageMessage(source)).thenReturn(false);
+
+        BotVisionAttachmentSelector.Selection selected = selector.select(bot, 7L, source, source.getContent());
+
+        assertTrue(selected.image().attachments().isEmpty());
+        verify(messageRepository, never()).findByChatRoomIdBeforeMessage(any(), any(), any());
+    }
+
+    private Message from(Message message, Long senderId) {
+        User sender = new User();
+        sender.setId(senderId);
+        message.setSender(sender);
+        return message;
     }
 
     @Test

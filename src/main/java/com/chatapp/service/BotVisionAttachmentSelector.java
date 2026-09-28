@@ -5,6 +5,7 @@ import com.chatapp.entity.Message;
 import com.chatapp.repository.MessageRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
@@ -21,6 +22,9 @@ import java.util.regex.Pattern;
 public class BotVisionAttachmentSelector {
     private static final int CANDIDATE_LIMIT = 20;
     private static final int AUTO_LOOKBACK_HOURS = 24;
+    /** 去掉 @ 之后不超过这么多字的追问（"可爱吗""咋样"），才会接上紧挨着的那张图。 */
+    private static final int SHORT_FOLLOW_UP_CHARS = 20;
+    private static final Pattern MENTION = Pattern.compile("@\\S+");
     private static final Pattern VISUAL_REFERENCE = Pattern.compile(
             "(?iu)(这张|那张|这幅|那幅|图里|图片|照片|截图|画面|画作|作品|佳作|看图|"
                     + "(?:刚才|前面|上面)(?:的)?(?:图|图片|照片|截图|画|画作|作品)|"
@@ -45,6 +49,12 @@ public class BotVisionAttachmentSelector {
                 && referencesImage(prompt)) {
             selected = recentReferencedImage(roomId, sourceMessage, prompt);
             reason = "recent_room_image";
+        }
+        if (selected == null
+                && !Boolean.FALSE.equals(bot.getHistoryImageInspectionEnabled())
+                && isShortFollowUp(prompt)) {
+            selected = precedingImageFromSameSender(roomId, sourceMessage);
+            reason = "preceding_image";
         }
         if (selected == null) {
             return Selection.empty();
@@ -108,6 +118,40 @@ public class BotVisionAttachmentSelector {
                 .filter(message -> message.getCreatedAt() == null || !message.getCreatedAt().isBefore(cutoff))
                 .findFirst()
                 .orElse(null);
+    }
+
+    /**
+     * 发完图紧接着问一句"可爱吗"：问的就是刚发的那张图，即使话里没有"图片 / 照片"。
+     * 只看房间里紧挨着的上一条消息，而且必须是同一个人发的图，别人的图或隔了别的话都不算。
+     */
+    private Message precedingImageFromSameSender(Long roomId, Message sourceMessage) {
+        if (roomId == null || sourceMessage == null || sourceMessage.getId() == null
+                || sourceMessage.getSender() == null || sourceMessage.getSender().getId() == null) {
+            return null;
+        }
+        Page<Message> before = messageRepository.findByChatRoomIdBeforeMessage(
+                roomId, sourceMessage.getId(), PageRequest.of(0, 1));
+        if (before == null || before.isEmpty()) {
+            return null;
+        }
+        Message previous = before.getContent().get(0);
+        LocalDateTime cutoff = LocalDateTime.now().minusHours(AUTO_LOOKBACK_HOURS);
+        boolean sameSender = previous.getSender() != null
+                && Objects.equals(previous.getSender().getId(), sourceMessage.getSender().getId())
+                && previous.getBotConfig() == null;
+        boolean recent = previous.getCreatedAt() == null || !previous.getCreatedAt().isBefore(cutoff);
+        return sameSender && recent && visionAttachmentService.isImageMessage(previous)
+                ? previous
+                : null;
+    }
+
+    private boolean isShortFollowUp(String prompt) {
+        if (prompt == null) {
+            return false;
+        }
+        String text = MENTION.matcher(prompt).replaceAll("").strip();
+        // 只 @ 了一下（空）也算：规则里本来就要求这时去接上一条。
+        return text.codePointCount(0, text.length()) <= SHORT_FOLLOW_UP_CHARS;
     }
 
     private boolean referencesImage(String prompt) {
