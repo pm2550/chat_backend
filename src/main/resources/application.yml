@@ -168,6 +168,12 @@ provider-vault:
   master-key: ${PROVIDER_VAULT_MASTER_KEY:${JWT_SECRET:}}
 
 image-generation:
+  # 默认画图渠道：hermes（Grok 扩写 + 出图）或 pixai（PixAI 自带扩写）
+  provider: ${IMAGE_GENERATION_PROVIDER:hermes}
+  pixai:
+    api-key: ${PIXAI_API_KEY:}
+    base-url: ${PIXAI_BASE_URL:https://api.pixai.art}
+    model-version-id: ${PIXAI_MODEL_VERSION_ID:1983308862240288769}
   hermes:
     draw-url: ${HERMES_IMAGE_DRAW_URL:http://hermes-image-api:8765/draw}
     image-root: ${HERMES_IMAGE_CACHE_ROOT:/data2/hermes/data/cache/images}

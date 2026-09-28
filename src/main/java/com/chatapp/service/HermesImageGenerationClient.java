@@ -10,7 +10,6 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -20,7 +19,6 @@ import java.nio.file.Paths;
 import java.time.Duration;
 
 @Component
-@Primary
 @RequiredArgsConstructor
 public class HermesImageGenerationClient implements ImageGenerationClient {
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");

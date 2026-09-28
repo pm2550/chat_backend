@@ -132,6 +132,30 @@ class ImageGenerationServiceTest {
     }
 
     @Test
+    void generatedWebpIsStoredAsWebpNotPng() throws Exception {
+        // PixAI 出的是 WebP：按内容认格式存，缩略图照常做（ffmpeg 解 WebP）。
+        arrangeRoomAndUser();
+        when(pointsService.debit(1L, "image_generation", "image_generation:77"))
+                .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
+        when(generationClient.submit("", "一只橘猫", 1, "1024*1024", true))
+                .thenReturn(new ImageGenerationClient.SubmitResult("task-webp"));
+        when(generationClient.poll("", "task-webp"))
+                .thenReturn(new ImageGenerationClient.PollResult(
+                        ImageGenerationClient.PollResult.Status.SUCCEEDED, "https://cdn.example/x", null));
+        byte[] webp = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P', 'V', 'P', '8', ' '};
+        when(generationClient.download("https://cdn.example/x")).thenReturn(webp);
+        when(fileStorageService.uploadGeneratedImage(eq("image-generation-77.webp"), eq("image/webp"), any(byte[].class)))
+                .thenReturn("/api/files/image-gen/generated.webp");
+
+        service.submit(1L, new ImageGenerationDto.GenerateRequest(10L, "一只橘猫", 1, "1024*1024", true));
+
+        assertThat(persistedMessage.getImageGenStatus()).isEqualTo(Message.ImageGenerationStatus.DONE);
+        assertThat(persistedMessage.getFileUrl()).isEqualTo("/api/files/image-gen/generated.webp");
+        assertThat(ImageGenerationService.sniffImageMimeType(new byte[]{(byte) 0xFF, (byte) 0xD8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}))
+                .isEqualTo("image/jpeg");
+    }
+
+    @Test
     void submitRefundsPointsWhenProviderFails() {
         arrangeRoomAndUser();
         when(pointsService.debit(1L, "image_generation", "image_generation:77"))

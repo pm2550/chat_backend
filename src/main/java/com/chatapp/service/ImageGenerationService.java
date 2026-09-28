@@ -197,7 +197,8 @@ public class ImageGenerationService {
                             : result.errorMessage());
                 }
                 bytes = generationClient.download(result.imageUrl());
-                mimeType = "image/png";
+                // Hermes 给 PNG，PixAI 给 WebP：按内容认格式，别一律当 PNG 存。
+                mimeType = sniffImageMimeType(bytes);
             } else {
                 BotImageGenerationClient.GeneratedImage generated =
                         botImageGenerationClient.generate(providerConfig, prompt, size);
@@ -205,7 +206,7 @@ public class ImageGenerationService {
                 mimeType = generated.mimeType();
             }
             String fileUrl = fileStorageService.uploadGeneratedImage(
-                    "image-generation-" + messageId + ".png",
+                    "image-generation-" + messageId + "." + extensionFor(mimeType),
                     mimeType,
                     bytes);
             complete(messageId, fileUrl, bytes.length, createThumbnail(bytes));
@@ -218,6 +219,37 @@ public class ImageGenerationService {
             }
             fail(messageId, e.getMessage());
         }
+    }
+
+    static String sniffImageMimeType(byte[] bytes) {
+        if (bytes != null && bytes.length >= 12) {
+            if ((bytes[0] & 0xFF) == 0x89 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
+                return "image/png";
+            }
+            if ((bytes[0] & 0xFF) == 0xFF && (bytes[1] & 0xFF) == 0xD8) {
+                return "image/jpeg";
+            }
+            if (bytes[0] == 'R' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == 'F'
+                    && bytes[8] == 'W' && bytes[9] == 'E' && bytes[10] == 'B' && bytes[11] == 'P') {
+                return "image/webp";
+            }
+            if (bytes[0] == 'G' && bytes[1] == 'I' && bytes[2] == 'F') {
+                return "image/gif";
+            }
+        }
+        return "image/png";
+    }
+
+    private static String extensionFor(String mimeType) {
+        if (mimeType == null) {
+            return "png";
+        }
+        return switch (mimeType.toLowerCase()) {
+            case "image/jpeg", "image/jpg" -> "jpg";
+            case "image/webp" -> "webp";
+            case "image/gif" -> "gif";
+            default -> "png";
+        };
     }
 
     private void runAfterCommit(Runnable task) {
