@@ -40,6 +40,11 @@ public class ConfiguredImageGenerationClient implements ImageGenerationClient {
     }
 
     @Override
+    public SubmitResult submit(String apiKey, String prompt, int count, String size, String promptHelperLevel) {
+        return active().submit(apiKey, prompt, count, size, promptHelperLevel);
+    }
+
+    @Override
     public PollResult poll(String apiKey, String taskId) {
         return active().poll(apiKey, taskId);
     }

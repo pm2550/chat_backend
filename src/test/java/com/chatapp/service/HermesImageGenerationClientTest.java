@@ -57,12 +57,16 @@ class HermesImageGenerationClientTest {
                 "蓝色机器人",
                 1,
                 "1024*1024",
-                false);
+                "off");
         ImageGenerationClient.PollResult poll = client.poll("", submit.taskId());
 
         assertThat(requestBody.get()).contains("\"prompt\":\"蓝色机器人\"");
         assertThat(requestBody.get()).contains("\"ratio\":\"1:1\"");
         assertThat(requestBody.get()).contains("\"expand\":false");
+
+        // Hermes 只有开/关：仅翻译也算扩写。
+        client.submit("", "蓝色机器人", 1, "1024*1024", "low");
+        assertThat(requestBody.get()).contains("\"expand\":true");
         assertThat(poll.status()).isEqualTo(ImageGenerationClient.PollResult.Status.SUCCEEDED);
         assertThat(client.download(poll.imageUrl())).isEqualTo(pngBytes);
     }

@@ -27,7 +27,18 @@ public class ImageGenerationDto {
 
         private String size = "1024*1024";
 
+        /** 旧客户端的开关：false = 不扩写。新客户端改传 {@link #promptHelper}。 */
         private Boolean expand = true;
+
+        /**
+         * 画图扩写档位："off"（按原文）/ "low"（只翻译不改写）/ "medium"（创意扩写）。
+         * 不传时按 expand 推断：expand=false → off，否则 medium。
+         */
+        private String promptHelper;
+
+        public GenerateRequest(Long roomId, String prompt, Integer n, String size, Boolean expand) {
+            this(roomId, prompt, n, size, expand, null);
+        }
     }
 
     @Data

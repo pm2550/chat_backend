@@ -20,6 +20,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.Locale;
 import java.util.concurrent.Executor;
 
 @Service
@@ -111,6 +112,7 @@ public class ImageGenerationService {
                                                                String botDisplayName,
                                                                ImageGenerationDto.GenerateRequest request) {
         String prompt = normalizePrompt(request.getPrompt());
+        String promptHelperLevel = promptHelperLevel(request);
         int count = request.getN() == null ? 1 : request.getN();
         if (count != 1) {
             throw new IllegalArgumentException("当前仅支持一次生成一张图片");
@@ -154,7 +156,6 @@ public class ImageGenerationService {
 
         Long messageId = message.getId();
         String size = request.getSize();
-        boolean expand = request.getExpand() == null || request.getExpand();
         BotImageGenerationClient.ProviderConfig providerConfig =
                 botImageGenerationClient.resolve(botConfig);
         runAfterCommit(() -> process(
@@ -162,7 +163,7 @@ public class ImageGenerationService {
                 chargedUserId,
                 prompt,
                 size,
-                expand,
+                promptHelperLevel,
                 refId,
                 providerConfig));
 
@@ -178,7 +179,7 @@ public class ImageGenerationService {
                          Long userId,
                          String prompt,
                          String size,
-                         boolean expand,
+                         String promptHelperLevel,
                          String refId,
                          BotImageGenerationClient.ProviderConfig providerConfig) {
         try {
@@ -188,7 +189,7 @@ public class ImageGenerationService {
             String mimeType;
             if (providerConfig == null
                     || providerConfig.provider() == BotConfig.ImageGenerationProvider.HERMES) {
-                ImageGenerationClient.SubmitResult submit = generationClient.submit("", prompt, 1, size, expand);
+                ImageGenerationClient.SubmitResult submit = generationClient.submit("", prompt, 1, size, promptHelperLevel);
                 updateProviderTask(messageId, submit.taskId());
                 ImageGenerationClient.PollResult result = waitForResult("", submit.taskId());
                 if (result.status() != ImageGenerationClient.PollResult.Status.SUCCEEDED) {
@@ -339,6 +340,26 @@ public class ImageGenerationService {
             message = messageRepository.save(message);
             rawWebSocketHandler.broadcastMessageUpdated(message);
         });
+    }
+
+    /**
+     * 扩写档位：显式传的 promptHelper 优先；老客户端只传 expand，false 视为不扩写；
+     * 都没说（包括机器人画图）就用创意扩写。
+     */
+    static String promptHelperLevel(ImageGenerationDto.GenerateRequest request) {
+        String explicit = request.getPromptHelper();
+        if (explicit != null && !explicit.isBlank()) {
+            String level = explicit.trim().toLowerCase(Locale.ROOT);
+            return switch (level) {
+                case ImageGenerationClient.PROMPT_HELPER_OFF,
+                     ImageGenerationClient.PROMPT_HELPER_LOW,
+                     ImageGenerationClient.PROMPT_HELPER_MEDIUM -> level;
+                default -> throw new IllegalArgumentException("扩写档位只能是 off（关闭）、low（仅翻译）或 medium（创意扩写）");
+            };
+        }
+        return Boolean.FALSE.equals(request.getExpand())
+                ? ImageGenerationClient.PROMPT_HELPER_OFF
+                : ImageGenerationClient.PROMPT_HELPER_MEDIUM;
     }
 
     private String normalizePrompt(String prompt) {

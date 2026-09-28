@@ -27,7 +27,7 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -103,7 +103,7 @@ class ImageGenerationServiceTest {
         arrangeRoomAndUser();
         when(pointsService.debit(1L, "image_generation", "image_generation:77"))
                 .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
-        when(generationClient.submit("", "画一只蓝色机器人", 1, "1024*1024", false))
+        when(generationClient.submit("", "画一只蓝色机器人", 1, "1024*1024", "off"))
                 .thenReturn(new ImageGenerationClient.SubmitResult("/data2/hermes/data/cache/images/task-1.png"));
         when(generationClient.poll("", "/data2/hermes/data/cache/images/task-1.png"))
                 .thenReturn(new ImageGenerationClient.PollResult(
@@ -137,7 +137,7 @@ class ImageGenerationServiceTest {
         arrangeRoomAndUser();
         when(pointsService.debit(1L, "image_generation", "image_generation:77"))
                 .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
-        when(generationClient.submit("", "一只橘猫", 1, "1024*1024", true))
+        when(generationClient.submit("", "一只橘猫", 1, "1024*1024", "medium"))
                 .thenReturn(new ImageGenerationClient.SubmitResult("task-webp"));
         when(generationClient.poll("", "task-webp"))
                 .thenReturn(new ImageGenerationClient.PollResult(
@@ -160,7 +160,7 @@ class ImageGenerationServiceTest {
         arrangeRoomAndUser();
         when(pointsService.debit(1L, "image_generation", "image_generation:77"))
                 .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
-        when(generationClient.submit("", "失败图", 1, "1024*1024", true))
+        when(generationClient.submit("", "失败图", 1, "1024*1024", "medium"))
                 .thenThrow(new IllegalStateException("quota exhausted"));
 
         service.submit(
@@ -186,7 +186,7 @@ class ImageGenerationServiceTest {
 
         when(pointsService.debit(1L, "image_generation", "image_generation:77"))
                 .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
-        when(generationClient.submit("", "画一座海边城市", 1, "1024*1024", true))
+        when(generationClient.submit("", "画一座海边城市", 1, "1024*1024", "medium"))
                 .thenReturn(new ImageGenerationClient.SubmitResult("/data2/hermes/data/cache/images/task-3.png"));
         when(generationClient.poll("", "/data2/hermes/data/cache/images/task-3.png"))
                 .thenReturn(new ImageGenerationClient.PollResult(
@@ -246,7 +246,7 @@ class ImageGenerationServiceTest {
                         10L, "draw a library", 1, "1024*1024", true));
 
         assertThat(persistedMessage.getFileUrl()).isEqualTo("/api/files/image-gen/byo.png");
-        verify(generationClient, never()).submit(anyString(), anyString(), anyInt(), anyString(), anyBoolean());
+        verifyNoInteractions(generationClient);
         verify(botImageGenerationClient).generate(providerConfig, "draw a library", "1024*1024");
     }
 
@@ -255,7 +255,7 @@ class ImageGenerationServiceTest {
         arrangeRoomAndUser();
         when(pointsService.debit(1L, "image_generation", "image_generation:77"))
                 .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
-        when(generationClient.submit("", "延迟提交", 1, "1024*1024", true))
+        when(generationClient.submit("", "延迟提交", 1, "1024*1024", "medium"))
                 .thenReturn(new ImageGenerationClient.SubmitResult("/data2/hermes/data/cache/images/task-2.png"));
         when(generationClient.poll("", "/data2/hermes/data/cache/images/task-2.png"))
                 .thenReturn(new ImageGenerationClient.PollResult(
@@ -274,7 +274,7 @@ class ImageGenerationServiceTest {
                     new ImageGenerationDto.GenerateRequest(10L, "延迟提交", 1, "1024*1024", true));
 
             assertThat(persistedMessage.getImageGenStatus()).isEqualTo(Message.ImageGenerationStatus.QUEUED);
-            verify(generationClient, never()).submit("", "延迟提交", 1, "1024*1024", true);
+            verify(generationClient, never()).submit("", "延迟提交", 1, "1024*1024", "medium");
 
             for (TransactionSynchronization synchronization : TransactionSynchronizationManager.getSynchronizations()) {
                 synchronization.afterCommit();
@@ -292,7 +292,7 @@ class ImageGenerationServiceTest {
         arrangeRoomAndUser();
         when(pointsService.debit(1L, "image_generation", "image_generation:77"))
                 .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
-        when(generationClient.submit("", "隐藏会话里画图", 1, "1024*1024", true))
+        when(generationClient.submit("", "隐藏会话里画图", 1, "1024*1024", "medium"))
                 .thenThrow(new IllegalStateException("quota exhausted"));
 
         service.submit(
@@ -317,7 +317,55 @@ class ImageGenerationServiceTest {
         verify(messageRepository, never()).save(any(Message.class));
         verify(pointsService, never()).debit(anyLong(), anyString(), anyString());
         verify(rawWebSocketHandler, never()).broadcastMessageWithoutOfflineNotification(any());
-        verify(generationClient, never()).submit(anyString(), anyString(), anyInt(), anyString(), anyBoolean());
+        verifyNoInteractions(generationClient);
+    }
+
+    @Test
+    void explicitPromptHelperLevelWinsOverLegacyExpandAndReachesTheClient() {
+        arrangeRoomAndUser();
+        when(pointsService.debit(1L, "image_generation", "image_generation:77"))
+                .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
+        when(generationClient.submit("", "仅翻译", 1, "1024*1024", "low"))
+                .thenThrow(new IllegalStateException("stop here"));
+
+        service.submit(1L, new ImageGenerationDto.GenerateRequest(
+                10L, "仅翻译", 1, "1024*1024", false, "low"));
+
+        verify(generationClient).submit("", "仅翻译", 1, "1024*1024", "low");
+    }
+
+    @Test
+    void promptHelperLevelFallsBackToLegacyExpandThenCreativeDefault() {
+        assertThat(ImageGenerationService.promptHelperLevel(
+                new ImageGenerationDto.GenerateRequest(10L, "p", 1, "1024*1024", true, "off"))).isEqualTo("off");
+        assertThat(ImageGenerationService.promptHelperLevel(
+                new ImageGenerationDto.GenerateRequest(10L, "p", 1, "1024*1024", null, " Medium "))).isEqualTo("medium");
+        // 老客户端：只传 expand=false = 关闭扩写。
+        assertThat(ImageGenerationService.promptHelperLevel(
+                new ImageGenerationDto.GenerateRequest(10L, "p", 1, "1024*1024", false))).isEqualTo("off");
+        assertThat(ImageGenerationService.promptHelperLevel(
+                new ImageGenerationDto.GenerateRequest(10L, "p", 1, "1024*1024", true))).isEqualTo("medium");
+        // 什么都没说（包括机器人画图）：创意扩写。
+        assertThat(ImageGenerationService.promptHelperLevel(
+                new ImageGenerationDto.GenerateRequest(10L, "p", 1, "1024*1024", null, null))).isEqualTo("medium");
+        assertThat(ImageGenerationService.promptHelperLevel(new ImageGenerationDto.GenerateRequest()))
+                .isEqualTo("medium");
+    }
+
+    @Test
+    void invalidPromptHelperLevelIsRejectedBeforeCreatingMessageOrDebiting() {
+        User user = new User();
+        user.setId(1L);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> service.submit(1L, new ImageGenerationDto.GenerateRequest(
+                10L, "猫", 1, "1024*1024", true, "high")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("扩写档位");
+
+        verify(messageRepository, never()).save(any(Message.class));
+        verify(pointsService, never()).debit(anyLong(), anyString(), anyString());
+        verifyNoInteractions(generationClient);
     }
 
     private void arrangeRoomAndUser() {

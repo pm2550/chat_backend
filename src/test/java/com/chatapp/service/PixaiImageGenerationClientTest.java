@@ -49,20 +49,83 @@ class PixaiImageGenerationClientTest {
         JsonNode parameters = body(sent).path("parameters");
         assertThat(parameters.path("modelId").asText()).isEqualTo("1983308862240288769");
         assertThat(parameters.path("prompts").asText()).isEqualTo("一只橘猫");
-        assertThat(parameters.path("width").asInt()).isEqualTo(720);
-        assertThat(parameters.path("height").asInt()).isEqualTo(1280);
+        assertThat(parameters.path("width").asInt()).isEqualTo(1072);
+        assertThat(parameters.path("height").asInt()).isEqualTo(1904);
         assertThat(parameters.path("batchSize").asInt()).isEqualTo(1);
         // 500 = 会员 Turbo；不传或 1000 会被当成高优先级，每张多扣 1000 额度。
         assertThat(parameters.path("priority").asInt()).isEqualTo(500);
         assertThat(parameters.path("inferenceProfile").asText()).isEqualTo("standard");
         assertThat(parameters.path("promptHelper").path("enable").asBoolean()).isTrue();
+        assertThat(parameters.path("promptHelper").path("creativity").asText()).isEqualTo("medium");
 
-        // "快出图"（不扩写）：关掉 PixAI 的自动扩写。
+        // 老的开关：不扩写 = 关掉 PixAI 的自动扩写。
         client.submit("", "cat", 1, "1024*1024", false);
         JsonNode second = body(requests.get(1)).path("parameters");
         assertThat(second.path("promptHelper").path("enable").asBoolean()).isFalse();
-        assertThat(second.path("width").asInt()).isEqualTo(1024);
-        assertThat(second.path("height").asInt()).isEqualTo(1024);
+        assertThat(second.path("width").asInt()).isEqualTo(1424);
+        assertThat(second.path("height").asInt()).isEqualTo(1424);
+    }
+
+    @Test
+    void promptHelperLevelsMapToPixaiCreativity() throws Exception {
+        responder = request -> json(request, 200, "{\"id\":\"task-3\"}");
+
+        client.submit("", "猫", 1, "1024*1024", "off");
+        client.submit("", "猫", 1, "1024*1024", "low");
+        client.submit("", "猫", 1, "1024*1024", "medium");
+
+        JsonNode off = body(requests.get(0)).path("parameters").path("promptHelper");
+        assertThat(off.path("enable").asBoolean()).isFalse();
+        assertThat(off.has("creativity")).isFalse();
+        JsonNode low = body(requests.get(1)).path("parameters").path("promptHelper");
+        assertThat(low.path("enable").asBoolean()).isTrue();
+        assertThat(low.path("creativity").asText()).isEqualTo("low");
+        JsonNode medium = body(requests.get(2)).path("parameters").path("promptHelper");
+        assertThat(medium.path("enable").asBoolean()).isTrue();
+        assertThat(medium.path("creativity").asText()).isEqualTo("medium");
+
+        // 默认渠道把档位原样转给 PixAI。
+        HermesImageGenerationClient hermes = mock(HermesImageGenerationClient.class);
+        new ConfiguredImageGenerationClient(hermes, client, "pixai").submit("", "猫", 1, "1024*1024", "low");
+        assertThat(body(requests.get(3)).path("parameters").path("promptHelper").path("creativity").asText())
+                .isEqualTo("low");
+    }
+
+    @Test
+    void sizesUseXlResolutionInMultiplesOf16() {
+        // 约 2MP 的 XL 档：实测和 1MP 扣的额度、耗时一样。
+        assertThat(PixaiImageGenerationClient.dimensionsForSize("1024*1024")).containsExactly(1424, 1424);
+        assertThat(PixaiImageGenerationClient.dimensionsForSize("1024*1792")).containsExactly(1072, 1904);
+        assertThat(PixaiImageGenerationClient.dimensionsForSize("9:16")).containsExactly(1072, 1904);
+        assertThat(PixaiImageGenerationClient.dimensionsForSize("1792*1024")).containsExactly(1904, 1072);
+        assertThat(PixaiImageGenerationClient.dimensionsForSize("16:9")).containsExactly(1904, 1072);
+        assertThat(PixaiImageGenerationClient.dimensionsForSize("1024*1365")).containsExactly(1232, 1648);
+        assertThat(PixaiImageGenerationClient.dimensionsForSize("3:4")).containsExactly(1232, 1648);
+        assertThat(PixaiImageGenerationClient.dimensionsForSize("1365*1024")).containsExactly(1648, 1232);
+        assertThat(PixaiImageGenerationClient.dimensionsForSize("4:3")).containsExactly(1648, 1232);
+        assertThat(PixaiImageGenerationClient.dimensionsForSize("2:3")).containsExactly(1168, 1744);
+        assertThat(PixaiImageGenerationClient.dimensionsForSize("3:2")).containsExactly(1744, 1168);
+        assertThat(PixaiImageGenerationClient.dimensionsForSize(null)).containsExactly(1424, 1424);
+        for (String size : new String[]{"1:1", "9:16", "16:9", "3:4", "4:3", "2:3", "3:2"}) {
+            int[] dims = PixaiImageGenerationClient.dimensionsForSize(size);
+            assertThat(dims[0] % 16).isZero();
+            assertThat(dims[1] % 16).isZero();
+            assertThat((long) dims[0] * dims[1]).isBetween(1_900_000L, 2_100_000L);
+        }
+    }
+
+    @Test
+    void everyTaskCarriesTheQualityOnlyNegativePromptUnlessBlank() throws Exception {
+        responder = request -> json(request, 200, "{\"id\":\"task-4\"}");
+
+        client.submit("", "猫", 1, "1024*1024", "medium");
+        assertThat(body(requests.get(0)).path("parameters").path("negativePrompts").asText())
+                .isEqualTo("lowres, worst quality, low quality, blurry, jpeg artifacts, bad anatomy, bad hands, "
+                        + "extra fingers, missing fingers, fused fingers, deformed, overexposed, underexposed");
+
+        client.configureNegativePrompt(" ");
+        client.submit("", "猫", 1, "1024*1024", "medium");
+        assertThat(body(requests.get(1)).path("parameters").has("negativePrompts")).isFalse();
     }
 
     @Test

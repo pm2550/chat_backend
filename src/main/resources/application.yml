@@ -176,6 +176,8 @@ image-generation:
     model-version-id: ${PIXAI_MODEL_VERSION_ID:1983308862240288769}
     inference-profile: ${PIXAI_INFERENCE_PROFILE:standard}
     priority: ${PIXAI_PRIORITY:500}
+    # 每个 PixAI 任务都带的反向提示词，只放画质词；设成空串 = 不传
+    negative-prompt: "${PIXAI_NEGATIVE_PROMPT:lowres, worst quality, low quality, blurry, jpeg artifacts, bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, deformed, overexposed, underexposed}"
   hermes:
     draw-url: ${HERMES_IMAGE_DRAW_URL:http://hermes-image-api:8765/draw}
     image-root: ${HERMES_IMAGE_CACHE_ROOT:/data2/hermes/data/cache/images}
