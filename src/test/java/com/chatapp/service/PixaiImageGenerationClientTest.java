@@ -66,6 +66,19 @@ class PixaiImageGenerationClientTest {
     }
 
     @Test
+    void blankProfileLetsTheModelPickItsOwn() throws Exception {
+        // Tsubaki.3 Flash 只有自己的 flash 档：档位留空，由 PixAI 按模型选。
+        client.configure("sk-test", "https://api.pixai.art", "2050048243034896798", " ", 500);
+        responder = request -> json(request, 200, "{\"id\":\"task-2\"}");
+
+        client.submit("", "cat", 1, "1024*1024", true);
+
+        JsonNode parameters = body(requests.get(0)).path("parameters");
+        assertThat(parameters.path("modelId").asText()).isEqualTo("2050048243034896798");
+        assertThat(parameters.has("inferenceProfile")).isFalse();
+    }
+
+    @Test
     void pollMapsTaskStatus() {
         responder = request -> json(request, 200, "{\"status\":\"running\"}");
         assertThat(client.poll("", "t").status()).isEqualTo(ImageGenerationClient.PollResult.Status.RUNNING);
