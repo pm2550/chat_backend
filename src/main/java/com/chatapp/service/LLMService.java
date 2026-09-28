@@ -175,8 +175,13 @@ public class LLMService {
         return messages.stream().mapToInt(message -> message.imageDataUrls().size()).sum();
     }
 
+    /** Hermes 的 /chat（现在转给 Ollama Cloud 上的 Kimi 2.6）：老 Bot 存的是 grok-*，新建的默认 kimi-*。 */
     private boolean isHermesChatModel(String model) {
-        return model != null && model.trim().toLowerCase().startsWith("grok");
+        if (model == null) {
+            return false;
+        }
+        String normalized = model.trim().toLowerCase();
+        return normalized.startsWith("grok") || normalized.startsWith("kimi");
     }
 
 

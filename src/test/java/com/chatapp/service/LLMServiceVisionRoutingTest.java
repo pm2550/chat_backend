@@ -92,6 +92,22 @@ class LLMServiceVisionRoutingTest {
     }
 
     @Test
+    void hermesKimiModelAlsoRoutesToHermesChat() {
+        // 新建的 Hermes Bot 默认模型是 kimi-k2.6，也要走 Hermes /chat，而不是 HERMES_BASE_URL。
+        HermesProvider hermesProvider = mock(HermesProvider.class);
+        LLMService service = new LLMService(objectMapper, mock(ProviderCredentialService.class), hermesProvider);
+        BotConfig bot = new BotConfig();
+        bot.setLlmProvider(BotConfig.LLMProvider.HERMES);
+        bot.setModelName("kimi-k2.6");
+        BotDto.ChatMessage user = new BotDto.ChatMessage("user", "hello");
+        BotDto.LLMResponse reply = new BotDto.LLMResponse("ok", 3, "kimi-k2.6");
+        when(hermesProvider.chat(eq(bot), anyList(), anyList())).thenReturn(reply);
+
+        assertEquals("ok", service.chat(bot, List.of(user)).getContent());
+        verify(hermesProvider).chat(eq(bot), eq(List.of(user)), eq(List.of()));
+    }
+
+    @Test
     void hermesGrokImageContentStaysWithHermesProvider() {
         HermesProvider hermesProvider = mock(HermesProvider.class);
         LLMService service = new LLMService(objectMapper, mock(ProviderCredentialService.class), hermesProvider);
