@@ -19,8 +19,12 @@ import java.io.InputStream;
 import java.time.Duration;
 
 /**
- * PixAI（api.pixai.art）文生图：v2 建任务，v1 查任务，结果是带签名的临时地址，要尽快下载。
+ * PixAI（api.pixai.art）文生图：v1 建任务 / 查任务，结果是带签名的临时地址，要尽快下载。
  * 提示词自动扩写用 PixAI 自带的 promptHelper（不再经过 Grok）。
+ *
+ * <p>用 v1 而不是 v2 建任务：v2 不能指定优先级，一律按"高优先级"（priority 1000）排队，
+ * 每张多扣 1000 额度；也不能选档位（Tsubaki.2 默认 lite）。priority 500 走会员免费的
+ * Turbo 队列，实测排队同样只要几秒。
  */
 @Component
 public class PixaiImageGenerationClient implements ImageGenerationClient {
@@ -40,6 +44,14 @@ public class PixaiImageGenerationClient implements ImageGenerationClient {
     @Value("${image-generation.pixai.model-version-id:1983308862240288769}")
     private String modelVersionId;
 
+    /** 推理档位：Tsubaki.2 有 lite / standard / pro / ultra，Tsubaki.3 只有 pro / ultra。 */
+    @Value("${image-generation.pixai.inference-profile:standard}")
+    private String inferenceProfile;
+
+    /** 1000 = 高优先级（每张 +1000 额度）；500 = 会员 Turbo（不加钱）。 */
+    @Value("${image-generation.pixai.priority:500}")
+    private int priority;
+
     @Autowired
     public PixaiImageGenerationClient(ObjectMapper objectMapper) {
         this(objectMapper, new OkHttpClient.Builder()
@@ -54,10 +66,12 @@ public class PixaiImageGenerationClient implements ImageGenerationClient {
         this.httpClient = httpClient;
     }
 
-    void configure(String apiKey, String baseUrl, String modelVersionId) {
+    void configure(String apiKey, String baseUrl, String modelVersionId, String inferenceProfile, int priority) {
         this.apiKey = apiKey;
         this.baseUrl = baseUrl;
         this.modelVersionId = modelVersionId;
+        this.inferenceProfile = inferenceProfile;
+        this.priority = priority;
     }
 
     public boolean isConfigured() {
@@ -75,13 +89,21 @@ public class PixaiImageGenerationClient implements ImageGenerationClient {
             throw new IllegalArgumentException("PixAI image generation is used with exactly one image per request");
         }
         requireConfigured();
+        int[] dimensions = dimensionsForSize(size);
         ObjectNode body = objectMapper.createObjectNode();
-        body.put("modelVersionId", modelVersionId);
-        body.put("prompt", prompt);
-        body.put("aspectRatio", aspectRatioForSize(size));
-        body.put("promptHelper", expand ? "enable" : "disable");
+        ObjectNode parameters = body.putObject("parameters");
+        parameters.put("modelId", modelVersionId);
+        parameters.put("prompts", prompt);
+        parameters.put("width", dimensions[0]);
+        parameters.put("height", dimensions[1]);
+        parameters.put("batchSize", 1);
+        parameters.put("priority", priority);
+        if (inferenceProfile != null && !inferenceProfile.isBlank()) {
+            parameters.put("inferenceProfile", inferenceProfile.trim());
+        }
+        parameters.putObject("promptHelper").put("enable", expand);
         try {
-            Request request = authorized(url("/v2/image/create"))
+            Request request = authorized(url("/v1/task"))
                     .post(RequestBody.create(objectMapper.writeValueAsString(body), JSON))
                     .build();
             JsonNode root = execute(request, "建任务");
@@ -141,16 +163,17 @@ public class PixaiImageGenerationClient implements ImageGenerationClient {
         }
     }
 
-    static String aspectRatioForSize(String size) {
+    /** v1 的宽高限制在 512–1280，按比例取约 1MP 的尺寸（与 PixAI 网页 1k 档一致）。 */
+    static int[] dimensionsForSize(String size) {
         String normalized = size == null ? "" : size.trim().toLowerCase().replace('*', 'x');
         return switch (normalized) {
-            case "1024x1792", "9x16", "9:16" -> "9:16";
-            case "1792x1024", "16x9", "16:9" -> "16:9";
-            case "1024x1365", "3x4", "3:4" -> "3:4";
-            case "1365x1024", "4x3", "4:3" -> "4:3";
-            case "2x3", "2:3" -> "2:3";
-            case "3x2", "3:2" -> "3:2";
-            default -> "1:1";
+            case "1024x1792", "9x16", "9:16" -> new int[]{720, 1280};
+            case "1792x1024", "16x9", "16:9" -> new int[]{1280, 720};
+            case "1024x1365", "3x4", "3:4" -> new int[]{960, 1280};
+            case "1365x1024", "4x3", "4:3" -> new int[]{1280, 960};
+            case "2x3", "2:3" -> new int[]{832, 1248};
+            case "3x2", "3:2" -> new int[]{1248, 832};
+            default -> new int[]{1024, 1024};
         };
     }
 

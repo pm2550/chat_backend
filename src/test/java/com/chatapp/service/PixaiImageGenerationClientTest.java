@@ -35,27 +35,34 @@ class PixaiImageGenerationClientTest {
         };
         client = new PixaiImageGenerationClient(objectMapper,
                 new OkHttpClient.Builder().addInterceptor(fake).build());
-        client.configure("sk-test", "https://api.pixai.art", "1983308862240288769");
+        client.configure("sk-test", "https://api.pixai.art", "1983308862240288769", "standard", 500);
     }
 
     @Test
-    void submitSendsModelAspectRatioAndPromptHelper() throws Exception {
-        responder = request -> json(request, 201, "{\"id\":\"task-1\",\"status\":\"waiting\"}");
+    void submitUsesTurboPriorityProfileSizeAndPromptHelper() throws Exception {
+        responder = request -> json(request, 200, "{\"id\":\"task-1\",\"status\":\"waiting\"}");
 
         assertThat(client.submit("", "一只橘猫", 1, "1024*1792", true).taskId()).isEqualTo("task-1");
         Request sent = requests.get(0);
-        assertThat(sent.url().toString()).isEqualTo("https://api.pixai.art/v2/image/create");
+        assertThat(sent.url().toString()).isEqualTo("https://api.pixai.art/v1/task");
         assertThat(sent.header("Authorization")).isEqualTo("Bearer sk-test");
-        JsonNode body = body(sent);
-        assertThat(body.path("modelVersionId").asText()).isEqualTo("1983308862240288769");
-        assertThat(body.path("prompt").asText()).isEqualTo("一只橘猫");
-        assertThat(body.path("aspectRatio").asText()).isEqualTo("9:16");
-        assertThat(body.path("promptHelper").asText()).isEqualTo("enable");
+        JsonNode parameters = body(sent).path("parameters");
+        assertThat(parameters.path("modelId").asText()).isEqualTo("1983308862240288769");
+        assertThat(parameters.path("prompts").asText()).isEqualTo("一只橘猫");
+        assertThat(parameters.path("width").asInt()).isEqualTo(720);
+        assertThat(parameters.path("height").asInt()).isEqualTo(1280);
+        assertThat(parameters.path("batchSize").asInt()).isEqualTo(1);
+        // 500 = 会员 Turbo；不传或 1000 会被当成高优先级，每张多扣 1000 额度。
+        assertThat(parameters.path("priority").asInt()).isEqualTo(500);
+        assertThat(parameters.path("inferenceProfile").asText()).isEqualTo("standard");
+        assertThat(parameters.path("promptHelper").path("enable").asBoolean()).isTrue();
 
         // "快出图"（不扩写）：关掉 PixAI 的自动扩写。
         client.submit("", "cat", 1, "1024*1024", false);
-        assertThat(body(requests.get(1)).path("promptHelper").asText()).isEqualTo("disable");
-        assertThat(body(requests.get(1)).path("aspectRatio").asText()).isEqualTo("1:1");
+        JsonNode second = body(requests.get(1)).path("parameters");
+        assertThat(second.path("promptHelper").path("enable").asBoolean()).isFalse();
+        assertThat(second.path("width").asInt()).isEqualTo(1024);
+        assertThat(second.path("height").asInt()).isEqualTo(1024);
     }
 
     @Test
@@ -92,7 +99,7 @@ class PixaiImageGenerationClientTest {
                 .body(ResponseBody.create(new byte[]{1, 2, 3}, MediaType.parse("image/webp"))).build();
         assertThat(client.download("https://cdn.example/a.webp")).containsExactly(1, 2, 3);
 
-        client.configure("", "https://api.pixai.art", "x");
+        client.configure("", "https://api.pixai.art", "x", "standard", 500);
         assertThat(client.isConfigured()).isFalse();
         assertThatThrownBy(() -> client.submit("", "cat", 1, "1024*1024", true))
                 .hasMessageContaining("未配置");
