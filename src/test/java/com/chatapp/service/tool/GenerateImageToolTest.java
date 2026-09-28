@@ -91,7 +91,7 @@ class GenerateImageToolTest {
                         message));
 
         JsonNode params = objectMapper.readTree("""
-                {"prompt":"画一只蓝色机器人","ratio":"16:9","expand":false}
+                {"prompt":"画一只蓝色机器人","ratio":"16:9"}
                 """);
         JsonNode result = tool.execute(params, new ToolContext(20L, 42L, 77L, 5L));
 
@@ -111,7 +111,6 @@ class GenerateImageToolTest {
         assertThat(requestCaptor.getValue().getPrompt())
                 .isEqualTo("1 robot, blue armor, cinematic lighting");
         assertThat(requestCaptor.getValue().getSize()).isEqualTo("1792*1024");
-        assertThat(requestCaptor.getValue().getExpand()).isFalse();
         assertThat(result.path("sourcePrompt").asText()).isEqualTo("画一只蓝色机器人");
         assertThat(result.path("promptRewritten").asBoolean()).isTrue();
     }

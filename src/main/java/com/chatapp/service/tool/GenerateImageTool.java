@@ -75,9 +75,6 @@ public class GenerateImageTool implements Tool {
         properties.putObject("ratio")
                 .put("type", "string")
                 .put("description", "Optional aspect ratio. Supported hints: 1:1, 3:4, 4:3, 9:16, 16:9.");
-        properties.putObject("expand")
-                .put("type", "boolean")
-                .put("description", "Platform drawing only: whether the prompt helper may enrich the prompt with creative details before drawing. Default true; false draws the prompt as written.");
         properties.putObject("verbatim")
                 .put("type", "boolean")
                 .put("description", "Internal direct-channel flag. When true, skip all prompt rewriting and submit prompt unchanged.");
@@ -125,9 +122,7 @@ public class GenerateImageTool implements Tool {
                 providerPrompt,
                 1,
                 resolveSize(params),
-                params.has("expand") && !params.path("expand").isNull()
-                        ? params.path("expand").asBoolean()
-                        : true);
+                true);
         ImageGenerationDto.GenerateResponse response = imageGenerationService.submitAsBot(
                 context.userId(),
                 sender,

@@ -103,7 +103,7 @@ class ImageGenerationServiceTest {
         arrangeRoomAndUser();
         when(pointsService.debit(1L, "image_generation", "image_generation:77"))
                 .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
-        when(generationClient.submit("", "画一只蓝色机器人", 1, "1024*1024", "off"))
+        when(generationClient.submit("", "画一只蓝色机器人", 1, "1024*1024", "medium"))
                 .thenReturn(new ImageGenerationClient.SubmitResult("/data2/hermes/data/cache/images/task-1.png"));
         when(generationClient.poll("", "/data2/hermes/data/cache/images/task-1.png"))
                 .thenReturn(new ImageGenerationClient.PollResult(
@@ -321,51 +321,17 @@ class ImageGenerationServiceTest {
     }
 
     @Test
-    void explicitPromptHelperLevelWinsOverLegacyExpandAndReachesTheClient() {
+    void drawingAlwaysUsesCreativeExpansionEvenWhenOldClientsAskForNone() {
+        // 只有扩写：旧客户端的"快出图"（expand=false）也按创意扩写出图。
         arrangeRoomAndUser();
         when(pointsService.debit(1L, "image_generation", "image_generation:77"))
                 .thenReturn(new PointsDto.DebitResult(0, 10, 90, 123L));
-        when(generationClient.submit("", "仅翻译", 1, "1024*1024", "low"))
+        when(generationClient.submit("", "快出图", 1, "1024*1024", "medium"))
                 .thenThrow(new IllegalStateException("stop here"));
 
-        service.submit(1L, new ImageGenerationDto.GenerateRequest(
-                10L, "仅翻译", 1, "1024*1024", false, "low"));
+        service.submit(1L, new ImageGenerationDto.GenerateRequest(10L, "快出图", 1, "1024*1024", false));
 
-        verify(generationClient).submit("", "仅翻译", 1, "1024*1024", "low");
-    }
-
-    @Test
-    void promptHelperLevelFallsBackToLegacyExpandThenCreativeDefault() {
-        assertThat(ImageGenerationService.promptHelperLevel(
-                new ImageGenerationDto.GenerateRequest(10L, "p", 1, "1024*1024", true, "off"))).isEqualTo("off");
-        assertThat(ImageGenerationService.promptHelperLevel(
-                new ImageGenerationDto.GenerateRequest(10L, "p", 1, "1024*1024", null, " Medium "))).isEqualTo("medium");
-        // 老客户端：只传 expand=false = 关闭扩写。
-        assertThat(ImageGenerationService.promptHelperLevel(
-                new ImageGenerationDto.GenerateRequest(10L, "p", 1, "1024*1024", false))).isEqualTo("off");
-        assertThat(ImageGenerationService.promptHelperLevel(
-                new ImageGenerationDto.GenerateRequest(10L, "p", 1, "1024*1024", true))).isEqualTo("medium");
-        // 什么都没说（包括机器人画图）：创意扩写。
-        assertThat(ImageGenerationService.promptHelperLevel(
-                new ImageGenerationDto.GenerateRequest(10L, "p", 1, "1024*1024", null, null))).isEqualTo("medium");
-        assertThat(ImageGenerationService.promptHelperLevel(new ImageGenerationDto.GenerateRequest()))
-                .isEqualTo("medium");
-    }
-
-    @Test
-    void invalidPromptHelperLevelIsRejectedBeforeCreatingMessageOrDebiting() {
-        User user = new User();
-        user.setId(1L);
-        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-
-        assertThatThrownBy(() -> service.submit(1L, new ImageGenerationDto.GenerateRequest(
-                10L, "猫", 1, "1024*1024", true, "high")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("扩写档位");
-
-        verify(messageRepository, never()).save(any(Message.class));
-        verify(pointsService, never()).debit(anyLong(), anyString(), anyString());
-        verifyNoInteractions(generationClient);
+        verify(generationClient).submit("", "快出图", 1, "1024*1024", "medium");
     }
 
     private void arrangeRoomAndUser() {

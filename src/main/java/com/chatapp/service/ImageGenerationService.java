@@ -20,7 +20,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
-import java.util.Locale;
 import java.util.concurrent.Executor;
 
 @Service
@@ -112,7 +111,8 @@ public class ImageGenerationService {
                                                                String botDisplayName,
                                                                ImageGenerationDto.GenerateRequest request) {
         String prompt = normalizePrompt(request.getPrompt());
-        String promptHelperLevel = promptHelperLevel(request);
+        // 画图一律自动扩写（创意扩写）；请求里的 expand 只为兼容旧客户端，不再生效。
+        String promptHelperLevel = ImageGenerationClient.PROMPT_HELPER_MEDIUM;
         int count = request.getN() == null ? 1 : request.getN();
         if (count != 1) {
             throw new IllegalArgumentException("当前仅支持一次生成一张图片");
@@ -340,26 +340,6 @@ public class ImageGenerationService {
             message = messageRepository.save(message);
             rawWebSocketHandler.broadcastMessageUpdated(message);
         });
-    }
-
-    /**
-     * 扩写档位：显式传的 promptHelper 优先；老客户端只传 expand，false 视为不扩写；
-     * 都没说（包括机器人画图）就用创意扩写。
-     */
-    static String promptHelperLevel(ImageGenerationDto.GenerateRequest request) {
-        String explicit = request.getPromptHelper();
-        if (explicit != null && !explicit.isBlank()) {
-            String level = explicit.trim().toLowerCase(Locale.ROOT);
-            return switch (level) {
-                case ImageGenerationClient.PROMPT_HELPER_OFF,
-                     ImageGenerationClient.PROMPT_HELPER_LOW,
-                     ImageGenerationClient.PROMPT_HELPER_MEDIUM -> level;
-                default -> throw new IllegalArgumentException("扩写档位只能是 off（关闭）、low（仅翻译）或 medium（创意扩写）");
-            };
-        }
-        return Boolean.FALSE.equals(request.getExpand())
-                ? ImageGenerationClient.PROMPT_HELPER_OFF
-                : ImageGenerationClient.PROMPT_HELPER_MEDIUM;
     }
 
     private String normalizePrompt(String prompt) {
