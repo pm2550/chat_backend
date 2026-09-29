@@ -151,7 +151,12 @@ class PixaiImageGenerationClientTest {
                 "{\"status\":\"completed\",\"outputs\":{\"mediaIds\":[\"m\"],\"mediaUrls\":[null,\"https://cdn.example/a.webp\"]}}");
         ImageGenerationClient.PollResult done = client.poll("", "t");
         assertThat(done.status()).isEqualTo(ImageGenerationClient.PollResult.Status.SUCCEEDED);
-        assertThat(done.imageUrl()).isEqualTo("https://cdn.example/a.webp");
+        // 用媒体 ID 取图：任务里的 mediaUrls 是几分钟就删的临时文件（隔一会儿补发会 403）。
+        assertThat(done.imageUrl()).isEqualTo("https://api.pixai.art/v1/media/m/image");
+
+        responder = request -> json(request, 200,
+                "{\"status\":\"completed\",\"outputs\":{\"mediaUrls\":[\"https://cdn.example/a.webp\"]}}");
+        assertThat(client.poll("", "t").imageUrl()).isEqualTo("https://cdn.example/a.webp");
 
         responder = request -> json(request, 200, "{\"status\":\"failed\"}");
         assertThat(client.poll("", "t").status()).isEqualTo(ImageGenerationClient.PollResult.Status.FAILED);
@@ -174,6 +179,10 @@ class PixaiImageGenerationClientTest {
                 .code(200).message("OK")
                 .body(ResponseBody.create(new byte[]{1, 2, 3}, MediaType.parse("image/webp"))).build();
         assertThat(client.download("https://cdn.example/a.webp")).containsExactly(1, 2, 3);
+        assertThat(requests.get(requests.size() - 1).header("Authorization")).isNull();
+        // 自家媒体接口要带 key。
+        assertThat(client.download("https://api.pixai.art/v1/media/m/image")).containsExactly(1, 2, 3);
+        assertThat(requests.get(requests.size() - 1).header("Authorization")).isEqualTo("Bearer sk-test");
 
         client.configure("", "https://api.pixai.art", "x", "standard", 500);
         assertThat(client.isConfigured()).isFalse();

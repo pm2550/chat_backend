@@ -173,7 +173,11 @@ public class PixaiImageGenerationClient implements ImageGenerationClient {
         if (parsed == null || !parsed.isHttps()) {
             throw new IllegalStateException("PixAI 图片地址无效");
         }
-        try (Response response = httpClient.newCall(new Request.Builder().url(parsed).get().build()).execute()) {
+        // 自家接口要带 key；OkHttp 跟随跳到别的域名时会自动去掉 Authorization。
+        Request request = isPixaiApi(parsed)
+                ? authorized(parsed).get().build()
+                : new Request.Builder().url(parsed).get().build();
+        try (Response response = httpClient.newCall(request).execute()) {
             ResponseBody body = response.body();
             if (!response.isSuccessful() || body == null) {
                 throw new IllegalStateException("PixAI 图片下载失败: HTTP " + response.code());
@@ -188,6 +192,11 @@ public class PixaiImageGenerationClient implements ImageGenerationClient {
         } catch (IOException e) {
             throw new IllegalStateException("PixAI 图片下载失败: " + e.getMessage(), e);
         }
+    }
+
+    private boolean isPixaiApi(HttpUrl target) {
+        HttpUrl api = url("/");
+        return target.host().equalsIgnoreCase(api.host());
     }
 
     /**
@@ -207,7 +216,16 @@ public class PixaiImageGenerationClient implements ImageGenerationClient {
         };
     }
 
+    /**
+     * 优先用媒体 ID 走 /v1/media/{id}/image（带 key，302 到当前可用的文件）：任务结果里的
+     * mediaUrls 是 images/temp 临时文件，几分钟后就被删（签名没过期也 403），超时后补发会拿不到。
+     */
     private String firstMediaUrl(JsonNode task) {
+        for (JsonNode id : task.path("outputs").path("mediaIds")) {
+            if (id.isTextual() && !id.asText().isBlank()) {
+                return url("/v1/media/" + id.asText() + "/image").toString();
+            }
+        }
         for (JsonNode url : task.path("outputs").path("mediaUrls")) {
             if (url.isTextual() && !url.asText().isBlank()) {
                 return url.asText();
