@@ -300,4 +300,11 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     List<Message> findActiveMessagesReferencingFileUrlVisibleTo(@Param("fileUrl") String fileUrl,
                                                                 @Param("userId") Long userId,
                                                                 Pageable pageable);
+
+    /** 最近超时失败、还留着服务商任务号的 AI 画图消息（后台补发用）。 */
+    List<Message> findTop50ByMessageTypeAndImageGenStatusAndImageGenProviderTaskIdIsNotNullAndCreatedAtAfterOrderByIdAsc(
+            Message.MessageType messageType,
+            Message.ImageGenerationStatus imageGenStatus,
+            LocalDateTime createdAfter);
+
 }

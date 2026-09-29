@@ -13,6 +13,7 @@ import com.chatapp.websocket.RawWebSocketHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -20,14 +21,19 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.concurrent.Executor;
 
 @Service
 @Slf4j
 public class ImageGenerationService {
     private static final String FEATURE_KEY = "image_generation";
-    private static final int MAX_POLLS = 40;
+    /** 最多等 15 分钟：PixAI 队列拥堵时 API 任务会排 8–10 分钟（实测），2 分钟就判失败会白扣服务商额度。 */
+    private static final int MAX_POLLS = 300;
     private static final long POLL_DELAY_MS = 3_000L;
+    static final String TIMEOUT_REASON = "图片生成超时";
+    /** 超时失败后多久内还去服务商那边找回结果（PixAI 的临时图片链接约一天后失效）。 */
+    private static final long LATE_RESULT_LOOKBACK_HOURS = 24;
     static final String E2EE_ROOM_REJECTION = "端到端加密的私聊里不能用 AI 画图：描述和图片会以明文存在服务器上";
 
     private final MessageRepository messageRepository;
@@ -56,7 +62,7 @@ public class ImageGenerationService {
             FileStorageService fileStorageService,
             RawWebSocketHandler rawWebSocketHandler,
             TransactionTemplate transactionTemplate,
-            @Qualifier("taskExecutor") Executor taskExecutor,
+            @Qualifier("imageGenerationExecutor") Executor taskExecutor,
             E2eeKeyService e2eeKeyService) {
         this.messageRepository = messageRepository;
         this.chatRoomRepository = chatRoomRepository;
@@ -278,7 +284,67 @@ public class ImageGenerationService {
         return new ImageGenerationClient.PollResult(
                 ImageGenerationClient.PollResult.Status.FAILED,
                 null,
-                "图片生成超时");
+                TIMEOUT_REASON);
+    }
+
+    /**
+     * 超时判失败的画图，服务商那边往往过几分钟还是画完了（也照样扣了服务商额度）：
+     * 定时回查，画好了就把图补回原消息。积分当时已经退了，补发不再扣。
+     */
+    @Scheduled(initialDelay = 60_000L, fixedDelay = 300_000L)
+    public void recoverTimedOutGenerations() {
+        List<Message> candidates = messageRepository
+                .findTop50ByMessageTypeAndImageGenStatusAndImageGenProviderTaskIdIsNotNullAndCreatedAtAfterOrderByIdAsc(
+                        Message.MessageType.IMAGE_GENERATION,
+                        Message.ImageGenerationStatus.FAILED,
+                        LocalDateTime.now().minusHours(LATE_RESULT_LOOKBACK_HOURS));
+        for (Message message : candidates) {
+            String content = message.getContent();
+            if (content == null || !content.endsWith(TIMEOUT_REASON)) {
+                continue;
+            }
+            try {
+                recoverTimedOutGeneration(message);
+            } catch (Exception e) {
+                log.warn("Late image recovery failed for message {}: {}", message.getId(), e.getMessage());
+            }
+        }
+    }
+
+    private void recoverTimedOutGeneration(Message message) throws Exception {
+        ImageGenerationClient.PollResult result = generationClient.poll("", message.getImageGenProviderTaskId());
+        if (result.status() != ImageGenerationClient.PollResult.Status.SUCCEEDED || result.imageUrl() == null) {
+            return;
+        }
+        byte[] bytes = generationClient.download(result.imageUrl());
+        String mimeType = sniffImageMimeType(bytes);
+        String fileUrl = fileStorageService.uploadGeneratedImage(
+                "image-generation-" + message.getId() + "." + extensionFor(mimeType), mimeType, bytes);
+        ImageThumbnailService.MessageRenditions thumbnail = createThumbnail(bytes);
+        Message done = transactionTemplate.execute(tx -> {
+            Message current = messageRepository.findWithSenderById(message.getId()).orElse(null);
+            if (current == null || current.getImageGenStatus() != Message.ImageGenerationStatus.FAILED) {
+                return null;
+            }
+            current.setImageGenStatus(Message.ImageGenerationStatus.DONE);
+            current.setMessageStatus(Message.MessageStatus.SENT);
+            current.setContent(current.getImageGenPrompt());
+            current.setImageGenUrl(fileUrl);
+            current.setFileUrl(fileUrl);
+            current.setFileName("AI image " + current.getId() + "." + extensionFor(mimeType));
+            current.setFileType(mimeType);
+            current.setFileSize((long) bytes.length);
+            if (thumbnail != null) {
+                thumbnail.applyTo(current);
+            }
+            current = messageRepository.save(current);
+            rawWebSocketHandler.broadcastMessageUpdated(current);
+            return current;
+        });
+        if (done != null) {
+            log.info("Recovered timed-out image generation for message {}", done.getId());
+            rawWebSocketHandler.notifyOfflineMembers(done);
+        }
     }
 
     private Message updateStatus(Long messageId,

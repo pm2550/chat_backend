@@ -20,6 +20,7 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
@@ -332,6 +333,73 @@ class ImageGenerationServiceTest {
         service.submit(1L, new ImageGenerationDto.GenerateRequest(10L, "快出图", 1, "1024*1024", false));
 
         verify(generationClient).submit("", "快出图", 1, "1024*1024", "medium");
+    }
+
+    @Test
+    void timedOutGenerationIsRecoveredOnceTheProviderFinishes() throws Exception {
+        // PixAI 排队 8–10 分钟：我们先判了超时，之后服务商画完了，要把图补回原消息。
+        Message failed = new Message();
+        failed.setId(88L);
+        failed.setMessageType(Message.MessageType.IMAGE_GENERATION);
+        failed.setImageGenStatus(Message.ImageGenerationStatus.FAILED);
+        failed.setMessageStatus(Message.MessageStatus.FAILED);
+        failed.setImageGenPrompt("裸体美游");
+        failed.setContent("裸体美游\n\n" + ImageGenerationService.TIMEOUT_REASON);
+        failed.setImageGenProviderTaskId("task-late");
+        Message otherFailure = new Message();
+        otherFailure.setId(89L);
+        otherFailure.setImageGenStatus(Message.ImageGenerationStatus.FAILED);
+        otherFailure.setContent("猫\n\nPixAI 生成失败");
+        otherFailure.setImageGenProviderTaskId("task-failed");
+        when(messageRepository
+                .findTop50ByMessageTypeAndImageGenStatusAndImageGenProviderTaskIdIsNotNullAndCreatedAtAfterOrderByIdAsc(
+                        eq(Message.MessageType.IMAGE_GENERATION),
+                        eq(Message.ImageGenerationStatus.FAILED),
+                        any()))
+                .thenReturn(List.of(failed, otherFailure));
+        when(messageRepository.findWithSenderById(88L)).thenReturn(Optional.of(failed));
+        when(generationClient.poll("", "task-late")).thenReturn(new ImageGenerationClient.PollResult(
+                ImageGenerationClient.PollResult.Status.SUCCEEDED, "https://cdn.example/late.webp", null));
+        byte[] webp = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P', 'V', 'P', '8', ' '};
+        when(generationClient.download("https://cdn.example/late.webp")).thenReturn(webp);
+        when(fileStorageService.uploadGeneratedImage(eq("image-generation-88.webp"), eq("image/webp"), any(byte[].class)))
+                .thenReturn("/api/files/image-gen/late.webp");
+
+        service.recoverTimedOutGenerations();
+
+        assertThat(failed.getImageGenStatus()).isEqualTo(Message.ImageGenerationStatus.DONE);
+        assertThat(failed.getMessageStatus()).isEqualTo(Message.MessageStatus.SENT);
+        assertThat(failed.getFileUrl()).isEqualTo("/api/files/image-gen/late.webp");
+        assertThat(failed.getContent()).isEqualTo("裸体美游");
+        verify(rawWebSocketHandler).broadcastMessageUpdated(failed);
+        verify(rawWebSocketHandler).notifyOfflineMembers(failed);
+        // 不是超时的失败（服务商明确说失败了）不回查；补发不重新扣积分。
+        verify(generationClient, never()).poll("", "task-failed");
+        verify(pointsService, never()).debit(anyLong(), anyString(), anyString());
+
+        // 已经补回来了：下一轮不会再处理。
+        service.recoverTimedOutGenerations();
+        verify(generationClient, times(1)).poll("", "task-late");
+    }
+
+    @Test
+    void stillQueuedTimedOutGenerationIsLeftForTheNextRound() {
+        Message failed = new Message();
+        failed.setId(88L);
+        failed.setImageGenStatus(Message.ImageGenerationStatus.FAILED);
+        failed.setContent("猫\n\n" + ImageGenerationService.TIMEOUT_REASON);
+        failed.setImageGenProviderTaskId("task-queued");
+        when(messageRepository
+                .findTop50ByMessageTypeAndImageGenStatusAndImageGenProviderTaskIdIsNotNullAndCreatedAtAfterOrderByIdAsc(
+                        any(), any(), any()))
+                .thenReturn(List.of(failed));
+        when(generationClient.poll("", "task-queued")).thenReturn(new ImageGenerationClient.PollResult(
+                ImageGenerationClient.PollResult.Status.RUNNING, null, null));
+
+        service.recoverTimedOutGenerations();
+
+        assertThat(failed.getImageGenStatus()).isEqualTo(Message.ImageGenerationStatus.FAILED);
+        verify(generationClient, never()).download(anyString());
     }
 
     private void arrangeRoomAndUser() {
